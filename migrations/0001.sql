@@ -1,0 +1,10 @@
+CREATE TABLE documents (id TEXT PRIMARY KEY, kind TEXT NOT NULL, summary TEXT NOT NULL, revision INTEGER NOT NULL);
+CREATE INDEX documents_kind ON documents(kind);
+CREATE TABLE document_versions (id TEXT NOT NULL, revision INTEGER NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(id, revision), FOREIGN KEY(id) REFERENCES documents(id) ON DELETE CASCADE);
+CREATE TABLE document_parts (id TEXT NOT NULL, revision INTEGER NOT NULL, part INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(id,revision,part), FOREIGN KEY(id,revision) REFERENCES document_versions(id,revision) ON DELETE CASCADE);
+CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, device TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE TABLE auth (id INTEGER PRIMARY KEY CHECK(id=1), password_hash TEXT NOT NULL, recovery_hash TEXT NOT NULL);
+CREATE TABLE attempts (key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset_at INTEGER NOT NULL);
+CREATE TABLE jobs (id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, message_id TEXT NOT NULL, status TEXT NOT NULL, attempted INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, error TEXT, config TEXT NOT NULL, FOREIGN KEY(chat_id) REFERENCES documents(id) ON DELETE CASCADE);
+CREATE UNIQUE INDEX jobs_one_active_chat ON jobs(chat_id) WHERE status IN ('pending','running');
+CREATE TRIGGER document_version_cas BEFORE INSERT ON document_versions WHEN NOT (   NEW.revision = (SELECT revision + 1 FROM documents WHERE id=NEW.id)   OR (NEW.revision=1 AND (SELECT revision FROM documents WHERE id=NEW.id)=1) ) BEGIN SELECT RAISE(ABORT, 'stale revision'); END;

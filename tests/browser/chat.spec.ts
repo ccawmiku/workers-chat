@@ -1,0 +1,121 @@
+import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+test("desktop/mobile login, import, branch navigation and cloud draft", async ({
+  page,
+}) => {
+  const credential = JSON.parse(
+    await readFile(
+      join(homedir(), ".config/workers-chat/local-login.json"),
+      "utf8",
+    ),
+  ) as { password: string };
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+  await page.getByLabel("访问密码", { exact: true }).fill(credential.password);
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await page.getByRole("button", { name: /新聊天/ }).waitFor();
+  const fixture = [
+    {
+      chat: {
+        title: "从想法到清晰的答案",
+        timestamp: 1792080000,
+        history: {
+          currentId: "b",
+          messages: {
+            u: {
+              id: "u",
+              parentId: null,
+              childrenIds: ["a", "b"],
+              role: "user",
+              content: "帮我梳理一下，怎样把一个复杂的想法变成可以实施的计划？",
+            },
+            a: {
+              id: "a",
+              parentId: "u",
+              childrenIds: [],
+              role: "assistant",
+              content: "从目标开始，逐步分解。",
+            },
+            b: {
+              id: "b",
+              parentId: "u",
+              childrenIds: [],
+              role: "assistant",
+              content:
+                "## 先把目标说清楚\n\n先用一句话写下你希望看到的结果，然后把它拆成三个层次：\n\n1. **目标**：什么发生了，才算完成？\n2. **路径**：哪些步骤能让你接近结果？\n3. **下一步**：今天就能开始的一件小事。\n\n一个可以实施的计划，不需要一开始就完美。关键是让每一步都能得到反馈。\n\n> 把模糊的问题变成具体的行动，清晰往往会在行动中出现。\n\n```text\n目标 → 拆解 → 行动 → 反馈 → 调整\n```",
+              reasoning_content: "上游提供的独立思考示例。",
+            },
+          },
+        },
+      },
+    },
+  ];
+  const importedId = await page.evaluate(async (data) => {
+    const response = await fetch("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data }),
+    });
+    if (!response.ok) throw new Error("fixture import failed");
+    return ((await response.json()) as { ids: string[] }).ids[0]!;
+  }, fixture);
+  await page.evaluate((id) => localStorage.setItem("lastChat", id), importedId);
+  await page.reload();
+  await expect(page.getByText("先把目标说清楚", { exact: true })).toBeVisible();
+  await page
+    .getByLabel("消息", { exact: true })
+    .fill("把这个方法应用到我的下一个项目。");
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "外观", exact: true }).click();
+  await page.getByLabel("主题", { exact: true }).selectOption("dark");
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.screenshot({ path: "docs/screenshots/desktop-dark.png" });
+  await page.getByRole("button", { name: "当前聊天设置", exact: true }).click();
+  await page.getByRole("button", { name: "分支总览", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button")
+    .filter({ hasText: "从目标开始" })
+    .click();
+  await expect(
+    page.getByText("从目标开始，逐步分解。", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "返回聊天", exact: true }).click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "外观", exact: true }).click();
+  await page.getByLabel("主题", { exact: true }).selectOption("light");
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.screenshot({ path: "docs/screenshots/desktop-light.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "收起导航", exact: true }).click();
+  await page.getByRole("button", { name: "当前聊天设置", exact: true }).click();
+  await expect(page.getByText("当前聊天设置", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "返回聊天", exact: true }).click();
+  await page.screenshot({ path: "docs/screenshots/mobile-light.png" });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByLabel("消息", { exact: true }).fill("手机草稿应保存到云端。");
+  await expect
+    .poll(async () => {
+      const result = await page.evaluate(async () => {
+        const id = localStorage.getItem("lastChat");
+        return (await (await fetch("/api/chats/" + id)).json()) as {
+          chat: { draft: string };
+        };
+      });
+      return result.chat.draft;
+    })
+    .toBe("手机草稿应保存到云端。");
+  await page.reload();
+  await expect(page.getByLabel("消息", { exact: true })).toHaveValue(
+    "手机草稿应保存到云端。",
+  );
+  expect(errors).toEqual([]);
+});

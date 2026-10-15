@@ -1,32 +1,39 @@
 # 在线AI · Workers Chat
 
-面向 Cloudflare Workers 免费套餐的单用户、纯文字 AI 聊天网页。视觉参考 Codex，消息树与聊天 JSON 交换行为参考最新版稳定 OpenWebUI。
+面向 Cloudflare Workers 免费套餐的单用户、纯文字 AI 聊天网页，调用自己的 OpenAI 兼容 Chat Completions API。界面参考仓库中的 Codex 截图，聊天树交换格式参考 OpenWebUI v0.12.2。
 
-当前仓库是云端开发交接包，应用代码尚未开始实现。产品功能 1—131 项和最后 3 项交接偏好均已确认：仓库 `workers-chat`，网页“在线AI”，从头实现；云端完成开发、测试和 PR，之后由本机部署。
+已从交接文档进入首个可运行实施阶段：React 界面、Worker API、D1 历史、SQLite Durable Object 流式进度和 Workflow 后台执行已接通。**这不是 1—131 项需求已全部完成的声明**；当前完成情况、验证证据和后续任务见 [实施进度](docs/PROGRESS.md) 与 [验收清单](docs/ACCEPTANCE.md)。本次不执行生产部署。
 
-## 阅读顺序
+## 本地运行
 
-1. [AGENTS.md](AGENTS.md)：工程约束、凭证与免费套餐边界。
-2. [SPEC.md](SPEC.md)：当前有效需求，开发以此为准。
-3. [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)：必须通过的行为验收。
-4. [docs/CLOUD_HANDOFF.md](docs/CLOUD_HANDOFF.md)：可直接交给云端 Codex 的任务说明。
-5. [docs/DECISIONS.md](docs/DECISIONS.md)：历轮原题和决策来源，原题里的未选项不是需求。
-6. [references/](references/)：用户提供的 6 张 UI 参考图。
+需要 Node.js 22.18 以上、npm；浏览器测试可使用系统 Chromium。
 
-## 已确认的关键范围
+```sh
+npm ci
+npm run dev:init
+npm run dev
+```
 
-- HTTPS 上游、单用户密码登录、设备会话、离线恢复码、云端历史和草稿。
-- 多提供商、可选显示前缀、模型开关与搜索、模型上下文容量配置。
-- 默认最高 `max` 思考强度；显式 `none` 与不发送参数的“跟随接口”分开。
-- 完整消息树、用户编辑分支、重新生成、续写版本、可视化分支总览和 Fork。
-- OpenWebUI 聊天 JSON 双向兼容；附件清除，文字和分支保留。
-- 当前已开始的回答在网页关闭后继续处理并保存；必须在免费套餐下实测。
-- 不做 RAG、附件输入、语音、生图、临时聊天、消息排队、代码高亮、数学公式解析、Responses API 和聊天内容搜索。
+打开 `http://localhost:5173`。初始化脚本将本地专用随机密码存入 `~/.config/workers-chat/local-login.json`，权限为 0600；不会打印、提交或打包密码。`.dev.vars` 保存本地散列与加密密钥，受 Git 忽略。不要将本地测试凭证用于正式部署。
 
-## 云端运行准备
+登录后在“设置 → 服务商”填入 HTTPS Base URL 和专用 API Key。保存时自动获取 `/models`；新模型默认关闭。开启需要的模型并设置默认聊天模型后即可发送。显示前缀不改变实际模型 ID；新聊天默认 `max`，上游不支持时显示错误并保留设置。
 
-上游 URL 和测试模型见 `.env.example`；真正的 API Key 通过云端环境的安全配置提供，不提交到仓库。原电脑的 `127.0.0.1` 和 Windows secrets 路径在云端不可用。
+## 检查
 
-若使用的云端环境只在 setup 阶段提供 Secrets，可将 `scripts/cloud-setup.sh` 配置为 setup/maintenance 脚本；它只把专用测试凭证写到云端主目录的私有文件，供本任务测试使用，不打印值、不写进 Git。详见交接说明。
+```sh
+npm run typecheck
+npm test
+npm run test:browser
+npm run build
+npm run deploy:dry
+```
 
-仅创建本私人仓库不等于已经配置了 Codex 环境、部署了应用或开通了任何 Cloudflare 付费功能。
+`npm test` 包含消息树/交换单测和实际 workerd + D1 + Workflows + Durable Objects 集成测试。其中一个用例持续超过 30 秒，故整体约需 35 秒。浏览器测试使用专用本地数据，会新增测试聊天并生成 [截图](docs/screenshots/)。它覆盖 Chromium 桌面与手机视口，不等于真实 iOS Safari 验证。
+
+可选真实上游检查：通过安全环境变量或交接文档所述私有文件配置 `UPSTREAM_BASE_URL`、`UPSTREAM_API_KEY`，运行 `python3 scripts/test-upstream.py`。脚本先从 `/models` 匹配准确 ID，再测试 low、max 与省略思考强度，不记录认证头和回答正文。当前任务的真实模型列表请求返回 HTTP 403，尚未完成真实生成测试。
+
+## 资料
+
+- [有效规格](SPEC.md)、[工程指引](AGENTS.md)、[原始交接](docs/CLOUD_HANDOFF.md)。
+- [部署与恢复](docs/DEPLOYMENT.md)、[运行时选型与参考版本](docs/RUNTIME.md)。
+- [实施进度与下一步](docs/PROGRESS.md)、[许可与参考来源](docs/THIRD_PARTY.md)。

@@ -1,0 +1,2381 @@
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import {
+  Plus,
+  Settings2,
+  PanelLeft,
+  SlidersHorizontal,
+  ArrowUp,
+  Square,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  MoreHorizontal,
+  Copy,
+  Check,
+  X,
+  Expand,
+  GitBranch,
+  ArrowDown,
+  RotateCcw,
+  Archive,
+  Trash2,
+  Folder,
+  Download,
+  Upload,
+  Eye,
+  LogOut,
+  LoaderCircle,
+  Pencil,
+  Sun,
+  Moon,
+  Search,
+  CircleAlert,
+} from "lucide-react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  type Chat,
+  type Message,
+  type Provider,
+  type Settings,
+  type ModelRef,
+  route,
+  children,
+  descendants,
+  markdownExport,
+  estimateTokens,
+  contextMessages,
+  defaultSettings,
+} from "../shared/chat";
+import { api, download } from "./api";
+import "./style.css";
+type Brief = Pick<
+  Chat,
+  | "id"
+  | "title"
+  | "pinned"
+  | "groupId"
+  | "archived"
+  | "deleted"
+  | "unread"
+  | "updatedAt"
+> & { status?: string };
+type Group = { id: string; name: string; updatedAt: number };
+type ProviderView = Provider & { hasKey: boolean };
+const effortLabels = {
+  inherit: "跟随接口",
+  none: "无",
+  low: "低",
+  medium: "中",
+  high: "高",
+  max: "最高",
+};
+function IconButton({
+  label,
+  children,
+  onClick,
+  disabled = false,
+  className = "",
+}: {
+  label: string;
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <button
+      className={"icon-button " + className}
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+function App() {
+  const [auth, setAuth] = useState<boolean | null>(null),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false),
+    [opening, setOpening] = useState(false);
+  const [chats, setChats] = useState<Brief[]>([]),
+    [groups, setGroups] = useState<Group[]>([]),
+    [chat, setChat] = useState<Chat | null>(null),
+    [job, setJob] = useState<{ id: string; status: string } | null>(null);
+  const [providers, setProviders] = useState<ProviderView[]>([]),
+    [settings, setSettings] = useState<Settings>(defaultSettings());
+  const [draft, setDraft] = useState(""),
+    [sidebar, setSidebar] = useState(innerWidth > 760),
+    [panel, setPanel] = useState(false),
+    [modal, setModal] = useState(""),
+    [modelMenu, setModelMenu] = useState(false),
+    [search, setSearch] = useState(""),
+    [view, setView] = useState("active");
+  const [menu, setMenu] = useState<string | null>(null),
+    [expanded, setExpanded] = useState(false),
+    [editing, setEditing] = useState<{ id: string; content: string } | null>(
+      null,
+    ),
+    [selected, setSelected] = useState<string[]>([]),
+    [scrollBottom, setScrollBottom] = useState(false);
+  const [appearance, setAppearance] = useState(() =>
+    JSON.parse(
+      localStorage.getItem("appearance") ??
+        '{"theme":"system","font":16,"width":800,"line":1.8,"collapse":true,"enter":true}',
+    ),
+  );
+  const navigationSeq = useRef(0);
+  const idRef = useRef<string | null>(null),
+    dirty = useRef(false),
+    draftRef = useRef(""),
+    scrollRef = useRef<HTMLDivElement>(null),
+    stick = useRef(true),
+    textarea = useRef<HTMLTextAreaElement>(null),
+    fileRef = useRef<HTMLInputElement>(null),
+    [pendingImport, setPendingImport] = useState<{
+      data: unknown;
+      preview: {
+        count: number;
+        branches: number;
+        attachments: number;
+        failures: { index: number; reason: string }[];
+      };
+    } | null>(null);
+  const run = useCallback(async (fn: () => Promise<void>) => {
+    try {
+      setError("");
+      await fn();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "操作失败");
+    }
+  }, []);
+  const loadNavigation = useCallback(async () => {
+    const [c, g] = await Promise.all([
+      api<Brief[]>("/chats"),
+      api<Group[]>("/groups"),
+    ]);
+    setChats(c);
+    setGroups(g);
+  }, []);
+  const loadConfig = useCallback(async () => {
+    const [p, s] = await Promise.all([
+      api<ProviderView[]>("/providers"),
+      api<Settings>("/settings"),
+    ]);
+    setProviders(p);
+    setSettings(s);
+  }, []);
+  const refresh = useCallback(async (id = idRef.current) => {
+    if (!id) return;
+    const result = await api<{ chat: Chat; job: typeof job }>("/chats/" + id);
+    if (idRef.current !== id) return;
+    setChat(result.chat);
+    setJob(result.job);
+  }, []);
+  async function flushDraft() {
+    const id = idRef.current;
+    if (id && dirty.current) {
+      const saved = draftRef.current;
+      await api("/chats/" + id + "/draft", "PUT", { draft: saved });
+      if (draftRef.current === saved && idRef.current === id)
+        dirty.current = false;
+    }
+  }
+  async function open(id: string) {
+    const sequence = ++navigationSeq.current;
+    setOpening(true);
+    try {
+      await flushDraft();
+      const result = await api<{ chat: Chat; job: typeof job }>("/chats/" + id);
+      if (sequence !== navigationSeq.current) return;
+      idRef.current = id;
+      localStorage.setItem("lastChat", id);
+      setChat(result.chat);
+      setJob(result.job);
+      setDraft(result.chat.draft);
+      draftRef.current = result.chat.draft;
+      dirty.current = false;
+      stick.current = true;
+      if (result.chat.unread) {
+        await api("/chats/" + id + "/seen", "POST", {});
+        await loadNavigation();
+      }
+      if (innerWidth < 760) setSidebar(false);
+    } finally {
+      if (sequence === navigationSeq.current) setOpening(false);
+    }
+  }
+  async function create(groupId: string | null = null) {
+    await flushDraft();
+    const c = await api<Chat>("/chats", "POST", { groupId });
+    await loadNavigation();
+    await open(c.id);
+  }
+  async function ensureComposerChat() {
+    if (idRef.current) return;
+    const created = await api<Chat>("/chats", "POST", {});
+    idRef.current = created.id;
+    setChat(created);
+    localStorage.setItem("lastChat", created.id);
+    if (draftRef.current) {
+      await api("/chats/" + created.id + "/draft", "PUT", {
+        draft: draftRef.current,
+      });
+      dirty.current = false;
+    }
+    await loadNavigation();
+  }
+  useEffect(() => {
+    void run(async () => {
+      const s = await api<{ authenticated: boolean }>("/auth/status");
+      setAuth(s.authenticated);
+    });
+  }, [run]);
+  useEffect(() => {
+    if (!auth) return;
+    void run(async () => {
+      await Promise.all([loadNavigation(), loadConfig()]);
+      const id = localStorage.getItem("lastChat");
+      if (id)
+        try {
+          await open(id);
+        } catch {
+          localStorage.removeItem("lastChat");
+        }
+    });
+  }, [auth]);
+  useEffect(() => {
+    localStorage.setItem("appearance", JSON.stringify(appearance));
+    const media = matchMedia("(prefers-color-scheme: dark)");
+    const apply = () =>
+      (document.documentElement.dataset.theme =
+        appearance.theme === "system"
+          ? media.matches
+            ? "dark"
+            : "light"
+          : appearance.theme);
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [appearance]);
+  useEffect(() => {
+    if (!dirty.current) return;
+    const timeout = setTimeout(() => void run(flushDraft), 700);
+    return () => clearTimeout(timeout);
+  }, [draft]);
+  useEffect(() => {
+    if (!auth) return;
+    const timer = setInterval(
+      () =>
+        void run(async () => {
+          if (job) await refresh();
+          await loadNavigation();
+        }),
+      job ? 1500 : 6000,
+    );
+    return () => clearInterval(timer);
+  }, [auth, job?.id, run, refresh, loadNavigation]);
+  useEffect(() => {
+    if (stick.current)
+      scrollRef.current?.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: "instant",
+      });
+  }, [chat?.messages, draft, chat?.id]);
+  async function patch(
+    value: Partial<Omit<Chat, "rounds">> & { rounds?: number | null },
+  ) {
+    if (!chat) return;
+    await flushDraft();
+    await api("/chats/" + chat.id, "PATCH", value);
+    await refresh();
+    await loadNavigation();
+  }
+  async function action(name: string, body: Record<string, unknown> = {}) {
+    if (!chat) return;
+    await flushDraft();
+    const result = await api<Chat>(
+      "/chats/" + chat.id + "/" + name,
+      "POST",
+      body,
+    );
+    setMenu(null);
+    if (name === "fork") {
+      await loadNavigation();
+      await open(result.id);
+    } else {
+      await refresh();
+      await loadNavigation();
+    }
+  }
+  async function send() {
+    if (busy || job || !draft.trim()) return;
+    setBusy(true);
+    try {
+      if (!chat) {
+        const c = await api<Chat>("/chats", "POST", {});
+        idRef.current = c.id;
+        setChat(c);
+        localStorage.setItem("lastChat", c.id);
+      }
+      await api("/chats/" + idRef.current + "/send", "POST", {
+        content: draft,
+      });
+      setDraft("");
+      draftRef.current = "";
+      dirty.current = false;
+      stick.current = true;
+      await refresh();
+      await loadNavigation();
+    } finally {
+      setBusy(false);
+    }
+  }
+  const models = providers.flatMap((p) =>
+    p.models.map((m) => ({
+      ...m,
+      provider: p,
+      ref: { providerId: p.id, modelId: m.id },
+    })),
+  );
+  const current = chat?.model ?? settings.defaultModel,
+    selectedModel = models.find(
+      (m) =>
+        m.ref.providerId === current?.providerId && m.id === current.modelId,
+    );
+  const filteredModels = models.filter(
+    (m) =>
+      m.enabled &&
+      `${m.id} ${m.provider.prefix} ${m.provider.name}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+  );
+  const path = chat ? route(chat) : [],
+    estimate = estimateTokens(
+      chat
+        ? contextMessages(chat, draft)
+            .map((m) => m.content)
+            .join("\n")
+        : draft,
+    ),
+    capacity = selectedModel?.capacity ?? 1048576;
+  const filteredChats = chats.filter((c) =>
+    view === "trash"
+      ? c.deleted
+      : view === "archive"
+        ? c.archived && !c.deleted
+        : !c.archived && !c.deleted,
+  );
+  const sorted = (items: Brief[]) =>
+    [...items].sort(
+      (a, b) =>
+        Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
+    );
+  function updateDraft(value: string) {
+    setDraft(value);
+    draftRef.current = value;
+    dirty.current = true;
+  }
+  function downloadChats(ids: string[]) {
+    return run(async () => {
+      const values = await Promise.all(
+        ids.map((id) => api("/chats/" + id + "/export")),
+      );
+      download("在线AI-chats.json", JSON.stringify(values, null, 2));
+    });
+  }
+  async function batch(value: Partial<Chat>) {
+    for (const id of selected) await api("/chats/" + id, "PATCH", value);
+    setSelected([]);
+    await loadNavigation();
+    if (chat) await refresh();
+  }
+  const chatRow = (c: Brief) => (
+    <div
+      key={c.id}
+      className={"chat-row " + (c.id === chat?.id ? "selected" : "")}
+      draggable
+      onDragStart={(e) => e.dataTransfer.setData("text/plain", c.id)}
+    >
+      {selected.length > 0 && (
+        <input
+          aria-label={"选择 " + c.title}
+          type="checkbox"
+          checked={selected.includes(c.id)}
+          onChange={() =>
+            setSelected(
+              selected.includes(c.id)
+                ? selected.filter((id) => id !== c.id)
+                : [...selected, c.id],
+            )
+          }
+        />
+      )}
+      <button
+        className="chat-open"
+        onClick={() => void run(() => open(c.id))}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setSelected([c.id]);
+        }}
+      >
+        <span className="chat-title">{c.title}</span>
+        {c.status === "running" || c.status === "pending" ? (
+          <LoaderCircle size={13} className="spin" />
+        ) : c.status === "error" ? (
+          <CircleAlert size={13} className="danger-text" />
+        ) : c.unread ? (
+          <span className="unread" />
+        ) : c.pinned ? (
+          <span className="muted">⌃</span>
+        ) : null}
+      </button>
+      <button
+        className="chat-more"
+        aria-label={"管理 " + c.title}
+        onClick={() => setSelected([c.id])}
+      >
+        <MoreHorizontal size={16} />
+      </button>
+    </div>
+  );
+  if (auth === null)
+    return (
+      <div className="center">
+        <LoaderCircle className="spin" />
+      </div>
+    );
+  if (!auth)
+    return <Login onLogin={() => setAuth(true)} error={error} run={run} />;
+  return (
+    <div
+      className="app"
+      style={
+        {
+          "--font-size": appearance.font + "px",
+          "--content-width": appearance.width + "px",
+          "--line-height": appearance.line,
+        } as React.CSSProperties
+      }
+    >
+      {sidebar && (
+        <button
+          className="sidebar-scrim"
+          aria-label="关闭导航"
+          onClick={() => setSidebar(false)}
+        />
+      )}
+      <aside className={"sidebar " + (sidebar ? "open" : "")}>
+        <div className="brand">
+          <span className="brand-mark">✦</span>
+          <strong>在线AI</strong>
+          <IconButton label="收起导航" onClick={() => setSidebar(false)}>
+            <PanelLeft size={18} />
+          </IconButton>
+        </div>
+        <button className="new-chat" onClick={() => void run(() => create())}>
+          <Pencil size={17} />
+          新聊天<span>＋</span>
+        </button>
+        <div className="nav-list">
+          <div className="section-label">
+            分组
+            <IconButton
+              label="新建分组"
+              onClick={() => {
+                const name = prompt("分组名称");
+                if (name)
+                  void run(async () => {
+                    await api("/groups", "POST", { name });
+                    await loadNavigation();
+                  });
+              }}
+            >
+              <Plus size={15} />
+            </IconButton>
+          </div>
+          {groups
+            .sort(
+              (a, b) =>
+                Math.max(
+                  b.updatedAt,
+                  ...filteredChats
+                    .filter((c) => c.groupId === b.id)
+                    .map((c) => c.updatedAt),
+                ) -
+                Math.max(
+                  a.updatedAt,
+                  ...filteredChats
+                    .filter((c) => c.groupId === a.id)
+                    .map((c) => c.updatedAt),
+                ),
+            )
+            .map((g) => (
+              <section
+                key={g.id}
+                className="group"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) =>
+                  void run(async () => {
+                    await api(
+                      "/chats/" + e.dataTransfer.getData("text/plain"),
+                      "PATCH",
+                      { groupId: g.id },
+                    );
+                    await loadNavigation();
+                  })
+                }
+              >
+                <div className="group-title">
+                  <Folder size={16} />
+                  {g.name}
+                  <IconButton
+                    label={"在 " + g.name + " 新建聊天"}
+                    onClick={() => void run(() => create(g.id))}
+                  >
+                    <Plus size={15} />
+                  </IconButton>
+                </div>
+                {sorted(filteredChats.filter((c) => c.groupId === g.id)).map(
+                  chatRow,
+                )}
+              </section>
+            ))}
+          <div className="section-label">
+            {view === "trash"
+              ? "回收站"
+              : view === "archive"
+                ? "已归档"
+                : "聊天"}
+          </div>
+          {sorted(
+            filteredChats.filter(
+              (c) => !c.groupId || !groups.some((g) => g.id === c.groupId),
+            ),
+          ).map(chatRow)}
+          {!filteredChats.length && (
+            <p className="nav-empty">
+              {view === "active" ? "从一个问题开始" : "这里还没有聊天"}
+            </p>
+          )}
+        </div>
+        <div className="nav-footer">
+          <button onClick={() => fileRef.current?.click()}>
+            <Upload size={16} />
+            导入聊天
+          </button>
+          <button
+            onClick={() => setView(view === "archive" ? "active" : "archive")}
+          >
+            <Archive size={16} />
+            {view === "archive" ? "返回聊天" : "归档"}
+          </button>
+          <button
+            onClick={() => setView(view === "trash" ? "active" : "trash")}
+          >
+            <Trash2 size={16} />
+            {view === "trash" ? "返回聊天" : "回收站"}
+          </button>
+          <button onClick={() => setModal("settings")}>
+            <Settings2 size={16} />
+            设置
+          </button>
+        </div>
+      </aside>
+      <main>
+        <header>
+          {!sidebar && (
+            <IconButton label="打开导航" onClick={() => setSidebar(true)}>
+              <PanelLeft size={19} />
+            </IconButton>
+          )}
+          <button
+            className="header-title"
+            onClick={() => {
+              if (chat) {
+                const title = prompt("重命名聊天", chat.title);
+                if (title) void run(() => patch({ title }));
+              }
+            }}
+          >
+            {chat?.title ?? "在线AI"}
+          </button>
+          <div className="header-actions">
+            {job && (
+              <span className="status-label">
+                <LoaderCircle size={13} className="spin" />
+                正在生成
+              </span>
+            )}
+            {chat && (
+              <>
+                <IconButton
+                  label="聊天管理"
+                  onClick={() => setModal("chat-menu")}
+                >
+                  <MoreHorizontal size={20} />
+                </IconButton>
+                <IconButton
+                  label="当前聊天设置"
+                  onClick={() => setPanel(!panel)}
+                >
+                  <SlidersHorizontal size={19} />
+                </IconButton>
+              </>
+            )}
+          </div>
+        </header>
+        {error && (
+          <div className="error-banner" role="alert">
+            <CircleAlert size={16} />
+            <span>{error}</span>
+            <IconButton label="关闭提示" onClick={() => setError("")}>
+              <X size={15} />
+            </IconButton>
+          </div>
+        )}
+        {selected.length > 0 && (
+          <div className="batch-bar">
+            <span>已选 {selected.length} 项</span>
+            <button
+              onClick={() =>
+                void run(() => batch({ archived: view !== "archive" }))
+              }
+            >
+              {view === "archive" ? "取消归档" : "归档"}
+            </button>
+            <button
+              onClick={() =>
+                void run(() => batch({ deleted: view !== "trash" }))
+              }
+            >
+              {view === "trash" ? "恢复" : "移入回收站"}
+            </button>
+            <select
+              aria-label="批量移动"
+              defaultValue=""
+              onChange={(e) =>
+                void run(() => batch({ groupId: e.target.value || null }))
+              }
+            >
+              <option value="" disabled>
+                移动到…
+              </option>
+              <option value="">主列表</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+            <button onClick={() => void downloadChats(selected)}>导出</button>
+            <IconButton label="取消多选" onClick={() => setSelected([])}>
+              <X size={16} />
+            </IconButton>
+          </div>
+        )}
+        <div
+          className="message-scroll"
+          ref={scrollRef}
+          onScroll={() => {
+            const el = scrollRef.current!;
+            stick.current =
+              el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+            setScrollBottom(!stick.current);
+          }}
+        >
+          {!path.length ? (
+            <div className="welcome">
+              <span className="welcome-symbol">✦</span>
+              <h1>有什么想聊的？</h1>
+              <p>让想法从这里开始。</p>
+              {!models.some((m) => m.enabled) && (
+                <button
+                  className="subtle-button"
+                  onClick={() => setModal("settings")}
+                >
+                  配置服务商与模型 <ChevronRight size={14} />
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="messages">
+              {path.map((m, index) => {
+                const siblings = chat
+                    ? children(chat, m.parentId).filter(
+                        (s) => s.role === m.role,
+                      )
+                    : [],
+                  version = siblings.findIndex((s) => s.id === m.id);
+                return (
+                  <article
+                    key={m.id}
+                    className={
+                      "message " + m.role + (m.excluded ? " excluded" : "")
+                    }
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenu(m.id);
+                    }}
+                  >
+                    {editing?.id === m.id ? (
+                      <div className="edit-area">
+                        <textarea
+                          value={editing.content}
+                          onChange={(e) =>
+                            setEditing({ ...editing, content: e.target.value })
+                          }
+                        />
+                        <div>
+                          <button onClick={() => setEditing(null)}>取消</button>
+                          <button
+                            className="primary"
+                            onClick={() =>
+                              void run(async () => {
+                                await action("edit", {
+                                  messageId: m.id,
+                                  content: editing.content,
+                                });
+                                setEditing(null);
+                              })
+                            }
+                          >
+                            保存{m.role === "user" ? "为新分支" : ""}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="message-body">
+                        {m.reasoning && (
+                          <details open={m.status === "running"}>
+                            <summary>思考过程</summary>
+                            <div className="reasoning">{m.reasoning}</div>
+                          </details>
+                        )}
+                        <div
+                          id={"text-" + m.id}
+                          className={
+                            "markdown " +
+                            (appearance.collapse && m.content.length > 5000
+                              ? "collapsible"
+                              : "")
+                          }
+                        >
+                          <Markdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              img: ({ alt, src }) => (
+                                <a
+                                  href={
+                                    typeof src === "string" &&
+                                    /^https:\/\//.test(src)
+                                      ? src
+                                      : undefined
+                                  }
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  [图片：{alt ?? "链接"}]
+                                </a>
+                              ),
+                              a: ({ children, href }) => (
+                                <a
+                                  href={href}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  {children}
+                                </a>
+                              ),
+                              pre: ({ children }) => (
+                                <CodeBlock>{children}</CodeBlock>
+                              ),
+                            }}
+                          >
+                            {m.content ||
+                              (m.status === "running" ? "" : "（空消息）")}
+                          </Markdown>
+                        </div>
+                        {appearance.collapse && m.content.length > 5000 && (
+                          <button
+                            className="text-button"
+                            onClick={(e) => {
+                              e.currentTarget.previousElementSibling?.classList.toggle(
+                                "collapsible",
+                              );
+                              e.currentTarget.textContent =
+                                e.currentTarget.textContent === "展开全文"
+                                  ? "收起"
+                                  : "展开全文";
+                            }}
+                          >
+                            展开全文
+                          </button>
+                        )}
+                        {m.status === "running" && !m.content && (
+                          <span className="generating-dot" />
+                        )}
+                        {m.error && <p className="message-error">{m.error}</p>}
+                        {m.status === "stopped" && (
+                          <p className="muted">已停止 · 保留部分回答</p>
+                        )}
+                        <div
+                          className={
+                            "message-actions " +
+                            (menu === m.id ? "visible" : "")
+                          }
+                        >
+                          <IconButton
+                            label="复制 Markdown"
+                            onClick={() =>
+                              void run(() =>
+                                navigator.clipboard.writeText(m.content),
+                              )
+                            }
+                          >
+                            <Copy size={14} />
+                          </IconButton>
+                          <IconButton
+                            label="编辑消息"
+                            disabled={!!job}
+                            onClick={() =>
+                              setEditing({ id: m.id, content: m.content })
+                            }
+                          >
+                            <Pencil size={14} />
+                          </IconButton>
+                          {m.role === "assistant" && (
+                            <IconButton
+                              label="重新生成"
+                              disabled={!!job}
+                              onClick={() =>
+                                void run(() =>
+                                  action("regenerate", { messageId: m.id }),
+                                )
+                              }
+                            >
+                              <RotateCcw size={14} />
+                            </IconButton>
+                          )}
+                          <IconButton
+                            label="消息操作"
+                            onClick={() => setMenu(menu === m.id ? null : m.id)}
+                          >
+                            <MoreHorizontal size={16} />
+                          </IconButton>
+                          {siblings.length > 1 && (
+                            <div className="versions">
+                              <IconButton
+                                label="上个版本"
+                                disabled={!!job || version === 0}
+                                onClick={() =>
+                                  void run(() =>
+                                    action("select", {
+                                      messageId: siblings[version - 1]?.id,
+                                    }),
+                                  )
+                                }
+                              >
+                                <ChevronLeft size={14} />
+                              </IconButton>
+                              <button onClick={() => setModal("tree")}>
+                                {version + 1} / {siblings.length}
+                              </button>
+                              <IconButton
+                                label="下个版本"
+                                disabled={
+                                  !!job || version === siblings.length - 1
+                                }
+                                onClick={() =>
+                                  void run(() =>
+                                    action("select", {
+                                      messageId: siblings[version + 1]?.id,
+                                    }),
+                                  )
+                                }
+                              >
+                                <ChevronRight size={14} />
+                              </IconButton>
+                            </div>
+                          )}
+                        </div>
+                        {(index === path.length - 1 || menu === m.id) &&
+                          m.role === "assistant" && (
+                            <div className="message-meta">
+                              {m.model?.modelId ?? String(m.raw?.model ?? "")}
+                              {m.elapsedMs !== undefined && (
+                                <span>
+                                  {" "}
+                                  · {(m.elapsedMs / 1000).toFixed(1)} 秒
+                                </span>
+                              )}
+                              {m.usage && (
+                                <span title={JSON.stringify(m.usage)}>
+                                  {" "}
+                                  · 实际用量{" "}
+                                  {String(m.usage.total_tokens ?? "详见详情")}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        {menu === m.id && (
+                          <div className="message-menu">
+                            <button
+                              disabled={!!job}
+                              onClick={() =>
+                                void run(() =>
+                                  action("fork", { messageId: m.id }),
+                                )
+                              }
+                            >
+                              <GitBranch size={15} />
+                              从这里 Fork
+                            </button>
+                            {m.role === "assistant" && (
+                              <>
+                                <button
+                                  disabled={!!job}
+                                  onClick={() =>
+                                    void run(() =>
+                                      action("continue", { messageId: m.id }),
+                                    )
+                                  }
+                                >
+                                  继续回答
+                                </button>
+                                {m.status === "error" && (
+                                  <button
+                                    disabled={!!job}
+                                    onClick={() =>
+                                      void run(() =>
+                                        action("retry", { messageId: m.id }),
+                                      )
+                                    }
+                                  >
+                                    重试为新版本
+                                  </button>
+                                )}
+                              </>
+                            )}
+                            <button
+                              disabled={!!job}
+                              onClick={() =>
+                                void run(() =>
+                                  action("exclude", { messageId: m.id }),
+                                )
+                              }
+                            >
+                              {m.excluded ? "重新加入上下文" : "从上下文排除"}
+                            </button>
+                            <button
+                              onClick={() =>
+                                void run(() =>
+                                  navigator.clipboard.writeText(
+                                    plainText(m.id),
+                                  ),
+                                )
+                              }
+                            >
+                              复制纯文字
+                            </button>
+                            <button
+                              className="danger-text"
+                              disabled={!!job}
+                              onClick={() => {
+                                if (
+                                  chat &&
+                                  confirm(
+                                    `将永久删除这条消息及其 ${descendants(chat, m.id).length - 1} 条后续消息。继续？`,
+                                  )
+                                )
+                                  void run(() =>
+                                    action("delete-message", {
+                                      messageId: m.id,
+                                    }),
+                                  );
+                              }}
+                            >
+                              删除消息与后续分支
+                            </button>
+                            <small>
+                              {new Date(m.createdAt).toLocaleString()}
+                            </small>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <div className="composer-area">
+          {scrollBottom && (
+            <IconButton
+              label="回到底部"
+              className="to-bottom"
+              onClick={() => {
+                stick.current = true;
+                scrollRef.current?.scrollTo({
+                  top: scrollRef.current.scrollHeight,
+                  behavior: "smooth",
+                });
+              }}
+            >
+              <ArrowDown size={17} />
+            </IconButton>
+          )}
+          <div className={"composer " + (expanded ? "expanded" : "")}>
+            <textarea
+              ref={textarea}
+              disabled={opening}
+              aria-label="消息"
+              placeholder="发送消息…"
+              value={draft}
+              rows={expanded ? 14 : 2}
+              onChange={(e) => updateDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (
+                  e.key === "Enter" &&
+                  !e.shiftKey &&
+                  !e.nativeEvent.isComposing &&
+                  innerWidth > 760 &&
+                  appearance.enter
+                ) {
+                  e.preventDefault();
+                  void run(send);
+                }
+              }}
+            />
+            <div className="composer-controls">
+              <IconButton
+                label={expanded ? "收起编辑区" : "展开编辑区"}
+                onClick={() => setExpanded(!expanded)}
+              >
+                <Expand size={16} />
+              </IconButton>
+              <div className="composer-spacer" />
+              <span
+                className={
+                  "context-ring " + (estimate > capacity ? "over" : "")
+                }
+                title={`本地估算 ${estimate.toLocaleString()} / ${capacity.toLocaleString()} Token`}
+                style={
+                  {
+                    "--progress":
+                      Math.min((estimate / capacity) * 100, 100) + "%",
+                  } as React.CSSProperties
+                }
+              />
+              <div className="model-control">
+                <button
+                  className="model-trigger"
+                  onClick={() => {
+                    setModelMenu(!modelMenu);
+                    setSearch("");
+                  }}
+                >
+                  {selectedModel
+                    ? selectedModel.provider.prefix + selectedModel.id
+                    : "选择模型"}
+                  <ChevronDown size={12} />
+                </button>
+                {modelMenu && (
+                  <div className="model-popover">
+                    <div className="search-box">
+                      <Search size={15} />
+                      <input
+                        aria-label="搜索模型"
+                        autoFocus={innerWidth > 760}
+                        placeholder="搜索模型或服务商"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                    </div>
+                    <div className="model-options">
+                      {filteredModels.map((m) => (
+                        <button
+                          key={m.provider.id + "/" + m.id}
+                          onClick={() =>
+                            void run(async () => {
+                              if (!chat) {
+                                await ensureComposerChat();
+                                await api("/chats/" + idRef.current, "PATCH", {
+                                  model: m.ref,
+                                });
+                                await refresh();
+                              } else await patch({ model: m.ref });
+                              setModelMenu(false);
+                            })
+                          }
+                        >
+                          <span>
+                            {m.provider.prefix + m.id}
+                            <small>{m.provider.name}</small>
+                          </span>
+                          {m.id === current?.modelId &&
+                            m.provider.id === current.providerId && (
+                              <Check size={15} />
+                            )}
+                        </button>
+                      ))}
+                      {!filteredModels.length && (
+                        <p className="muted">没有启用的匹配模型</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <select
+                className="effort"
+                aria-label="思考强度"
+                value={chat?.effort ?? "max"}
+                onChange={(e) =>
+                  void run(async () => {
+                    if (!chat) await ensureComposerChat();
+                    await api("/chats/" + idRef.current, "PATCH", {
+                      effort: e.target.value,
+                    });
+                    await refresh();
+                  })
+                }
+              >
+                {Object.entries(effortLabels).map(([v, label]) => (
+                  <option key={v} value={v}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              {job ? (
+                <IconButton
+                  label="停止生成"
+                  className="send-button"
+                  onClick={() => void run(() => action("stop"))}
+                >
+                  <Square size={15} fill="currentColor" />
+                </IconButton>
+              ) : (
+                <IconButton
+                  label="发送"
+                  className="send-button"
+                  disabled={!draft.trim() || busy || !!chat?.deleted}
+                  onClick={() => void run(send)}
+                >
+                  {busy ? (
+                    <LoaderCircle size={19} className="spin" />
+                  ) : (
+                    <ArrowUp size={21} />
+                  )}
+                </IconButton>
+              )}
+            </div>
+          </div>
+          <p className="composer-caption">
+            {estimate > capacity
+              ? "超出所设上下文预算，仍可发送。"
+              : "AI 的回答可能有误，请核实重要信息。"}
+            <span>{estimate.toLocaleString()} Token · 本地估算</span>
+          </p>
+        </div>
+      </main>
+      {panel && chat && (
+        <aside className="parameters">
+          <div className="panel-heading">
+            <strong>当前聊天设置</strong>
+            <IconButton label="返回聊天" onClick={() => setPanel(false)}>
+              <X size={18} />
+            </IconButton>
+          </div>
+          <div className="panel-content">
+            <label className="toggle">
+              流式回答
+              <input
+                type="checkbox"
+                checked={chat.stream}
+                onChange={(e) =>
+                  void run(() => patch({ stream: e.target.checked }))
+                }
+              />
+            </label>
+            <h3>生成参数</h3>
+            {(["temperature", "top_p", "top_k"] as const).map((key) => (
+              <ParameterControl
+                key={key}
+                name={
+                  key === "temperature"
+                    ? "温度"
+                    : key === "top_p"
+                      ? "Top P"
+                      : "Top K"
+                }
+                value={chat.parameters[key]}
+                max={key === "temperature" ? 2 : key === "top_p" ? 1 : 1000}
+                step={key === "top_k" ? 1 : 0.05}
+                onChange={(value) => {
+                  const p = { ...chat.parameters };
+                  if (value === undefined) delete p[key];
+                  else p[key] = value;
+                  void run(() => patch({ parameters: p }));
+                }}
+              />
+            ))}
+            <label>
+              最近上下文轮数
+              <input
+                type="number"
+                min="1"
+                placeholder="全部"
+                defaultValue={chat.rounds ?? ""}
+                key={chat.id}
+                onBlur={(e) =>
+                  void run(() =>
+                    patch({
+                      rounds: e.target.value ? Number(e.target.value) : null,
+                    }),
+                  )
+                }
+              />
+            </label>
+            <label className="toggle">
+              停止的部分纳入上下文
+              <input
+                type="checkbox"
+                checked={chat.includeStopped}
+                onChange={(e) =>
+                  void run(() => patch({ includeStopped: e.target.checked }))
+                }
+              />
+            </label>
+            <h3>系统提示词</h3>
+            <label>
+              选择模板时
+              <select
+                value={chat.templateMode}
+                onChange={(e) =>
+                  void run(() =>
+                    patch({
+                      templateMode: e.target.value as Chat["templateMode"],
+                    }),
+                  )
+                }
+              >
+                <option value="replace">替换</option>
+                <option value="append">追加</option>
+              </select>
+            </label>
+            <select
+              aria-label="添加系统模板"
+              value=""
+              onChange={(e) => {
+                const t = settings.templates.find(
+                  (v) => v.id === e.target.value,
+                );
+                if (t)
+                  void run(() =>
+                    patch({
+                      system:
+                        chat.templateMode === "replace"
+                          ? [structuredClone(t)]
+                          : [...chat.system, structuredClone(t)],
+                    }),
+                  );
+              }}
+            >
+              <option value="">选择一个模板…</option>
+              {settings.templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+            {chat.system.map((t, i) => (
+              <div className="template-card" key={t.id + "-" + i}>
+                <div>
+                  {t.name}
+                  <IconButton
+                    label="上移模板"
+                    disabled={i === 0}
+                    onClick={() => {
+                      const next = [...chat.system];
+                      [next[i - 1], next[i]] = [next[i]!, next[i - 1]!];
+                      void run(() => patch({ system: next }));
+                    }}
+                  >
+                    <ArrowUp size={13} />
+                  </IconButton>
+                  <IconButton
+                    label="删除模板卡片"
+                    onClick={() =>
+                      void run(() =>
+                        patch({
+                          system: chat.system.filter((_, j) => j !== i),
+                        }),
+                      )
+                    }
+                  >
+                    <X size={13} />
+                  </IconButton>
+                </div>
+                <textarea
+                  aria-label={t.name}
+                  defaultValue={t.content}
+                  onBlur={(e) =>
+                    void run(() =>
+                      patch({
+                        system: chat.system.map((v, j) =>
+                          j === i ? { ...v, content: e.target.value } : v,
+                        ),
+                      }),
+                    )
+                  }
+                />
+              </div>
+            ))}
+            <button
+              onClick={() =>
+                void run(() =>
+                  patch({
+                    system: [
+                      ...chat.system,
+                      {
+                        id: crypto.randomUUID(),
+                        name: "自定义提示词",
+                        content: "",
+                      },
+                    ],
+                  }),
+                )
+              }
+            >
+              ＋ 添加提示词卡片
+            </button>
+            <h3>标题材料范围</h3>
+            <select
+              value={chat.titleScope}
+              onChange={(e) =>
+                void run(() =>
+                  patch({ titleScope: e.target.value as Chat["titleScope"] }),
+                )
+              }
+            >
+              <option value="branch">当前分支问答</option>
+              <option value="first">仅首轮问答</option>
+            </select>
+            <button onClick={() => setModal("preview")}>预览下次请求</button>
+            <button onClick={() => setModal("tree")}>分支总览</button>
+          </div>
+        </aside>
+      )}
+      {modal && (
+        <div className="modal-backdrop" onClick={() => setModal("")}>
+          <section
+            className={
+              "modal " + (modal === "settings" ? "settings-modal" : "")
+            }
+            role="dialog"
+            aria-modal="true"
+            aria-label={modal === "settings" ? "设置" : "聊天操作"}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2>
+                {modal === "settings"
+                  ? "设置"
+                  : modal === "tree"
+                    ? "分支总览"
+                    : modal === "preview"
+                      ? "请求预览"
+                      : "聊天管理"}
+              </h2>
+              <IconButton label="关闭" onClick={() => setModal("")}>
+                <X size={20} />
+              </IconButton>
+            </div>
+            {modal === "settings" ? (
+              <SettingsPanel
+                providers={providers}
+                settings={settings}
+                appearance={appearance}
+                setAppearance={setAppearance}
+                run={run}
+                refresh={loadConfig}
+                onLogout={() => {
+                  setAuth(false);
+                  setChat(null);
+                }}
+              />
+            ) : modal === "tree" && chat ? (
+              <div className="tree">
+                {Object.values(chat.messages).map((m) => (
+                  <button
+                    key={m.id}
+                    disabled={!!job}
+                    className={
+                      path.some((p) => p.id === m.id) ? "on-route" : ""
+                    }
+                    style={{
+                      paddingLeft:
+                        16 + Math.min(route(chat, m.id).length, 15) * 14,
+                    }}
+                    onClick={() =>
+                      void run(async () => {
+                        await action("select", { messageId: m.id });
+                        setModal("");
+                      })
+                    }
+                  >
+                    <GitBranch size={14} />
+                    <strong>{m.role === "user" ? "你" : "AI"}</strong>
+                    <span>{m.content.slice(0, 90) || "生成中"}</span>
+                  </button>
+                ))}
+              </div>
+            ) : modal === "preview" && chat ? (
+              <RequestPreview chat={chat} draft={draft} run={run} />
+            ) : chat ? (
+              <div className="chat-management">
+                <button
+                  onClick={() =>
+                    void run(() => patch({ pinned: !chat.pinned }))
+                  }
+                >
+                  {chat.pinned ? "取消置顶" : "置顶聊天"}
+                </button>
+                <button
+                  onClick={() =>
+                    void run(() => patch({ archived: !chat.archived }))
+                  }
+                >
+                  {chat.archived ? "取消归档" : "归档聊天"}
+                </button>
+                <select
+                  aria-label="移动聊天"
+                  value={chat.groupId ?? ""}
+                  onChange={(e) =>
+                    void run(() => patch({ groupId: e.target.value || null }))
+                  }
+                >
+                  <option value="">主列表</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+                <button onClick={() => void downloadChats([chat.id])}>
+                  <Download size={16} />
+                  导出完整树 JSON
+                </button>
+                <button
+                  onClick={() =>
+                    download(
+                      chat.title + ".md",
+                      markdownExport(chat),
+                      "text/markdown",
+                    )
+                  }
+                >
+                  导出当前路线 Markdown
+                </button>
+                <button
+                  onClick={() =>
+                    void downloadChats(
+                      chats.filter((c) => !c.deleted).map((c) => c.id),
+                    )
+                  }
+                >
+                  导出全部聊天（含归档）
+                </button>
+                <button onClick={() => fileRef.current?.click()}>
+                  <Upload size={16} />
+                  导入 OpenWebUI JSON
+                </button>
+                <button
+                  className="danger-text"
+                  onClick={() =>
+                    void run(async () => {
+                      await patch({ deleted: !chat.deleted });
+                      setModal("");
+                    })
+                  }
+                >
+                  {chat.deleted ? "从回收站恢复" : "移入回收站"}
+                </button>
+                {chat.deleted && (
+                  <button
+                    className="danger-text"
+                    onClick={() => {
+                      if (confirm("永久删除这个聊天？无法恢复。"))
+                        void run(async () => {
+                          await api(
+                            "/chats/" + chat.id + "/permanent",
+                            "DELETE",
+                            {},
+                          );
+                          idRef.current = null;
+                          setChat(null);
+                          setModal("");
+                          await loadNavigation();
+                        });
+                    }}
+                  >
+                    永久删除聊天
+                  </button>
+                )}
+              </div>
+            ) : null}
+          </section>
+        </div>
+      )}
+      <input
+        ref={fileRef}
+        className="hidden"
+        type="file"
+        accept=".json,application/json"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file)
+            void run(async () => {
+              const data = JSON.parse(await file.text()),
+                preview = await api<{
+                  count: number;
+                  branches: number;
+                  attachments: number;
+                  failures: { index: number; reason: string }[];
+                }>("/import/preview", "POST", { data });
+              setPendingImport({ data, preview });
+            });
+          e.target.value = "";
+        }}
+      />
+      {pendingImport && (
+        <div className="modal-backdrop">
+          <section className="modal">
+            <h2>导入预览</h2>
+            <p>
+              {pendingImport.preview.count} 个聊天，
+              {pendingImport.preview.branches} 个分叉点，将移除{" "}
+              {pendingImport.preview.attachments} 个附件引用。
+            </p>
+            {pendingImport.preview.failures.map((f) => (
+              <p key={f.index} className="danger-text">
+                第 {f.index} 项：{f.reason}
+              </p>
+            ))}
+            <p className="muted">每次导入都会新增独立会话。</p>
+            <button onClick={() => setPendingImport(null)}>取消</button>
+            <button
+              className="primary"
+              onClick={() =>
+                void run(async () => {
+                  await api("/import", "POST", { data: pendingImport.data });
+                  setPendingImport(null);
+                  await loadNavigation();
+                })
+              }
+            >
+              确认导入有效聊天
+            </button>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+function plainText(id: string) {
+  const source = document.getElementById("text-" + id);
+  if (!source) return "";
+  const copy = source.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll("button").forEach((el) => el.remove());
+  copy
+    .querySelectorAll("p,li,h1,h2,h3,pre,tr,blockquote")
+    .forEach((el) => el.appendChild(document.createTextNode("\n")));
+  return copy.textContent?.trim() ?? "";
+}
+function CodeBlock({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLPreElement>(null),
+    [copied, setCopied] = useState(false);
+  return (
+    <div className="code-block">
+      <button
+        onClick={() => {
+          void navigator.clipboard.writeText(ref.current?.textContent ?? "");
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }}
+      >
+        {copied ? <Check size={13} /> : <Copy size={13} />}{" "}
+        {copied ? "已复制" : "复制代码"}
+      </button>
+      <pre ref={ref}>{children}</pre>
+    </div>
+  );
+}
+function Login({
+  onLogin,
+  error,
+  run,
+}: {
+  onLogin: () => void;
+  error: string;
+  run: (fn: () => Promise<void>) => Promise<void>;
+}) {
+  const [password, setPassword] = useState(""),
+    [recovery, setRecovery] = useState(false),
+    [next, setNext] = useState(""),
+    [loading, setLoading] = useState(false),
+    [message, setMessage] = useState("");
+  return (
+    <div className="login-page">
+      <form
+        className="login-card"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setLoading(true);
+          void run(async () => {
+            try {
+              await api("/auth/" + (recovery ? "recover" : "login"), "POST", {
+                password,
+                newPassword: next,
+              });
+              if (recovery) {
+                setRecovery(false);
+                setPassword("");
+                setMessage("密码已重置。请使用新密码登录；原恢复码已失效。");
+              } else onLogin();
+            } finally {
+              setLoading(false);
+            }
+          });
+        }}
+      >
+        <span className="welcome-symbol">✦</span>
+        <h1>在线AI</h1>
+        <p className="muted">
+          {recovery ? "使用离线恢复码重置访问密码" : "登录，继续你的思考。"}
+        </p>
+        <label>
+          {recovery ? "离线恢复码" : "访问密码"}
+          <input
+            autoFocus
+            required
+            autoComplete={recovery ? "off" : "current-password"}
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </label>
+        {recovery && (
+          <label>
+            新密码
+            <input
+              required
+              type="password"
+              minLength={12}
+              autoComplete="new-password"
+              value={next}
+              onChange={(e) => setNext(e.target.value)}
+            />
+          </label>
+        )}
+        {error && (
+          <p className="danger-text" role="alert">
+            {error}
+          </p>
+        )}
+        {message && <p>{message}</p>}
+        <button className="primary" disabled={loading} type="submit">
+          {loading ? "正在验证…" : recovery ? "重置密码" : "登录"}
+        </button>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => setRecovery(!recovery)}
+        >
+          {recovery ? "返回登录" : "使用恢复码"}
+        </button>
+      </form>
+    </div>
+  );
+}
+function ParameterControl({
+  name,
+  value,
+  max,
+  step,
+  onChange,
+}: {
+  name: string;
+  value?: number;
+  max: number;
+  step: number;
+  onChange: (value: number | undefined) => void;
+}) {
+  const [current, setCurrent] = useState(value);
+  useEffect(() => setCurrent(value), [value]);
+  return (
+    <div className="parameter">
+      <div>
+        <span>{name}</span>
+        <button className="text-button" onClick={() => onChange(undefined)}>
+          {value === undefined ? "默认" : "恢复默认"}
+        </button>
+      </div>
+      <div>
+        <input
+          aria-label={name + "滑块"}
+          type="range"
+          min={0}
+          max={max}
+          step={step}
+          value={current ?? max / 2}
+          onChange={(e) => setCurrent(Number(e.target.value))}
+          onPointerUp={() => onChange(current)}
+        />
+        <input
+          aria-label={name}
+          type="number"
+          min={0}
+          max={max}
+          step={step}
+          placeholder="默认"
+          value={current ?? ""}
+          onChange={(e) =>
+            setCurrent(
+              e.target.value === "" ? undefined : Number(e.target.value),
+            )
+          }
+          onBlur={() => onChange(current)}
+        />
+      </div>
+    </div>
+  );
+}
+function RequestPreview({
+  chat,
+  draft,
+  run,
+}: {
+  chat: Chat;
+  draft: string;
+  run: (fn: () => Promise<void>) => Promise<void>;
+}) {
+  const [data, setData] = useState("");
+  useEffect(() => {
+    void run(async () => {
+      await api("/chats/" + chat.id + "/draft", "PUT", { draft });
+      setData(
+        JSON.stringify(
+          await api("/chats/" + chat.id + "/preview", "POST", {}),
+          null,
+          2,
+        ),
+      );
+    });
+  }, [chat.id]);
+  return (
+    <>
+      <p className="muted">
+        下次请求的文字上下文和参数，不包含密钥。历史思考内容不发送。
+      </p>
+      <pre className="request-preview">{data}</pre>
+    </>
+  );
+}
+type Appearance = {
+  theme: string;
+  font: number;
+  width: number;
+  line: number;
+  collapse: boolean;
+  enter: boolean;
+};
+function SettingsPanel({
+  providers,
+  settings,
+  appearance,
+  setAppearance,
+  run,
+  refresh,
+  onLogout,
+}: {
+  providers: ProviderView[];
+  settings: Settings;
+  appearance: Appearance;
+  setAppearance: (v: Appearance) => void;
+  run: (fn: () => Promise<void>) => Promise<void>;
+  refresh: () => Promise<void>;
+  onLogout: () => void;
+}) {
+  const [tab, setTab] = useState("providers"),
+    [form, setForm] = useState({
+      name: "",
+      baseUrl: "https://",
+      prefix: "",
+      apiKey: "",
+      id: "",
+    }),
+    [filter, setFilter] = useState(""),
+    [saving, setSaving] = useState(false),
+    [sessions, setSessions] = useState<
+      { id: string; device: string; createdAt: number; current: boolean }[]
+    >([]),
+    [oldPassword, setOldPassword] = useState(""),
+    [newPassword, setNewPassword] = useState(""),
+    [recovery, setRecovery] = useState("");
+  const [template, setTemplate] = useState({ name: "", content: "" });
+  async function saveSettings(next: Settings) {
+    await api("/settings", "PUT", next);
+    await refresh();
+  }
+  useEffect(() => {
+    if (tab === "security")
+      void run(async () => setSessions(await api("/auth/sessions")));
+  }, [tab]);
+  const modelRows = providers
+    .flatMap((p) => p.models.map((m) => ({ ...m, p })))
+    .filter((m) =>
+      `${m.id} ${m.p.prefix} ${m.p.name}`
+        .toLowerCase()
+        .includes(filter.toLowerCase()),
+    );
+  return (
+    <div className="settings-body">
+      <nav>
+        {[
+          ["providers", "服务商"],
+          ["models", "模型"],
+          ["templates", "提示词模板"],
+          ["appearance", "外观"],
+          ["security", "账号与设备"],
+        ].map(([key, title]) => (
+          <button
+            className={tab === key ? "selected" : ""}
+            key={key}
+            onClick={() => setTab(key!)}
+          >
+            {title}
+          </button>
+        ))}
+      </nav>
+      <div className="settings-content">
+        {tab === "providers" && (
+          <>
+            <h3>服务商</h3>
+            <p className="muted">
+              连接你自己的 OpenAI 兼容接口。密钥仅保存在服务端。
+            </p>
+            {providers.map((p) => (
+              <div className="provider-card" key={p.id}>
+                <div>
+                  <strong>{p.name}</strong>
+                  <small>{p.baseUrl}</small>
+                  <span className="muted">
+                    {p.models.length} 个模型 ·{" "}
+                    {p.hasKey ? "已保存密钥" : "无密钥"}
+                  </span>
+                </div>
+                <IconButton
+                  label={"编辑 " + p.name}
+                  onClick={() =>
+                    setForm({
+                      id: p.id,
+                      name: p.name,
+                      baseUrl: p.baseUrl,
+                      prefix: p.prefix,
+                      apiKey: "",
+                    })
+                  }
+                >
+                  <Pencil size={15} />
+                </IconButton>
+                <IconButton
+                  label={"刷新 " + p.name + " 模型"}
+                  onClick={() =>
+                    void run(async () => {
+                      await api("/providers", "POST", {
+                        id: p.id,
+                        name: p.name,
+                        baseUrl: p.baseUrl,
+                        prefix: p.prefix,
+                      });
+                      await refresh();
+                    })
+                  }
+                >
+                  <RotateCcw size={15} />
+                </IconButton>
+                <IconButton
+                  label={"删除 " + p.name}
+                  onClick={() => {
+                    if (confirm("删除此服务商？历史消息会保留。"))
+                      void run(async () => {
+                        await api("/providers/" + p.id, "DELETE", {});
+                        await refresh();
+                      });
+                  }}
+                >
+                  <Trash2 size={15} />
+                </IconButton>
+              </div>
+            ))}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setSaving(true);
+                void run(async () => {
+                  try {
+                    await api("/providers", "POST", {
+                      ...form,
+                      id: form.id || undefined,
+                      apiKey: form.apiKey || undefined,
+                    });
+                    setForm({
+                      name: "",
+                      baseUrl: "https://",
+                      prefix: "",
+                      apiKey: "",
+                      id: "",
+                    });
+                    await refresh();
+                    setTab("models");
+                  } finally {
+                    setSaving(false);
+                  }
+                });
+              }}
+            >
+              <h3>{form.id ? "编辑服务商" : "添加服务商"}</h3>
+              <label>
+                名称
+                <input
+                  required
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                />
+              </label>
+              <label>
+                Base URL
+                <input
+                  required
+                  type="url"
+                  placeholder="https://example.com/v1"
+                  value={form.baseUrl}
+                  onChange={(e) =>
+                    setForm({ ...form, baseUrl: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                API Key
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder={
+                    form.id ? "留空保留已有密钥" : "输入专用 API Key"
+                  }
+                  value={form.apiKey}
+                  onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                />
+              </label>
+              <label>
+                显示前缀（可选）
+                <input
+                  placeholder="OR/"
+                  value={form.prefix}
+                  onChange={(e) => setForm({ ...form, prefix: e.target.value })}
+                />
+              </label>
+              <button className="primary" disabled={saving}>
+                {saving ? "正在连接…" : "保存并获取模型"}
+              </button>
+            </form>
+          </>
+        )}
+        {tab === "models" && (
+          <>
+            <h3>模型</h3>
+            <p className="muted">
+              新发现的模型默认关闭。前缀只用于显示，发送时使用原始模型 ID。
+            </p>
+            <input
+              aria-label="筛选设置模型"
+              placeholder="搜索模型或服务商…"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+            <div className="inline-actions">
+              {[
+                ["全部开启", true, false],
+                ["全部关闭", false, false],
+                ["开启搜索结果", true, true],
+              ].map(([label, enabled, onlyResults]) => (
+                <button
+                  key={String(label)}
+                  onClick={() =>
+                    void run(async () => {
+                      for (const p of providers) {
+                        const ids = onlyResults
+                          ? modelRows
+                              .filter((m) => m.p.id === p.id)
+                              .map((m) => m.id)
+                          : p.models.map((m) => m.id);
+                        await api("/providers/" + p.id + "/models", "PUT", {
+                          models: ids.map((id) => ({ id, enabled })),
+                        });
+                      }
+                      await refresh();
+                    })
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <label>
+              默认聊天模型
+              <select
+                value={
+                  settings.defaultModel
+                    ? JSON.stringify(settings.defaultModel)
+                    : ""
+                }
+                onChange={(e) =>
+                  void run(() =>
+                    saveSettings({
+                      ...settings,
+                      defaultModel: e.target.value
+                        ? JSON.parse(e.target.value)
+                        : null,
+                    }),
+                  )
+                }
+              >
+                <option value="">未设置</option>
+                {providers.flatMap((p) =>
+                  p.models.map((m) => (
+                    <option
+                      value={JSON.stringify({
+                        providerId: p.id,
+                        modelId: m.id,
+                      })}
+                      key={p.id + "/" + m.id}
+                    >
+                      {p.prefix + m.id} · {p.name}
+                    </option>
+                  )),
+                )}
+              </select>
+            </label>
+            {modelRows.map((m) => (
+              <div className="model-row" key={m.p.id + "/" + m.id}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={m.enabled}
+                    onChange={(e) =>
+                      void run(async () => {
+                        await api("/providers/" + m.p.id + "/models", "PUT", {
+                          models: [{ id: m.id, enabled: e.target.checked }],
+                        });
+                        await refresh();
+                      })
+                    }
+                  />
+                  <span>
+                    {m.p.prefix + m.id}
+                    <small>{m.p.name}</small>
+                  </span>
+                </label>
+                <label>
+                  上下文预算
+                  <input
+                    aria-label={m.id + "上下文预算"}
+                    type="number"
+                    min="1"
+                    defaultValue={m.capacity}
+                    onBlur={(e) =>
+                      void run(async () => {
+                        await api("/providers/" + m.p.id + "/models", "PUT", {
+                          models: [
+                            { id: m.id, capacity: Number(e.target.value) },
+                          ],
+                        });
+                        await refresh();
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            ))}
+            {!modelRows.length && (
+              <p className="muted">先保存一个服务商来获取模型列表。</p>
+            )}
+          </>
+        )}
+        {tab === "templates" && (
+          <>
+            <h3>系统提示词模板</h3>
+            <p className="muted">
+              选择后复制到当前聊天；更改模板不会改变旧聊天。
+            </p>
+            {settings.templates.map((t) => (
+              <div className="template-card" key={t.id}>
+                <div>
+                  <strong>{t.name}</strong>
+                  <IconButton
+                    label={"删除 " + t.name}
+                    onClick={() =>
+                      void run(() =>
+                        saveSettings({
+                          ...settings,
+                          templates: settings.templates.filter(
+                            (v) => v.id !== t.id,
+                          ),
+                        }),
+                      )
+                    }
+                  >
+                    <X size={15} />
+                  </IconButton>
+                </div>
+                <textarea
+                  defaultValue={t.content}
+                  onBlur={(e) =>
+                    void run(() =>
+                      saveSettings({
+                        ...settings,
+                        templates: settings.templates.map((v) =>
+                          v.id === t.id ? { ...v, content: e.target.value } : v,
+                        ),
+                      }),
+                    )
+                  }
+                />
+              </div>
+            ))}
+            <label>
+              模板名称
+              <input
+                value={template.name}
+                onChange={(e) =>
+                  setTemplate({ ...template, name: e.target.value })
+                }
+              />
+            </label>
+            <label>
+              提示词
+              <textarea
+                rows={6}
+                value={template.content}
+                onChange={(e) =>
+                  setTemplate({ ...template, content: e.target.value })
+                }
+              />
+            </label>
+            <button
+              className="primary"
+              disabled={!template.name.trim()}
+              onClick={() =>
+                void run(async () => {
+                  await saveSettings({
+                    ...settings,
+                    templates: [
+                      ...settings.templates,
+                      { id: crypto.randomUUID(), ...template },
+                    ],
+                  });
+                  setTemplate({ name: "", content: "" });
+                })
+              }
+            >
+              保存模板
+            </button>
+          </>
+        )}
+        {tab === "appearance" && (
+          <>
+            <h3>外观</h3>
+            <p className="muted">仅保存在此设备。</p>
+            <label>
+              主题
+              <select
+                aria-label="主题"
+                value={appearance.theme}
+                onChange={(e) =>
+                  setAppearance({ ...appearance, theme: e.target.value })
+                }
+              >
+                <option value="system">跟随系统</option>
+                <option value="dark">暗色</option>
+                <option value="light">浅色</option>
+              </select>
+            </label>
+            <label>
+              字号 {appearance.font}px
+              <input
+                type="range"
+                min={13}
+                max={24}
+                value={appearance.font}
+                onChange={(e) =>
+                  setAppearance({ ...appearance, font: Number(e.target.value) })
+                }
+              />
+            </label>
+            <label>
+              内容宽度 {appearance.width}px
+              <input
+                type="range"
+                min={600}
+                max={1200}
+                step={20}
+                value={appearance.width}
+                onChange={(e) =>
+                  setAppearance({
+                    ...appearance,
+                    width: Number(e.target.value),
+                  })
+                }
+              />
+            </label>
+            <label>
+              行间距 {appearance.line}
+              <input
+                type="range"
+                min={1.3}
+                max={2.4}
+                step={0.1}
+                value={appearance.line}
+                onChange={(e) =>
+                  setAppearance({ ...appearance, line: Number(e.target.value) })
+                }
+              />
+            </label>
+            <label className="toggle">
+              折叠超长消息
+              <input
+                type="checkbox"
+                checked={appearance.collapse}
+                onChange={(e) =>
+                  setAppearance({ ...appearance, collapse: e.target.checked })
+                }
+              />
+            </label>
+            <label className="toggle">
+              电脑按 Enter 发送
+              <input
+                type="checkbox"
+                checked={appearance.enter}
+                onChange={(e) =>
+                  setAppearance({ ...appearance, enter: e.target.checked })
+                }
+              />
+            </label>
+          </>
+        )}
+        {tab === "security" && (
+          <>
+            <h3>登录设备</h3>
+            {sessions.map((s) => (
+              <div className="provider-card" key={s.id}>
+                <div>
+                  {s.current ? "当前设备" : "其他设备"}
+                  <small>{s.device}</small>
+                  <small>{new Date(s.createdAt).toLocaleString()}</small>
+                </div>
+                <button
+                  onClick={() =>
+                    void run(async () => {
+                      await api("/auth/revoke", "POST", { id: s.id });
+                      if (s.current) onLogout();
+                      else setSessions(await api("/auth/sessions"));
+                    })
+                  }
+                >
+                  退出
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={() =>
+                void run(async () => {
+                  await api("/auth/revoke", "POST", { all: true });
+                  onLogout();
+                })
+              }
+            >
+              退出全部设备
+            </button>
+            <h3>修改密码</h3>
+            <label>
+              当前密码
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={oldPassword}
+                onChange={(e) => setOldPassword(e.target.value)}
+              />
+            </label>
+            <label>
+              新密码（至少 12 字符）
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+              />
+            </label>
+            <button
+              disabled={newPassword.length < 12}
+              onClick={() => {
+                void run(async () => {
+                  const r = await api<{ recoveryCode: string }>(
+                    "/auth/password",
+                    "POST",
+                    { password: oldPassword, newPassword },
+                  );
+                  setRecovery(r.recoveryCode);
+                  setOldPassword("");
+                  setNewPassword("");
+                });
+              }}
+            >
+              更改密码并退出全部设备
+            </button>
+            {recovery && (
+              <div className="recovery-box">
+                <strong>请立即离线保存新的恢复码</strong>
+                <code>{recovery}</code>
+                <p>所有会话已注销；关闭后请重新登录。</p>
+                <button onClick={onLogout}>已保存，返回登录</button>
+              </div>
+            )}
+            <hr />
+            <button
+              onClick={() =>
+                void run(async () => {
+                  await api("/auth/logout", "POST", {});
+                  onLogout();
+                })
+              }
+            >
+              <LogOut size={16} />
+              退出当前设备
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+);

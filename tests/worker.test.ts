@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { Miniflare, Response as MFResponse } from "miniflare";
 import { build } from "esbuild";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { randomBytes, pbkdf2Sync } from "node:crypto";
 import type { Chat, Settings, Provider } from "../src/shared/chat";
 const fixturePassword = randomBytes(18).toString("hex"),
@@ -14,8 +14,9 @@ let mf: Miniflare,
   cookie = "",
   provider: Provider,
   settings: Settings;
+const titleCalls: Record<string, unknown>[] = [];
 const upstreamCalls: Record<string, unknown>[] = [],
-  controls = { mode: "normal", delay: 0 };
+  controls = { mode: "normal", delay: 0, titleMode: "normal", titleDelay: 0 };
 async function request(
   path: string,
   method = "GET",
@@ -47,8 +48,16 @@ async function value<T>(
 async function finished(id: string, timeout = 10000) {
   const until = Date.now() + timeout;
   while (Date.now() < until) {
-    const result = await value<{ chat: Chat; job: unknown }>("/chats/" + id);
-    if (!result.job) return result.chat;
+    const result = await value<{
+      chat: Chat;
+      job: unknown;
+      titleJob?: { status: string };
+    }>("/chats/" + id);
+    if (
+      !result.job &&
+      !["pending", "running"].includes(result.titleJob?.status ?? "")
+    )
+      return result.chat;
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error("job did not complete");
@@ -82,6 +91,12 @@ beforeAll(async () => {
               worker: "workers-chat",
               exportName: "Progress",
             },
+            TITLES: {
+              type: "workflow",
+              name: "test-titles",
+              worker: "workers-chat",
+              exportName: "TitleGeneration",
+            },
             GENERATION: {
               type: "workflow",
               name: "test-generation",
@@ -96,6 +111,7 @@ beforeAll(async () => {
             },
           },
           exports: {
+            TitleGeneration: { type: "workflow", name: "test-titles" },
             Progress: { type: "durable-object", storage: "sqlite" },
             Generation: { type: "workflow", name: "test-generation" },
           },
@@ -110,6 +126,31 @@ beforeAll(async () => {
                   data: [{ id: "Gemini3.8flash-low" }, { id: "other" }],
                 });
               const payload = (await req.json()) as Record<string, unknown>;
+              const messages = payload.messages as {
+                role: string;
+                content: string;
+              }[];
+              if (
+                messages[0]?.role === "system" &&
+                messages[1]?.content?.startsWith('[{"role":')
+              ) {
+                titleCalls.push(payload);
+                const titleMode = controls.titleMode,
+                  titleDelay = controls.titleDelay;
+                if (titleDelay)
+                  await new Promise((r) => setTimeout(r, titleDelay));
+                if (
+                  titleMode === "reject-all" ||
+                  (titleMode === "fail-primary" && payload.model === "other")
+                )
+                  return MFResponse.json(
+                    { error: { message: "title fixture rejected" } },
+                    { status: 400 },
+                  );
+                return MFResponse.json({
+                  choices: [{ message: { content: "模型生成的标题" } }],
+                });
+              }
               upstreamCalls.push(payload);
               const mode = controls.mode,
                 delay = controls.delay;
@@ -179,10 +220,13 @@ beforeAll(async () => {
     ],
   });
   const db = await mf.getD1Database("DB");
-  for (const sql of (await readFile("migrations/0001.sql", "utf8"))
-    .trim()
-    .split("\n"))
-    await db.prepare(sql).run();
+  for (const name of (await readdir("migrations"))
+    .filter((n) => n.endsWith(".sql"))
+    .sort())
+    for (const sql of (await readFile("migrations/" + name, "utf8"))
+      .trim()
+      .split("\n"))
+      await db.prepare(sql).run();
 }, 30000);
 afterAll(async () => {
   await mf?.dispose();
@@ -221,6 +265,20 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(JSON.stringify(provider)).not.toMatch(
       /synthetic-fixture-key|encryptedKey/,
     );
+    for (const emptyKey of ["", 1])
+      expect(
+        (
+          await request("/providers", "POST", {
+            id: provider.id,
+            name: provider.name,
+            baseUrl: "https://different.test/v1",
+            apiKey: emptyKey,
+          })
+        ).status,
+      ).toBe(400);
+    expect((await value<Provider[]>("/providers"))[0]!.baseUrl).toBe(
+      "https://upstream.test/v1",
+    );
     settings = await value<Settings>("/settings");
     settings.defaultModel = {
       providerId: provider.id,
@@ -245,8 +303,10 @@ describe("workerd HTTP + D1 + Workflows", () => {
   it("finishes a single background call, retains request identity, branches retries and extends continuation versions", async () => {
     const chat = await value<Chat>("/chats", "POST", {}),
       count = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/draft", "PUT", { draft: "hello" });
     await value("/chats/" + chat.id + "/send", "POST", { content: "hello" });
     const done = await finished(chat.id);
+    expect(done.draft).toBe("");
     expect(upstreamCalls).toHaveLength(count + 1);
     expect(upstreamCalls.at(-1)).toMatchObject({
       model: "Gemini3.8flash-low",
@@ -383,6 +443,59 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(stopped.draft).toBe("unsent draft");
     controls.delay = 0;
   });
+  it("runs independent chats concurrently and captures parameters before later settings changes", async () => {
+    const before = upstreamCalls.length,
+      left = await value<Chat>("/chats", "POST", {}),
+      right = await value<Chat>("/chats", "POST", {});
+    controls.delay = 750;
+    try {
+      await value("/chats/" + left.id, "PATCH", {
+        title: "Parallel left",
+        effort: "low",
+        parameters: { temperature: 0.2 },
+      });
+      await value("/chats/" + right.id, "PATCH", {
+        title: "Parallel right",
+        model: { providerId: provider.id, modelId: "other" },
+        effort: "none",
+      });
+      await Promise.all(
+        [left, right].map((chat, index) =>
+          value("/chats/" + chat.id + "/send", "POST", {
+            content: "parallel fixture " + index,
+          }),
+        ),
+      );
+      await value("/chats/" + left.id, "PATCH", {
+        model: { providerId: provider.id, modelId: "other" },
+        effort: "none",
+        parameters: { temperature: 0.9 },
+      });
+      const [a, b] = await Promise.all([finished(left.id), finished(right.id)]);
+      expect(a.messages[a.currentId!]?.status).toBe("complete");
+      expect(b.messages[b.currentId!]?.status).toBe("complete");
+      const calls = upstreamCalls.slice(before);
+      expect(calls).toHaveLength(2);
+      expect(
+        calls.find((c) =>
+          JSON.stringify(c.messages).includes("parallel fixture 0"),
+        ),
+      ).toMatchObject({
+        model: "Gemini3.8flash-low",
+        reasoning_effort: "low",
+        temperature: 0.2,
+      });
+      expect(
+        calls.find((c) =>
+          JSON.stringify(c.messages).includes("parallel fixture 1"),
+        ),
+      ).toMatchObject({ model: "other", reasoning_effort: "none" });
+      expect(a.model?.modelId).toBe("other");
+      expect(a.messages[a.currentId!]?.request?.effort).toBe("low");
+    } finally {
+      controls.delay = 0;
+    }
+  });
   it("rejects stale revisions even after old versions are garbage collected, and stores text beyond D1's row limit", async () => {
     const chat = await value<Chat>("/chats", "POST", {}),
       large = "🙂".repeat(600000);
@@ -390,6 +503,17 @@ describe("workerd HTTP + D1 + Workflows", () => {
     const result = await value<{ chat: Chat }>("/chats/" + chat.id);
     expect(result.chat.draft).toBe(large);
     const db = await mf.getD1Database("DB");
+    const size = await db
+      .prepare(
+        "SELECT sum(length(value)) AS size FROM document_parts WHERE id=?",
+      )
+      .bind(chat.id)
+      .first<{ size: number }>();
+    expect(size!.size).toBeLessThan(10000);
+    await value("/chats/" + chat.id, "PATCH", { title: "metadata change" });
+    expect((await value<{ chat: Chat }>("/chats/" + chat.id)).chat.draft).toBe(
+      large,
+    );
     await db
       .prepare("DELETE FROM document_versions WHERE id=? AND revision=1")
       .bind(chat.id)
@@ -400,6 +524,250 @@ describe("workerd HTTP + D1 + Workflows", () => {
         .bind(chat.id, Date.now())
         .run(),
     ).rejects.toThrow("stale revision");
+    const legacy = await value<Chat>("/chats", "POST", {});
+    await db
+      .prepare(
+        "UPDATE document_parts SET value=json_set(value,'$.draft',?) WHERE id=? AND revision=1",
+      )
+      .bind("legacy draft", legacy.id)
+      .run();
+    expect(
+      (await value<{ chat: Chat }>("/chats/" + legacy.id)).chat.draft,
+    ).toBe("legacy draft");
+    await value("/chats/" + legacy.id, "PATCH", { title: "Migrated draft" });
+    expect(
+      (await value<{ chat: Chat }>("/chats/" + legacy.id)).chat.draft,
+    ).toBe("legacy draft");
+    const current = await db
+      .prepare(
+        "SELECT p.value FROM document_parts p JOIN documents d ON d.id=p.id AND d.revision=p.revision WHERE d.id=?",
+      )
+      .bind(legacy.id)
+      .first<{ value: string }>();
+    expect(JSON.parse(current!.value).draft).toBe("");
+  });
+  it("generates an automatic title once and bounds the explicit fallback without overriding a manual rename", async () => {
+    const before = titleCalls.length,
+      chat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "title fixture",
+    });
+    const completed = await finished(chat.id);
+    expect(completed.title).toBe("模型生成的标题");
+    expect(titleCalls.length).toBe(before + 1);
+    await value("/chats/" + chat.id + "/regenerate", "POST", {
+      messageId: completed.currentId,
+    });
+    await finished(chat.id);
+    expect(titleCalls.length).toBe(before + 1);
+    settings.titleModel = { providerId: provider.id, modelId: "other" };
+    await value("/settings", "PUT", settings);
+    controls.titleMode = "fail-primary";
+    const fallbackStart = titleCalls.length;
+    await value("/chats/" + chat.id + "/title", "POST", {});
+    await finished(chat.id);
+    expect(titleCalls.slice(fallbackStart).map((c) => c.model)).toEqual([
+      "other",
+      "Gemini3.8flash-low",
+    ]);
+    controls.titleMode = "normal";
+    controls.titleDelay = 200;
+    await value("/chats/" + chat.id + "/title", "POST", {});
+    await value("/chats/" + chat.id, "PATCH", { title: "用户保留的标题" });
+    const renamed = await finished(chat.id);
+    expect(renamed.title).toBe("用户保留的标题");
+    expect(await value("/chats/" + chat.id + "/title-status")).toMatchObject({
+      status: "superseded",
+    });
+    controls.titleDelay = 0;
+    settings.titleModel = null;
+    await value("/settings", "PUT", settings);
+  });
+  it("uses the selected title scope and keeps title errors separate from saved answers", async () => {
+    const imported = await value<{ ids: string[] }>("/import", "POST", {
+      data: [
+        {
+          chat: {
+            title: "imported",
+            history: {
+              currentId: "a2",
+              messages: {
+                u1: {
+                  id: "u1",
+                  role: "user",
+                  parentId: null,
+                  content: "first question",
+                },
+                a1: {
+                  id: "a1",
+                  role: "assistant",
+                  parentId: "u1",
+                  content: "first answer",
+                  reasoning_content: "private reasoning",
+                },
+                u2: {
+                  id: "u2",
+                  role: "user",
+                  parentId: "a1",
+                  content: "second question",
+                },
+                a2: {
+                  id: "a2",
+                  role: "assistant",
+                  parentId: "u2",
+                  content: "second answer",
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+    const id = imported.ids[0]!;
+    await value("/chats/" + id, "PATCH", { titleScope: "first" });
+    await value("/chats/" + id + "/title", "POST", {});
+    await finished(id);
+    const request = titleCalls.at(-1)!;
+    const messages = request.messages as { role: string; content: string }[];
+    expect(JSON.parse(messages[1]!.content)).toEqual([
+      { role: "user", content: "first question" },
+      { role: "assistant", content: "first answer" },
+    ]);
+    expect(JSON.stringify(request)).not.toContain("private reasoning");
+    controls.titleMode = "reject-all";
+    const count = titleCalls.length;
+    await value("/chats/" + id + "/title", "POST", {});
+    const failed = await finished(id);
+    expect(failed.messages.a2?.content).toBe("second answer");
+    expect(titleCalls.length).toBe(count + 1);
+    expect(await value("/chats/" + id + "/title-status")).toMatchObject({
+      status: "error",
+    });
+    await value("/chats/" + id);
+    expect(titleCalls.length).toBe(count + 1);
+    controls.titleMode = "normal";
+  });
+  it("exports settings without credentials by default, reauthenticates key export, and restores atomically", async () => {
+    const clean = await value<Record<string, unknown>>(
+      "/settings/export",
+      "POST",
+      {},
+    );
+    expect(JSON.stringify(clean)).not.toMatch(
+      /synthetic-fixture-key|encryptedKey|PASSWORD_HASH|recovery_hash/,
+    );
+    expect(clean.containsKeys).toBe(false);
+    const oversized = structuredClone(clean) as { providers: Provider[] };
+    oversized.providers = Array.from({ length: 12 }, () => ({
+      ...oversized.providers[0]!,
+      id: crypto.randomUUID(),
+    }));
+    expect(
+      (
+        await request("/settings/import", "POST", {
+          data: oversized,
+          mode: "replace",
+        })
+      ).status,
+    ).toBe(413);
+    expect((await value<Provider[]>("/providers")).map((p) => p.id)).toEqual(
+      (clean.providers as Provider[]).map((p) => p.id),
+    );
+    expect(
+      (await request("/settings/export", "POST", { includeKeys: true })).status,
+    ).toBe(401);
+    const withKeys = await value<{
+      providers: (Provider & { apiKey?: string })[];
+    }>("/settings/export", "POST", {
+      includeKeys: true,
+      password: fixturePassword,
+    });
+    expect(withKeys.providers[0]?.apiKey).toBe("synthetic-fixture-key");
+    const invalid = structuredClone(clean) as {
+      providers: { baseUrl: string }[];
+    };
+    invalid.providers[0]!.baseUrl = "http://insecure.test/v1";
+    expect(
+      (
+        await request("/settings/import", "POST", {
+          data: invalid,
+          mode: "replace",
+        })
+      ).status,
+    ).toBe(400);
+    expect(await value("/settings/export", "POST", {})).toMatchObject({
+      settings: clean.settings,
+      providers: clean.providers,
+    });
+    const malicious = structuredClone(clean) as { providers: { id: string }[] };
+    malicious.providers[0]!.id = "settings";
+    expect(
+      (
+        await request("/settings/import", "POST", {
+          data: malicious,
+          mode: "merge",
+        })
+      ).status,
+    ).toBe(400);
+    const second = await value<Provider>("/providers", "POST", {
+      name: "Second fixture",
+      baseUrl: "https://second.test/v1",
+      prefix: "B/",
+    });
+    await value("/settings/import", "POST", { data: clean, mode: "merge" });
+    expect(
+      (await value<Provider[]>("/providers")).some((p) => p.id === second.id),
+    ).toBe(true);
+    await value("/settings/import", "POST", { data: clean, mode: "replace" });
+    expect((await value<Provider[]>("/providers")).map((p) => p.id)).toEqual([
+      provider.id,
+    ]);
+    expect(
+      await value("/providers/" + provider.id + "/key", "POST", {
+        password: fixturePassword,
+      }),
+    ).toEqual({ apiKey: "synthetic-fixture-key" });
+  });
+  it("removes a group without deleting archived or trashed chats and tests a raw provider model explicitly", async () => {
+    const group = await value<{ id: string }>("/groups", "POST", {
+        name: "group fixture",
+      }),
+      chat = await value<Chat>("/chats", "POST", { groupId: group.id });
+    await value("/groups/" + group.id, "PATCH", { name: "renamed group" });
+    expect(await value<{ name: string }[]>("/groups")).toContainEqual(
+      expect.objectContaining({ name: "renamed group" }),
+    );
+    await value("/chats/" + chat.id, "PATCH", {
+      archived: true,
+      deleted: true,
+    });
+    await value("/groups/" + group.id, "DELETE", {});
+    const removed = await value<{ chat: Chat }>("/chats/" + chat.id);
+    expect(removed.chat).toMatchObject({
+      groupId: null,
+      deleted: true,
+      archived: true,
+    });
+    await value("/chats/" + chat.id, "PATCH", {
+      deleted: false,
+      archived: false,
+    });
+    expect(
+      (await value<{ chat: Chat }>("/chats/" + chat.id)).chat.groupId,
+    ).toBeNull();
+    expect(
+      (await request("/chats", "POST", { groupId: group.id })).status,
+    ).toBe(409);
+    const testResult = await value<{ modelId: string }>(
+      "/providers/" + provider.id + "/test",
+      "POST",
+      { modelId: "Gemini3.8flash-low", effort: "low" },
+    );
+    expect(testResult.modelId).toBe("Gemini3.8flash-low");
+    expect(upstreamCalls.at(-1)).toMatchObject({
+      model: "Gemini3.8flash-low",
+      reasoning_effort: "low",
+    });
   });
   it("changes password and revokes every prior session", async () => {
     const response = await value<{ recoveryCode: string }>(
@@ -409,5 +777,50 @@ describe("workerd HTTP + D1 + Workflows", () => {
     );
     expect(response.recoveryCode.length).toBeGreaterThan(50);
     expect((await request("/chats")).status).toBe(401);
+  });
+  it("consumes a recovery code once under concurrent resets and returns a replacement", async () => {
+    const login = await request(
+      "/auth/login",
+      "POST",
+      { password: "synthetic-new-password-123" },
+      false,
+    );
+    expect(login.status).toBe(200);
+    cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+    const code = await value<{ recoveryCode: string }>(
+      "/auth/recovery-code",
+      "POST",
+      { password: "synthetic-new-password-123" },
+    );
+    const responses = await Promise.all(
+      ["recovered-fixture-one-123", "recovered-fixture-two-123"].map(
+        (newPassword) =>
+          request(
+            "/auth/recover",
+            "POST",
+            { password: code.recoveryCode, newPassword },
+            false,
+          ),
+      ),
+    );
+    expect(responses.map((r) => r.status).sort()).toEqual([200, 401]);
+    const good = responses.find((r) => r.status === 200)!;
+    const result = (await good.json()) as { recoveryCode: string };
+    expect(result.recoveryCode).not.toBe(code.recoveryCode);
+    expect(result.recoveryCode.length).toBeGreaterThan(50);
+    expect((await request("/chats")).status).toBe(401);
+    expect(
+      (
+        await request(
+          "/auth/recover",
+          "POST",
+          {
+            password: code.recoveryCode,
+            newPassword: "must-not-reuse-fixture",
+          },
+          false,
+        )
+      ).status,
+    ).toBe(401);
   });
 });

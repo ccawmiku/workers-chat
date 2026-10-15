@@ -17,7 +17,7 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
   await page.goto("/");
   await page.getByLabel("访问密码", { exact: true }).fill(credential.password);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await page.getByRole("button", { name: /新聊天/ }).waitFor();
+  await page.locator(".new-chat").waitFor();
   const fixture = [
     {
       chat: {

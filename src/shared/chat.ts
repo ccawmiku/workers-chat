@@ -17,6 +17,7 @@ export type Message = {
   status?: "complete" | "running" | "stopped" | "error";
   model?: ModelRef;
   usage?: Record<string, unknown>;
+  request?: { parameters: Parameters; effort: Effort; stream: boolean };
   elapsedMs?: number;
   error?: string;
   raw?: Record<string, unknown>;
@@ -25,6 +26,7 @@ export type Chat = {
   id: string;
   title: string;
   titleManual: boolean;
+  titleRevision?: string;
   createdAt: number;
   updatedAt: number;
   groupId: string | null;
@@ -115,6 +117,39 @@ export function route(chat: Chat, currentId = chat.currentId): Message[] {
   }
   return result.reverse();
 }
+export function indexChildren(chat: Chat) {
+  const result = new Map<string | null, Message[]>();
+  for (const message of Object.values(chat.messages)) {
+    let list = result.get(message.parentId);
+    if (!list) {
+      list = [];
+      result.set(message.parentId, list);
+    }
+    list.push(message);
+  }
+  for (const list of result.values())
+    list.sort((a, b) => a.createdAt - b.createdAt);
+  return result;
+}
+export function validateMessageTree(chat: Chat) {
+  const complete = new Set<string>();
+  for (const start of Object.keys(chat.messages)) {
+    const pending: string[] = [],
+      visiting = new Set<string>();
+    let id: string | null = start;
+    while (id && !complete.has(id)) {
+      if (visiting.has(id)) throw new Error("消息树包含循环");
+      const message: Message | undefined = chat.messages[id];
+      if (!message) throw new Error("消息树引用不存在的父节点");
+      visiting.add(id);
+      pending.push(id);
+      id = message.parentId;
+    }
+    for (const id of pending) complete.add(id);
+  }
+  if (chat.currentId && !chat.messages[chat.currentId])
+    throw new Error("当前消息不存在");
+}
 export function children(chat: Chat, parentId: string | null) {
   return Object.values(chat.messages)
     .filter((m) => m.parentId === parentId)
@@ -122,10 +157,11 @@ export function children(chat: Chat, parentId: string | null) {
 }
 export function selectBranch(chat: Chat, id: string) {
   if (!chat.messages[id]) throw new Error("消息不存在");
-  const seen = new Set<string>();
+  const seen = new Set<string>(),
+    index = indexChildren(chat);
   while (!seen.has(id)) {
     seen.add(id);
-    const next = children(chat, id).at(-1);
+    const next = index.get(id)?.at(-1);
     if (!next) break;
     id = next.id;
   }
@@ -163,13 +199,7 @@ export function editMessage(chat: Chat, id: string, content: string): Message {
 }
 export function descendants(chat: Chat, id: string): string[] {
   if (!chat.messages[id]) throw new Error("消息不存在");
-  const byParent = new Map<string, string[]>();
-  for (const msg of Object.values(chat.messages))
-    if (msg.parentId)
-      byParent.set(msg.parentId, [
-        ...(byParent.get(msg.parentId) ?? []),
-        msg.id,
-      ]);
+  const byParent = indexChildren(chat);
   const ids: string[] = [],
     pending = [id],
     seen = new Set<string>();
@@ -178,7 +208,7 @@ export function descendants(chat: Chat, id: string): string[] {
     if (seen.has(next)) throw new Error("消息树包含循环");
     seen.add(next);
     ids.push(next);
-    pending.push(...(byParent.get(next) ?? []));
+    for (const child of byParent.get(next) ?? []) pending.push(child.id);
   }
   return ids;
 }
@@ -190,7 +220,7 @@ export function deleteSubtree(chat: Chat, id: string) {
   return ids.length;
 }
 export function forkChat(chat: Chat, id: string, titles: string[]): Chat {
-  const copy = structuredClone(chat),
+  const copy = structuredClone({ ...chat, messages: {} }),
     base = chat.title.replace(/ · 分支[A-Z]+$/u, "");
   let n = 0,
     title: string;
@@ -303,4 +333,49 @@ export function markdownExport(chat: Chat) {
       )
       .join("\n\n")
   );
+}
+
+export function sanitizeUsage(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Record<string, unknown>,
+    out: Record<string, unknown> = {};
+  for (const key of [
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "input_tokens",
+    "output_tokens",
+  ]) {
+    const n = source[key];
+    if (typeof n === "number" && Number.isFinite(n) && n >= 0) out[key] = n;
+  }
+  for (const key of [
+    "prompt_tokens_details",
+    "completion_tokens_details",
+    "input_tokens_details",
+    "output_tokens_details",
+  ]) {
+    const details = source[key];
+    if (details && typeof details === "object") {
+      const clean: Record<string, number> = {};
+      for (const [name, n] of Object.entries(details))
+        if (
+          [
+            "cached_tokens",
+            "reasoning_tokens",
+            "audio_tokens",
+            "accepted_prediction_tokens",
+            "rejected_prediction_tokens",
+          ].includes(name) &&
+          typeof n === "number" &&
+          Number.isFinite(n) &&
+          n >= 0
+        )
+          clean[name] = n;
+      if (Object.keys(clean).length) out[key] = clean;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
 }

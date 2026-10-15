@@ -2,7 +2,7 @@
 
 ## 本轮选型
 
-- HTTP Worker 负责认证、配置、消息树操作和启动任务；D1 存储持久历史。聊天正文按 UTF-16 安全边界分成较小行，避开 D1 2 MB 单行限制；乐观版本写入使用 SQL 触发器和事务批处理防止过期覆盖。
+- HTTP Worker 负责认证、配置、消息树操作和启动任务；D1 存储持久历史，草稿在独立表/版本分块中最后写入覆盖，不重写整棵消息树。聊天正文按 UTF-16 安全边界分成较小行，避开 D1 2 MB 单行限制；乐观版本写入使用 SQL 触发器和事务批处理防止过期覆盖。
 - 每次生成对应独立的 SQLite Durable Object `Progress`。它发起且消费唯一一次上游请求，约每 2 秒将新增文字写到本对象 SQLite，而不是逐 token 写 D1。读进度和停止可以在等待上游时进入同一对象；不在外部 I/O 期间使用 `blockConcurrencyWhile`。
 - `Generation` Workflow 的一个步骤持续等待 DO RPC，独立于浏览器连接。模型调用不具有幂等保证，因此该步骤配置自动重试为 0，且 D1 在 fetch 前持久化 `attempted`。断线后的刷新只读取任务；运行时失败后由用户新建重试版本。
 - 最终历史和 job 状态在同一 D1 批处理中保存；任务临时配置随后清空。临时 DO 进度在一天后清理。已开始请求使用启动时选定模型/参数，切换聊天模型只影响下次请求。
@@ -12,11 +12,13 @@
 
 ## 官方依据与实测边界
 
-已读取 Cloudflare 官方 skills 提交 `be68fd8db614c22ed6f4d21a439a641e4904eb94`：
+已读取 Cloudflare 官方 skills 提交 `be9f5e1e940fcf8567ff723cc03b8a8448c4082f`：
 
-- [workers-best-practices](https://github.com/cloudflare/skills/blob/be68fd8db614c22ed6f4d21a439a641e4904eb94/skills/workers-best-practices/SKILL.md) 及 configuration、runtime-patterns、platform-apis 引用。
-- [durable-objects](https://github.com/cloudflare/skills/blob/be68fd8db614c22ed6f4d21a439a641e4904eb94/skills/durable-objects/SKILL.md) 及规则、测试引用。
-- [wrangler](https://github.com/cloudflare/skills/blob/be68fd8db614c22ed6f4d21a439a641e4904eb94/skills/wrangler/SKILL.md) 和 [cf-cli](https://github.com/cloudflare/skills/blob/be68fd8db614c22ed6f4d21a439a641e4904eb94/skills/cf-cli/SKILL.md)。按照其当前指引，新项目使用 `cf` 和 typed `cloudflare.config.ts`，没有新增 Wrangler 配置；具体 API 通过已安装类型与 CLI help 验证。
+- [workers-best-practices](https://github.com/cloudflare/skills/blob/be9f5e1e940fcf8567ff723cc03b8a8448c4082f/skills/workers-best-practices/SKILL.md) 及 configuration、runtime-patterns、platform-apis 引用。
+- [durable-objects](https://github.com/cloudflare/skills/blob/be9f5e1e940fcf8567ff723cc03b8a8448c4082f/skills/durable-objects/SKILL.md) 及规则、测试引用。
+- [wrangler](https://github.com/cloudflare/skills/blob/be9f5e1e940fcf8567ff723cc03b8a8448c4082f/skills/wrangler/SKILL.md) 和 [cf-cli](https://github.com/cloudflare/skills/blob/be9f5e1e940fcf8567ff723cc03b8a8448c4082f/skills/cf-cli/SKILL.md)。按照其当前指引，新项目使用 `cf` 和 typed `cloudflare.config.ts`，没有新增 Wrangler 配置；具体 API 通过已安装类型与 CLI help 验证。
+
+2026-10-16 05:00 接续时重新读取上述四份 SKILL.md，内容与此前参考版本一致，继续使用已读取的直接相关引用。新增 `TitleGeneration` 独立标题 Workflow 和 DO RPC；标题材料与最终落库不占用答案生成步骤的查询批次。
 
 官方限制和生命周期文档：
 

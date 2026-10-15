@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
 import {
   Plus,
@@ -41,7 +47,7 @@ import {
   type Settings,
   type ModelRef,
   route,
-  children,
+  indexChildren,
   descendants,
   markdownExport,
   estimateTokens,
@@ -50,6 +56,9 @@ import {
 } from "../shared/chat";
 import { api, download } from "./api";
 import "./style.css";
+import { IconButton, ParameterControl, useDialogFocus } from "./controls";
+import { ModelControls, TemplatePicker, MessageUsage } from "./chat-controls";
+import { SettingsTools, KeyReveal } from "./settings-tools";
 type Brief = Pick<
   Chat,
   | "id"
@@ -71,31 +80,6 @@ const effortLabels = {
   high: "高",
   max: "最高",
 };
-function IconButton({
-  label,
-  children,
-  onClick,
-  disabled = false,
-  className = "",
-}: {
-  label: string;
-  children: React.ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  className?: string;
-}) {
-  return (
-    <button
-      className={"icon-button " + className}
-      title={label}
-      aria-label={label}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  );
-}
 function App() {
   const [auth, setAuth] = useState<boolean | null>(null),
     [error, setError] = useState(""),
@@ -104,7 +88,12 @@ function App() {
   const [chats, setChats] = useState<Brief[]>([]),
     [groups, setGroups] = useState<Group[]>([]),
     [chat, setChat] = useState<Chat | null>(null),
-    [job, setJob] = useState<{ id: string; status: string } | null>(null);
+    [job, setJob] = useState<{ id: string; status: string } | null>(null),
+    [titleJob, setTitleJob] = useState<{
+      id: string;
+      status: string;
+      error: string | null;
+    } | null>(null);
   const [providers, setProviders] = useState<ProviderView[]>([]),
     [settings, setSettings] = useState<Settings>(defaultSettings());
   const [draft, setDraft] = useState(""),
@@ -120,6 +109,8 @@ function App() {
       null,
     ),
     [selected, setSelected] = useState<string[]>([]),
+    [selecting, setSelecting] = useState(false),
+    [groupMenu, setGroupMenu] = useState<string | null>(null),
     [scrollBottom, setScrollBottom] = useState(false);
   const [appearance, setAppearance] = useState(() =>
     JSON.parse(
@@ -127,6 +118,29 @@ function App() {
         '{"theme":"system","font":16,"width":800,"line":1.8,"collapse":true,"enter":true}',
     ),
   );
+  const dialogRef = useRef<HTMLElement>(null),
+    importDialogRef = useRef<HTMLElement>(null);
+  useDialogFocus(dialogRef, () => setModal(""), !!modal);
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    Math.min(
+      420,
+      Math.max(190, Number(localStorage.getItem("sidebarWidth")) || 264),
+    ),
+  );
+  useEffect(
+    () => localStorage.setItem("sidebarWidth", String(sidebarWidth)),
+    [sidebarWidth],
+  );
+  const longPress = useRef<{
+    x: number;
+    y: number;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const cancelLongPress = () => {
+    if (longPress.current) clearTimeout(longPress.current.timer);
+    longPress.current = null;
+  };
+  useEffect(() => () => cancelLongPress(), []);
   const navigationSeq = useRef(0);
   const idRef = useRef<string | null>(null),
     dirty = useRef(false),
@@ -144,6 +158,11 @@ function App() {
         failures: { index: number; reason: string }[];
       };
     } | null>(null);
+  useDialogFocus(
+    importDialogRef,
+    () => setPendingImport(null),
+    !!pendingImport,
+  );
   const run = useCallback(async (fn: () => Promise<void>) => {
     try {
       setError("");
@@ -158,6 +177,12 @@ function App() {
       api<Group[]>("/groups"),
     ]);
     setChats(c);
+    setChat((previous) => {
+      const current = c.find((item) => item.id === previous?.id);
+      return previous && current
+        ? { ...previous, title: current.title }
+        : previous;
+    });
     setGroups(g);
   }, []);
   const loadConfig = useCallback(async () => {
@@ -170,10 +195,25 @@ function App() {
   }, []);
   const refresh = useCallback(async (id = idRef.current) => {
     if (!id) return;
-    const result = await api<{ chat: Chat; job: typeof job }>("/chats/" + id);
+    const result = await api<{
+      chat: Chat;
+      job: typeof job;
+      titleJob: typeof titleJob;
+    }>("/chats/" + id);
     if (idRef.current !== id) return;
     setChat(result.chat);
     setJob(result.job);
+    setTitleJob(result.titleJob ?? null);
+    if (
+      !result.job &&
+      result.chat.unread &&
+      document.visibilityState === "visible"
+    ) {
+      await api("/chats/" + id + "/seen", "POST", {});
+      setChat((previous) =>
+        previous?.id === id ? { ...previous, unread: false } : previous,
+      );
+    }
   }, []);
   async function flushDraft() {
     const id = idRef.current;
@@ -189,17 +229,23 @@ function App() {
     setOpening(true);
     try {
       await flushDraft();
-      const result = await api<{ chat: Chat; job: typeof job }>("/chats/" + id);
+      const result = await api<{
+        chat: Chat;
+        job: typeof job;
+        titleJob: typeof titleJob;
+      }>("/chats/" + id);
       if (sequence !== navigationSeq.current) return;
       idRef.current = id;
       localStorage.setItem("lastChat", id);
       setChat(result.chat);
       setJob(result.job);
+      setTitleJob(result.titleJob ?? null);
+      setMenu(null);
       setDraft(result.chat.draft);
       draftRef.current = result.chat.draft;
       dirty.current = false;
       stick.current = true;
-      if (result.chat.unread) {
+      if (result.chat.unread && document.visibilityState === "visible") {
         await api("/chats/" + id + "/seen", "POST", {});
         await loadNavigation();
       }
@@ -209,10 +255,16 @@ function App() {
     }
   }
   async function create(groupId: string | null = null) {
-    await flushDraft();
-    const c = await api<Chat>("/chats", "POST", { groupId });
-    await loadNavigation();
-    await open(c.id);
+    const sequence = ++navigationSeq.current;
+    setOpening(true);
+    try {
+      await flushDraft();
+      const c = await api<Chat>("/chats", "POST", { groupId });
+      await loadNavigation();
+      if (sequence === navigationSeq.current) await open(c.id);
+    } finally {
+      if (sequence === navigationSeq.current) setOpening(false);
+    }
   }
   async function ensureComposerChat() {
     if (idRef.current) return;
@@ -271,13 +323,36 @@ function App() {
     const timer = setInterval(
       () =>
         void run(async () => {
-          if (job) await refresh();
+          if (job || ["pending", "running"].includes(titleJob?.status ?? ""))
+            await refresh();
           await loadNavigation();
         }),
-      job ? 1500 : 6000,
+      job || ["pending", "running"].includes(titleJob?.status ?? "")
+        ? 1500
+        : 6000,
     );
     return () => clearInterval(timer);
-  }, [auth, job?.id, run, refresh, loadNavigation]);
+  }, [
+    auth,
+    job?.id,
+    titleJob?.id,
+    titleJob?.status,
+    run,
+    refresh,
+    loadNavigation,
+  ]);
+  useEffect(() => {
+    if (!auth) return;
+    const activate = () => {
+      if (document.visibilityState !== "visible") return;
+      void run(async () => {
+        await refresh();
+        await loadNavigation();
+      });
+    };
+    document.addEventListener("visibilitychange", activate);
+    return () => document.removeEventListener("visibilitychange", activate);
+  }, [auth, run, refresh, loadNavigation]);
   useEffect(() => {
     if (stick.current)
       scrollRef.current?.scrollTo({
@@ -342,10 +417,16 @@ function App() {
     })),
   );
   const current = chat?.model ?? settings.defaultModel,
-    selectedModel = models.find(
-      (m) =>
-        m.ref.providerId === current?.providerId && m.id === current.modelId,
-    );
+    selectedModel =
+      models.find(
+        (m) =>
+          m.ref.providerId === current?.providerId && m.id === current.modelId,
+      ) ??
+      models.find(
+        (m) =>
+          m.provider.id === settings.defaultModel?.providerId &&
+          m.id === settings.defaultModel.modelId,
+      );
   const filteredModels = models.filter(
     (m) =>
       m.enabled &&
@@ -353,8 +434,26 @@ function App() {
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
-  const path = chat ? route(chat) : [],
-    estimate = estimateTokens(
+  const path = useMemo(() => (chat ? route(chat) : []), [chat]);
+  const byParent = useMemo(
+    () => (chat ? indexChildren(chat) : new Map<string | null, Message[]>()),
+    [chat?.messages],
+  );
+  const depths = useMemo(() => {
+    const result = new Map<string, number>(),
+      pending = (byParent.get(null) ?? []).map((m) => ({ id: m.id, depth: 1 }));
+    while (pending.length) {
+      const next = pending.pop()!;
+      if (result.has(next.id)) continue;
+      result.set(next.id, next.depth);
+      for (const child of byParent.get(next.id) ?? [])
+        pending.push({ id: child.id, depth: next.depth + 1 });
+    }
+    return result;
+  }, [byParent]);
+  const pathIds = new Set(path.map((m) => m.id)),
+    lastAssistant = path.filter((m) => m.role === "assistant").at(-1)?.id;
+  const estimate = estimateTokens(
       chat
         ? contextMessages(chat, draft)
             .map((m) => m.content)
@@ -400,7 +499,7 @@ function App() {
       draggable
       onDragStart={(e) => e.dataTransfer.setData("text/plain", c.id)}
     >
-      {selected.length > 0 && (
+      {(selecting || selected.length > 0) && (
         <input
           aria-label={"选择 " + c.title}
           type="checkbox"
@@ -468,7 +567,37 @@ function App() {
           onClick={() => setSidebar(false)}
         />
       )}
-      <aside className={"sidebar " + (sidebar ? "open" : "")}>
+      <aside
+        className={"sidebar " + (sidebar ? "open" : "")}
+        style={innerWidth > 760 ? { width: sidebarWidth } : undefined}
+      >
+        <div
+          className="sidebar-resize"
+          role="separator"
+          aria-label="导航宽度"
+          aria-orientation="vertical"
+          aria-valuenow={sidebarWidth}
+          tabIndex={0}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            if (e.buttons === 1)
+              setSidebarWidth(Math.max(190, Math.min(420, e.clientX)));
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+              e.preventDefault();
+              setSidebarWidth((value) =>
+                Math.max(
+                  190,
+                  Math.min(420, value + (e.key === "ArrowRight" ? 10 : -10)),
+                ),
+              );
+            }
+          }}
+        />
         <div className="brand">
           <span className="brand-mark">✦</span>
           <strong>在线AI</strong>
@@ -476,7 +605,11 @@ function App() {
             <PanelLeft size={18} />
           </IconButton>
         </div>
-        <button className="new-chat" onClick={() => void run(() => create())}>
+        <button
+          className="new-chat"
+          disabled={opening}
+          onClick={() => void run(() => create())}
+        >
           <Pencil size={17} />
           新聊天<span>＋</span>
         </button>
@@ -531,9 +664,48 @@ function App() {
               >
                 <div className="group-title">
                   <Folder size={16} />
-                  {g.name}
+                  <span className="group-name">{g.name}</span>
+                  <IconButton
+                    label={"管理分组 " + g.name}
+                    onClick={() =>
+                      setGroupMenu(groupMenu === g.id ? null : g.id)
+                    }
+                  >
+                    <MoreHorizontal size={15} />
+                  </IconButton>
+                  {groupMenu === g.id && (
+                    <div className="group-menu">
+                      <button
+                        onClick={() => {
+                          const name = prompt("重命名分组", g.name);
+                          if (name)
+                            void run(async () => {
+                              await api("/groups/" + g.id, "PATCH", { name });
+                              setGroupMenu(null);
+                              await loadNavigation();
+                            });
+                        }}
+                      >
+                        重命名分组
+                      </button>
+                      <button
+                        className="danger-text"
+                        onClick={() =>
+                          void run(async () => {
+                            await api("/groups/" + g.id, "DELETE", {});
+                            setGroupMenu(null);
+                            await loadNavigation();
+                            await refresh();
+                          })
+                        }
+                      >
+                        移除分组，聊天回主列表
+                      </button>
+                    </div>
+                  )}
                   <IconButton
                     label={"在 " + g.name + " 新建聊天"}
+                    disabled={opening}
                     onClick={() => void run(() => create(g.id))}
                   >
                     <Plus size={15} />
@@ -544,7 +716,21 @@ function App() {
                 )}
               </section>
             ))}
-          <div className="section-label">
+          <div
+            className="section-label main-drop"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) =>
+              void run(async () => {
+                await api(
+                  "/chats/" + e.dataTransfer.getData("text/plain"),
+                  "PATCH",
+                  { groupId: null },
+                );
+                await loadNavigation();
+                await refresh();
+              })
+            }
+          >
             {view === "trash"
               ? "回收站"
               : view === "archive"
@@ -563,6 +749,25 @@ function App() {
           )}
         </div>
         <div className="nav-footer">
+          <button
+            onClick={() => {
+              setSelecting(!selecting);
+              setSelected([]);
+            }}
+          >
+            {selecting ? "退出多选" : "多选聊天"}
+          </button>
+          {view === "trash" && (
+            <button
+              onClick={() =>
+                void downloadChats(
+                  chats.filter((c) => c.deleted).map((c) => c.id),
+                )
+              }
+            >
+              导出回收站
+            </button>
+          )}
           <button onClick={() => fileRef.current?.click()}>
             <Upload size={16} />
             导入聊天
@@ -637,7 +842,7 @@ function App() {
             </IconButton>
           </div>
         )}
-        {selected.length > 0 && (
+        {(selecting || selected.length > 0) && (
           <div className="batch-bar">
             <span>已选 {selected.length} 项</span>
             <button
@@ -658,13 +863,18 @@ function App() {
               aria-label="批量移动"
               defaultValue=""
               onChange={(e) =>
-                void run(() => batch({ groupId: e.target.value || null }))
+                void run(() =>
+                  batch({
+                    groupId:
+                      e.target.value === "__main__" ? null : e.target.value,
+                  }),
+                )
               }
             >
               <option value="" disabled>
                 移动到…
               </option>
-              <option value="">主列表</option>
+              <option value="__main__">主列表</option>
               {groups.map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.name}
@@ -672,7 +882,16 @@ function App() {
               ))}
             </select>
             <button onClick={() => void downloadChats(selected)}>导出</button>
-            <IconButton label="取消多选" onClick={() => setSelected([])}>
+            <button onClick={() => setSelected(filteredChats.map((c) => c.id))}>
+              全选当前列表
+            </button>
+            <IconButton
+              label="取消多选"
+              onClick={() => {
+                setSelected([]);
+                setSelecting(false);
+              }}
+            >
               <X size={16} />
             </IconButton>
           </div>
@@ -705,7 +924,7 @@ function App() {
             <div className="messages">
               {path.map((m, index) => {
                 const siblings = chat
-                    ? children(chat, m.parentId).filter(
+                    ? (byParent.get(m.parentId) ?? []).filter(
                         (s) => s.role === m.role,
                       )
                     : [],
@@ -716,6 +935,36 @@ function App() {
                     className={
                       "message " + m.role + (m.excluded ? " excluded" : "")
                     }
+                    onPointerDown={(e) => {
+                      if (
+                        e.pointerType !== "touch" ||
+                        (e.target as HTMLElement).closest(
+                          "button,a,input,textarea,select",
+                        )
+                      )
+                        return;
+                      cancelLongPress();
+                      longPress.current = {
+                        x: e.clientX,
+                        y: e.clientY,
+                        timer: setTimeout(() => {
+                          setMenu(m.id);
+                          longPress.current = null;
+                        }, 500),
+                      };
+                    }}
+                    onPointerMove={(e) => {
+                      if (
+                        longPress.current &&
+                        Math.hypot(
+                          e.clientX - longPress.current.x,
+                          e.clientY - longPress.current.y,
+                        ) > 10
+                      )
+                        cancelLongPress();
+                    }}
+                    onPointerUp={cancelLongPress}
+                    onPointerCancel={cancelLongPress}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       setMenu(m.id);
@@ -881,7 +1130,10 @@ function App() {
                               >
                                 <ChevronLeft size={14} />
                               </IconButton>
-                              <button onClick={() => setModal("tree")}>
+                              <button
+                                aria-label="选择消息版本"
+                                onClick={() => setModal("versions:" + m.id)}
+                              >
                                 {version + 1} / {siblings.length}
                               </button>
                               <IconButton
@@ -902,27 +1154,35 @@ function App() {
                             </div>
                           )}
                         </div>
-                        {(index === path.length - 1 || menu === m.id) &&
-                          m.role === "assistant" && (
-                            <div className="message-meta">
-                              {m.model?.modelId ?? String(m.raw?.model ?? "")}
-                              {m.elapsedMs !== undefined && (
-                                <span>
-                                  {" "}
-                                  · {(m.elapsedMs / 1000).toFixed(1)} 秒
-                                </span>
-                              )}
-                              {m.usage && (
-                                <span title={JSON.stringify(m.usage)}>
-                                  {" "}
-                                  · 实际用量{" "}
-                                  {String(m.usage.total_tokens ?? "详见详情")}
-                                </span>
-                              )}
-                            </div>
-                          )}
+                        {m.role === "assistant" && (
+                          <MessageUsage
+                            message={m}
+                            historical={m.id !== lastAssistant && menu !== m.id}
+                          />
+                        )}
                         {menu === m.id && (
                           <div className="message-menu">
+                            <button onClick={() => setMenu(null)}>
+                              关闭菜单
+                            </button>
+                            {m.request && (
+                              <details>
+                                <summary>请求详情</summary>
+                                <pre className="request-meta">
+                                  {JSON.stringify(
+                                    {
+                                      model: m.model,
+                                      parameters: m.request.parameters,
+                                      effort: m.request.effort,
+                                      stream: m.request.stream,
+                                      usage: m.usage,
+                                    },
+                                    null,
+                                    2,
+                                  )}
+                                </pre>
+                              </details>
+                            )}
                             <button
                               disabled={!!job}
                               onClick={() =>
@@ -1074,6 +1334,7 @@ function App() {
               <div className="model-control">
                 <button
                   className="model-trigger"
+                  disabled={opening}
                   onClick={() => {
                     setModelMenu(!modelMenu);
                     setSearch("");
@@ -1162,7 +1423,9 @@ function App() {
                 <IconButton
                   label="发送"
                   className="send-button"
-                  disabled={!draft.trim() || busy || !!chat?.deleted}
+                  disabled={
+                    !draft.trim() || busy || !!chat?.deleted || !selectedModel
+                  }
                   onClick={() => void run(send)}
                 >
                   {busy ? (
@@ -1267,31 +1530,19 @@ function App() {
                 <option value="append">追加</option>
               </select>
             </label>
-            <select
-              aria-label="添加系统模板"
-              value=""
-              onChange={(e) => {
-                const t = settings.templates.find(
-                  (v) => v.id === e.target.value,
-                );
-                if (t)
-                  void run(() =>
-                    patch({
-                      system:
-                        chat.templateMode === "replace"
-                          ? [structuredClone(t)]
-                          : [...chat.system, structuredClone(t)],
-                    }),
-                  );
-              }}
-            >
-              <option value="">选择一个模板…</option>
-              {settings.templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
+            <TemplatePicker
+              templates={settings.templates}
+              onApply={(templates) =>
+                run(() =>
+                  patch({
+                    system:
+                      chat.templateMode === "replace"
+                        ? templates
+                        : [...chat.system, ...templates],
+                  }),
+                )
+              }
+            />
             {chat.system.map((t, i) => (
               <div className="template-card" key={t.id + "-" + i}>
                 <div>
@@ -1370,9 +1621,17 @@ function App() {
           </div>
         </aside>
       )}
+      {menu && (
+        <button
+          className="message-menu-backdrop"
+          aria-label="关闭消息菜单"
+          onClick={() => setMenu(null)}
+        />
+      )}
       {modal && (
         <div className="modal-backdrop" onClick={() => setModal("")}>
           <section
+            ref={dialogRef}
             className={
               "modal " + (modal === "settings" ? "settings-modal" : "")
             }
@@ -1385,11 +1644,13 @@ function App() {
               <h2>
                 {modal === "settings"
                   ? "设置"
-                  : modal === "tree"
-                    ? "分支总览"
-                    : modal === "preview"
-                      ? "请求预览"
-                      : "聊天管理"}
+                  : modal.startsWith("versions:")
+                    ? "消息版本"
+                    : modal === "tree"
+                      ? "分支总览"
+                      : modal === "preview"
+                        ? "请求预览"
+                        : "聊天管理"}
               </h2>
               <IconButton label="关闭" onClick={() => setModal("")}>
                 <X size={20} />
@@ -1408,18 +1669,40 @@ function App() {
                   setChat(null);
                 }}
               />
+            ) : modal.startsWith("versions:") &&
+              chat &&
+              chat.messages[modal.slice(9)] ? (
+              <div className="version-list">
+                {(byParent.get(chat.messages[modal.slice(9)]!.parentId) ?? [])
+                  .filter(
+                    (item) => item.role === chat.messages[modal.slice(9)]!.role,
+                  )
+                  .map((item, index) => (
+                    <button
+                      key={item.id}
+                      disabled={!!job}
+                      onClick={() =>
+                        void run(async () => {
+                          await action("select", { messageId: item.id });
+                          setModal("");
+                        })
+                      }
+                    >
+                      <strong>版本 {index + 1}</strong>
+                      <span>{item.content.slice(0, 180) || "空回答"}</span>
+                    </button>
+                  ))}
+              </div>
             ) : modal === "tree" && chat ? (
               <div className="tree">
                 {Object.values(chat.messages).map((m) => (
                   <button
                     key={m.id}
                     disabled={!!job}
-                    className={
-                      path.some((p) => p.id === m.id) ? "on-route" : ""
-                    }
+                    className={pathIds.has(m.id) ? "on-route" : ""}
                     style={{
                       paddingLeft:
-                        16 + Math.min(route(chat, m.id).length, 15) * 14,
+                        16 + Math.min(depths.get(m.id) ?? 1, 15) * 14,
                     }}
                     onClick={() =>
                       void run(async () => {
@@ -1438,6 +1721,19 @@ function App() {
               <RequestPreview chat={chat} draft={draft} run={run} />
             ) : chat ? (
               <div className="chat-management">
+                <button
+                  disabled={
+                    !!job ||
+                    ["pending", "running"].includes(titleJob?.status ?? "")
+                  }
+                  onClick={() => void run(() => action("title"))}
+                >
+                  重新生成标题
+                </button>
+                {titleJob?.status === "error" && (
+                  <p className="danger-text">标题生成失败：{titleJob.error}</p>
+                )}
+
                 <button
                   onClick={() =>
                     void run(() => patch({ pinned: !chat.pinned }))
@@ -1554,7 +1850,13 @@ function App() {
       />
       {pendingImport && (
         <div className="modal-backdrop">
-          <section className="modal">
+          <section
+            className="modal"
+            ref={importDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="导入预览"
+          >
             <h2>导入预览</h2>
             <p>
               {pendingImport.preview.count} 个聊天，
@@ -1628,7 +1930,27 @@ function Login({
     [recovery, setRecovery] = useState(false),
     [next, setNext] = useState(""),
     [loading, setLoading] = useState(false),
-    [message, setMessage] = useState("");
+    [message, setMessage] = useState(""),
+    [recoveryCode, setRecoveryCode] = useState("");
+  if (recoveryCode)
+    return (
+      <div className="login-page">
+        <section className="login-card">
+          <h1>密码已重置</h1>
+          <p>请离线保存新的恢复码，原恢复码已失效，所有设备已退出。</p>
+          <code className="revealed-key">{recoveryCode}</code>
+          <button
+            className="primary"
+            onClick={() =>
+              download("在线AI-恢复码.txt", recoveryCode, "text/plain")
+            }
+          >
+            下载恢复码
+          </button>
+          <button onClick={() => setRecoveryCode("")}>已保存，返回登录</button>
+        </section>
+      </div>
+    );
   return (
     <div className="login-page">
       <form
@@ -1638,13 +1960,18 @@ function Login({
           setLoading(true);
           void run(async () => {
             try {
-              await api("/auth/" + (recovery ? "recover" : "login"), "POST", {
-                password,
-                newPassword: next,
-              });
+              const result = await api<{ recoveryCode?: string }>(
+                "/auth/" + (recovery ? "recover" : "login"),
+                "POST",
+                {
+                  password,
+                  newPassword: next,
+                },
+              );
               if (recovery) {
                 setRecovery(false);
                 setPassword("");
+                setRecoveryCode(result.recoveryCode ?? "");
                 setMessage("密码已重置。请使用新密码登录；原恢复码已失效。");
               } else onLogin();
             } finally {
@@ -1699,59 +2026,6 @@ function Login({
           {recovery ? "返回登录" : "使用恢复码"}
         </button>
       </form>
-    </div>
-  );
-}
-function ParameterControl({
-  name,
-  value,
-  max,
-  step,
-  onChange,
-}: {
-  name: string;
-  value?: number;
-  max: number;
-  step: number;
-  onChange: (value: number | undefined) => void;
-}) {
-  const [current, setCurrent] = useState(value);
-  useEffect(() => setCurrent(value), [value]);
-  return (
-    <div className="parameter">
-      <div>
-        <span>{name}</span>
-        <button className="text-button" onClick={() => onChange(undefined)}>
-          {value === undefined ? "默认" : "恢复默认"}
-        </button>
-      </div>
-      <div>
-        <input
-          aria-label={name + "滑块"}
-          type="range"
-          min={0}
-          max={max}
-          step={step}
-          value={current ?? max / 2}
-          onChange={(e) => setCurrent(Number(e.target.value))}
-          onPointerUp={() => onChange(current)}
-        />
-        <input
-          aria-label={name}
-          type="number"
-          min={0}
-          max={max}
-          step={step}
-          placeholder="默认"
-          value={current ?? ""}
-          onChange={(e) =>
-            setCurrent(
-              e.target.value === "" ? undefined : Number(e.target.value),
-            )
-          }
-          onBlur={() => onChange(current)}
-        />
-      </div>
     </div>
   );
 }
@@ -1826,7 +2100,8 @@ function SettingsPanel({
     >([]),
     [oldPassword, setOldPassword] = useState(""),
     [newPassword, setNewPassword] = useState(""),
-    [recovery, setRecovery] = useState("");
+    [recovery, setRecovery] = useState(""),
+    [recoveryRevoked, setRecoveryRevoked] = useState(false);
   const [template, setTemplate] = useState({ name: "", content: "" });
   async function saveSettings(next: Settings) {
     await api("/settings", "PUT", next);
@@ -1850,6 +2125,8 @@ function SettingsPanel({
           ["providers", "服务商"],
           ["models", "模型"],
           ["templates", "提示词模板"],
+          ["generation", "生成默认"],
+          ["backup", "设置备份"],
           ["appearance", "外观"],
           ["security", "账号与设备"],
         ].map(([key, title]) => (
@@ -1863,6 +2140,13 @@ function SettingsPanel({
         ))}
       </nav>
       <div className="settings-content">
+        <SettingsTools
+          tab={tab}
+          settings={settings}
+          providers={providers}
+          run={run}
+          refresh={refresh}
+        />
         {tab === "providers" && (
           <>
             <h3>服务商</h3>
@@ -1879,6 +2163,7 @@ function SettingsPanel({
                     {p.hasKey ? "已保存密钥" : "无密钥"}
                   </span>
                 </div>
+                <KeyReveal provider={p} run={run} />
                 <IconButton
                   label={"编辑 " + p.name}
                   onClick={() =>
@@ -2072,44 +2357,52 @@ function SettingsPanel({
               </select>
             </label>
             {modelRows.map((m) => (
-              <div className="model-row" key={m.p.id + "/" + m.id}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={m.enabled}
-                    onChange={(e) =>
-                      void run(async () => {
-                        await api("/providers/" + m.p.id + "/models", "PUT", {
-                          models: [{ id: m.id, enabled: e.target.checked }],
-                        });
-                        await refresh();
-                      })
-                    }
-                  />
-                  <span>
-                    {m.p.prefix + m.id}
-                    <small>{m.p.name}</small>
-                  </span>
-                </label>
-                <label>
-                  上下文预算
-                  <input
-                    aria-label={m.id + "上下文预算"}
-                    type="number"
-                    min="1"
-                    defaultValue={m.capacity}
-                    onBlur={(e) =>
-                      void run(async () => {
-                        await api("/providers/" + m.p.id + "/models", "PUT", {
-                          models: [
-                            { id: m.id, capacity: Number(e.target.value) },
-                          ],
-                        });
-                        await refresh();
-                      })
-                    }
-                  />
-                </label>
+              <div className="model-entry" key={m.p.id + "/" + m.id}>
+                <div className="model-row">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={m.enabled}
+                      onChange={(e) =>
+                        void run(async () => {
+                          await api("/providers/" + m.p.id + "/models", "PUT", {
+                            models: [{ id: m.id, enabled: e.target.checked }],
+                          });
+                          await refresh();
+                        })
+                      }
+                    />
+                    <span>
+                      {m.p.prefix + m.id}
+                      <small>{m.p.name}</small>
+                    </span>
+                  </label>
+                  <label>
+                    上下文预算
+                    <input
+                      aria-label={m.id + "上下文预算"}
+                      type="number"
+                      min="1"
+                      defaultValue={m.capacity}
+                      onBlur={(e) =>
+                        void run(async () => {
+                          await api("/providers/" + m.p.id + "/models", "PUT", {
+                            models: [
+                              { id: m.id, capacity: Number(e.target.value) },
+                            ],
+                          });
+                          await refresh();
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+                <ModelControls
+                  provider={m.p}
+                  model={m}
+                  run={run}
+                  refresh={refresh}
+                />
               </div>
             ))}
             {!modelRows.length && (
@@ -2321,6 +2614,23 @@ function SettingsPanel({
                 onChange={(e) => setOldPassword(e.target.value)}
               />
             </label>
+            <button
+              disabled={!oldPassword}
+              onClick={() =>
+                void run(async () => {
+                  const result = await api<{ recoveryCode: string }>(
+                    "/auth/recovery-code",
+                    "POST",
+                    { password: oldPassword },
+                  );
+                  setRecovery(result.recoveryCode);
+                  setRecoveryRevoked(false);
+                  setOldPassword("");
+                })
+              }
+            >
+              更新离线恢复码
+            </button>
             <label>
               新密码（至少 12 字符）
               <input
@@ -2340,6 +2650,7 @@ function SettingsPanel({
                     { password: oldPassword, newPassword },
                   );
                   setRecovery(r.recoveryCode);
+                  setRecoveryRevoked(true);
                   setOldPassword("");
                   setNewPassword("");
                 });
@@ -2351,8 +2662,18 @@ function SettingsPanel({
               <div className="recovery-box">
                 <strong>请立即离线保存新的恢复码</strong>
                 <code>{recovery}</code>
-                <p>所有会话已注销；关闭后请重新登录。</p>
-                <button onClick={onLogout}>已保存，返回登录</button>
+                <p>
+                  {recoveryRevoked
+                    ? "所有会话已注销；关闭后请重新登录。"
+                    : "旧恢复码已失效，登录会话保留。"}
+                </p>
+                <button
+                  onClick={() =>
+                    recoveryRevoked ? onLogout() : setRecovery("")
+                  }
+                >
+                  已保存{recoveryRevoked ? "，返回登录" : ""}
+                </button>
               </div>
             )}
             <hr />

@@ -5,6 +5,7 @@ import {
   requestPreview,
   route,
   addMessage,
+  sanitizeUsage,
 } from "../shared/chat";
 import { Store, HttpError, summary, chunks } from "./store";
 import { decrypt, redactError } from "./security";
@@ -45,6 +46,7 @@ export async function startGeneration(
   settings: Settings,
   providers: Provider[],
   seedId?: string,
+  clearDraft = false,
 ) {
   const { model, provider, request } = requestPreview(
     chat,
@@ -56,6 +58,17 @@ export async function startGeneration(
   const message = addMessage(chat, "assistant", seed?.content ?? "");
   message.status = "running";
   message.model = model;
+  message.request = {
+    parameters: {
+      ...(request.temperature !== undefined
+        ? { temperature: request.temperature }
+        : {}),
+      ...(request.top_p !== undefined ? { top_p: request.top_p } : {}),
+      ...(request.top_k !== undefined ? { top_k: request.top_k } : {}),
+    },
+    effort: chat.effort,
+    stream: chat.stream,
+  };
   chat.unread = false;
   const config: JobConfig = {
     options,
@@ -72,7 +85,9 @@ export async function startGeneration(
   };
   const id = crypto.randomUUID();
   // The chat revision is the mutation lock; only one concurrent start can commit it.
-  await new Store(env.DB).save(chat.id, "chat", chat, revision, summary(chat), [
+  const store = new Store(env.DB);
+  await store.save(chat.id, "chat", chat, revision, summary(chat), [
+    ...(clearDraft ? store.planDraft(chat.id, "") : []),
     env.DB.prepare(
       "INSERT INTO jobs(id,chat_id,message_id,status,created_at,updated_at,config) VALUES(?,?,?,'pending',?,?,?)",
     ).bind(
@@ -269,7 +284,7 @@ export async function runGeneration(
         content += choice?.delta?.content ?? "";
         reasoning +=
           choice?.delta?.reasoning_content ?? choice?.delta?.reasoning ?? "";
-        if (event.usage) usage = event.usage;
+        if (event.usage) usage = sanitizeUsage(event.usage);
         if (choice?.finish_reason) finished = true;
       };
       try {
@@ -323,7 +338,7 @@ export async function runGeneration(
       if (!message) throw new Error("上游没有返回回答");
       content += message.content ?? "";
       reasoning = message.reasoning_content ?? "";
-      usage = result.usage;
+      usage = sanitizeUsage(result.usage);
     }
     complete = true;
   } catch (e) {

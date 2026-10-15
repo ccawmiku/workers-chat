@@ -9,6 +9,10 @@ const workerDefinition = defineWorker({
     runWorkerFirst: ["/api/*"],
   },
   exports: {
+    TitleGeneration: exports.workflow({
+      name: "workers-chat-titles",
+      defaultRetention: { successRetention: "1 hour", errorRetention: "1 day" },
+    }),
     Progress: exports.durableObject({ storage: "sqlite" }),
     Generation: exports.workflow({
       name: "workers-chat-generation",
@@ -29,6 +33,11 @@ export default defineConfig({
       PROGRESS: bindings.durableObject({
         worker: workerDefinition,
         exportName: "Progress",
+      }),
+      TITLES: bindings.workflow({
+        name: "workers-chat-titles",
+        worker: workerDefinition,
+        exportName: "TitleGeneration",
       }),
       GENERATION: bindings.workflow({
         name: "workers-chat-generation",

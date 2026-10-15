@@ -1,5 +1,5 @@
 import { Miniflare } from "miniflare";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { randomBytes, pbkdf2Sync } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -55,13 +55,38 @@ const mf = new Miniflare({
 });
 try {
   const db = await mf.getD1Database("DB");
-  const sql = await readFile("migrations/0001.sql", "utf8");
-  const exists = await db
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS d1_migrations(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE,applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+    )
+    .run();
+  const legacy = await db
     .prepare("SELECT name FROM sqlite_master WHERE name='documents'")
     .first();
-  if (!exists) {
-    for (const statement of sql.trim().split("\n"))
-      await db.prepare(statement).run();
+  if (legacy)
+    await db
+      .prepare("INSERT OR IGNORE INTO d1_migrations(name) VALUES('0001.sql')")
+      .run();
+  for (const name of (await readdir("migrations"))
+    .filter((n) => n.endsWith(".sql"))
+    .sort()) {
+    if (
+      await db
+        .prepare("SELECT id FROM d1_migrations WHERE name=?")
+        .bind(name)
+        .first()
+    )
+      continue;
+    const sql = await readFile("migrations/" + name, "utf8");
+    const statements = sql
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((s) => db.prepare(s));
+    statements.push(
+      db.prepare("INSERT INTO d1_migrations(name) VALUES(?)").bind(name),
+    );
+    await db.batch(statements);
   }
   console.log(
     "Local database initialized. Local-only login is stored in ~/.config/workers-chat/local-login.json (0600).",

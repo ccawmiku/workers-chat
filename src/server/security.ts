@@ -164,3 +164,24 @@ export function redactError(message: string, key?: string) {
     .replace(/Bearer\s+\S+/gi, "Bearer [已隐藏]")
     .slice(0, 2000);
 }
+
+export async function resetRateLimit(request: Request, env: Env) {
+  const key = await digest(request.headers.get("CF-Connecting-IP") ?? "local");
+  await env.DB.prepare("DELETE FROM attempts WHERE key=?").bind(key).run();
+}
+export async function confirmPassword(
+  request: Request,
+  env: Env,
+  value: unknown,
+) {
+  await rateLimit(request, env);
+  const row = await authRow(env);
+  if (
+    typeof value !== "string" ||
+    value.length > 1024 ||
+    !(await verifyPassword(value, row.password_hash))
+  )
+    throw new HttpError(401, "密码错误");
+  await resetRateLimit(request, env);
+  return row;
+}

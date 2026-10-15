@@ -5,7 +5,7 @@
 - 先读 `SPEC.md`、`docs/ACCEPTANCE.md`、`docs/CLOUD_HANDOFF.md`，查看 `references/` 的实际图像。
 - 用户最新明确指令优先。`docs/DECISIONS.md` 是历史原题/决策索引，未选方案不能作为已确认需求实现。
 - 1—131 项功能已经确认。普通工程决策自行承担，不重复进行几十项产品问答；确有冲突时先收集证据，完成不依赖答案的工作。
-- 用户已确认：仓库 `workers-chat`、网页“在线AI”，按本次需求从头实现。当前仓库从交接文档开始，尚无应用代码；原电脑的另一套 app 不作为基线。
+- 用户已确认：仓库 `workers-chat`、网页“在线AI”，按本次需求独立实现。当前已有应用代码，接续以 `docs/PROGRESS.md` 和 `codex/implement-workers-chat` 分支为准，不覆盖已有实现；原电脑的另一套 app 不作为基线。
 - 用户准备自行发起云端任务；本次创建仓库没有自动启动任何云端任务。
 
 ## Cloudflare 官方 skills（必读）
@@ -17,7 +17,7 @@
 - 使用 Wrangler、本地运行或部署时，另读：https://github.com/cloudflare/skills/blob/main/skills/wrangler/SKILL.md
 - 涉及 Durable Objects / Workflows 时，按官方仓库目录发现对应 skill 和文档，不凭印象编写运行时行为。
 
-2026-10-16 交接时官方 skills main 参考提交：`be68fd8db614c22ed6f4d21a439a641e4904eb94`。开工时可查更新并记录实际使用的版本。若无法获取 skill，明确记录限制，转查官方文档，不默默略过。
+2026-10-16 05:00 接续时官方 skills main 参考提交：`be9f5e1e940fcf8567ff723cc03b8a8448c4082f`，详细依据见 `docs/RUNTIME.md`。开工时可查更新并记录实际使用的版本。若无法获取 skill，明确记录限制，转查官方文档，不默默略过。
 
 ## 设计与实现
 

@@ -206,4 +206,48 @@ describe("OpenWebUI v0.12.2 exchange", () => {
     x.chat.history.messages.u.parentId = "b" as never;
     expect(importChats(x).failures[0]?.reason).toBe("消息树包含循环");
   });
+  it("counts repeated attachment references once and stores a single copy of imported messages", () => {
+    const data = structuredClone(fixture) as typeof fixture & {
+      chat: { messages?: unknown[] };
+    };
+    data.chat.messages = Object.values(data.chat.history.messages);
+    const result = importChats(data),
+      chat = result.chats[0]!;
+    expect(result.attachments).toBe(2);
+    expect(JSON.stringify(chat.raw)).not.toContain("旧回答");
+    expect(chat.messages.a!.raw).not.toHaveProperty("content");
+    expect(importChats(exportChat(chat)).chats[0]!.messages.a!.content).toBe(
+      "旧回答",
+    );
+  });
+  it("validates, switches, forks and exports a deep tree without recursive traversal", () => {
+    const messages = Object.fromEntries(
+      Array.from({ length: 10000 }, (_, i) => [
+        String(i),
+        {
+          id: String(i),
+          role: i % 2 ? "assistant" : "user",
+          parentId: i ? String(i - 1) : null,
+          content: "节点" + i,
+          timestamp: 1760000000 + i,
+        },
+      ]),
+    );
+    const result = importChats({ history: { messages, currentId: "9999" } });
+    expect(result.failures).toEqual([]);
+    const chat = result.chats[0]!;
+    selectBranch(chat, "0");
+    expect(route(chat)).toHaveLength(10000);
+    const fork = forkChat(chat, "2", []);
+    expect(Object.values(fork.messages).map((m) => m.content)).toEqual([
+      "节点0",
+      "节点1",
+      "节点2",
+    ]);
+    const exported = exportChat(chat);
+    expect(importChats(exported).chats[0]!.messages["9999"]!.parentId).toBe(
+      "9998",
+    );
+    expect(deleteSubtree(chat, "1")).toBe(9999);
+  });
 });

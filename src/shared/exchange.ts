@@ -1,4 +1,11 @@
-import { type Chat, type Message, newChat, route } from "./chat";
+import {
+  type Chat,
+  type Message,
+  newChat,
+  route,
+  indexChildren,
+  validateMessageTree,
+} from "./chat";
 type Obj = Record<string, unknown>;
 const object = (value: unknown): Obj =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -15,18 +22,32 @@ function textContent(value: unknown): string {
       .join("\n");
   return "";
 }
-function stripAttachments(input: unknown, counter: { n: number }): unknown {
+function attachmentIdentity(value: unknown): string {
+  if (typeof value === "string") return "ref:" + value;
+  const item = object(value),
+    file = object(item.file);
+  const id = item.id ?? item.file_id ?? file.id;
+  if (typeof id === "string") return "id:" + id;
+  const url = item.url ?? item.file_url ?? object(item.image_url).url;
+  return typeof url === "string"
+    ? "ref:" + url
+    : "value:" + JSON.stringify(value);
+}
+function stripAttachments(input: unknown, counter: Set<string>): unknown {
   if (Array.isArray(input))
     return input.map((v) => stripAttachments(v, counter));
   if (!input || typeof input !== "object") return input;
   const clean: Obj = Object.create(null);
   for (const [key, value] of Object.entries(input)) {
     if (["files", "attachments", "images"].includes(key)) {
-      if (Array.isArray(value)) counter.n += value.length;
+      if (Array.isArray(value))
+        value.forEach((item) => counter.add(attachmentIdentity(item)));
       continue;
     }
     if (["image_url", "file_url", "file_id"].includes(key)) {
-      counter.n++;
+      counter.add(
+        key === "file_id" ? "id:" + value : attachmentIdentity(value),
+      );
       continue;
     }
     clean[key] = stripAttachments(value, counter);
@@ -50,7 +71,7 @@ export function importChats(input: unknown): {
         rawChat = object(rawRoot.chat ?? original);
       if (!Object.keys(rawChat).length)
         throw new Error("不是 OpenWebUI 聊天对象");
-      const counter = { n: 0 };
+      const counter = new Set<string>();
       const root = object(stripAttachments(original, counter)),
         source = object(root.chat ?? root);
       const history = object(source.history),
@@ -61,7 +82,15 @@ export function importChats(input: unknown): {
       if (!Array.isArray(list))
         throw new Error("缺少 history.messages 或 messages");
       const chat = newChat();
-      chat.raw = root;
+      const metadata: Obj & { history: Obj } = {
+        ...source,
+        history: { ...history },
+      };
+      delete metadata.messages;
+      delete metadata.history.messages;
+      chat.raw = Object.hasOwn(root, "chat")
+        ? { ...root, chat: metadata }
+        : metadata;
       chat.title = string(source.title, "导入的聊天");
       chat.titleManual = true;
       const at = Number(source.timestamp ?? rawRoot.created_at);
@@ -96,7 +125,21 @@ export function importChats(input: unknown): {
                 ? stamp * 1000
                 : stamp
               : chat.createdAt,
-          raw: m,
+          raw: Object.fromEntries(
+            Object.entries(m).filter(
+              ([key]) =>
+                ![
+                  "id",
+                  "role",
+                  "content",
+                  "parentId",
+                  "childrenIds",
+                  "timestamp",
+                  "reasoning_content",
+                  "usage",
+                ].includes(key),
+            ),
+          ),
           reasoning: string(m.reasoning_content ?? m.reasoning),
           status: m.done === false ? "error" : "complete",
         };
@@ -105,26 +148,24 @@ export function importChats(input: unknown): {
         chat.messages[id] = msg;
         previous = id;
       }
-      for (const msg of Object.values(chat.messages)) route(chat, msg.id);
+      validateMessageTree(chat);
       chat.currentId =
         typeof history.currentId === "string" ? history.currentId : previous;
       route(chat);
-      for (const msg of Object.values(chat.messages))
-        if (msg.parentId) {
-          const declared = object(stored[msg.parentId]).childrenIds;
-          if (Array.isArray(declared) && !declared.includes(msg.id))
+      const byParent = indexChildren(chat);
+      for (const [parent, children] of byParent) {
+        if (!parent) continue;
+        const declared = object(stored[parent]).childrenIds;
+        if (Array.isArray(declared)) {
+          const ids = new Set(declared);
+          if (children.some((m) => !ids.has(m.id)))
             throw new Error("父子关系不一致");
         }
-      branches += Object.values(chat.messages).reduce(
-        (n, m) =>
-          n +
-          (Object.values(chat.messages).filter((c) => c.parentId === m.id)
-            .length > 1
-            ? 1
-            : 0),
-        0,
-      );
-      attachments += counter.n;
+      }
+      branches += [...byParent.values()].filter(
+        (children) => children.length > 1,
+      ).length;
+      attachments += counter.size;
       chats.push(chat);
     } catch (e) {
       failures.push({
@@ -139,16 +180,13 @@ export function exportChat(chat: Chat): Obj {
   const root = structuredClone(chat.raw ?? {}),
     original = object(root.chat ?? root);
   const messages: Obj = {};
-  const children = new Map<string, string[]>();
-  for (const m of Object.values(chat.messages))
-    if (m.parentId)
-      children.set(m.parentId, [...(children.get(m.parentId) ?? []), m.id]);
+  const children = indexChildren(chat);
   for (const m of Object.values(chat.messages))
     messages[m.id] = {
       ...m.raw,
       id: m.id,
       parentId: m.parentId,
-      childrenIds: children.get(m.id) ?? [],
+      childrenIds: (children.get(m.id) ?? []).map((child) => child.id),
       role: m.role,
       content: m.content,
       timestamp: m.createdAt / 1000,
@@ -156,6 +194,7 @@ export function exportChat(chat: Chat): Obj {
       ...(m.reasoning ? { reasoning_content: m.reasoning } : {}),
       ...(m.model ? { model: m.model.modelId } : {}),
       ...(m.usage ? { usage: m.usage } : {}),
+      ...(m.request ? { workers_chat_request: m.request } : {}),
     };
   const output = {
     ...original,
@@ -171,5 +210,5 @@ export function exportChat(chat: Chat): Obj {
   };
   return Object.hasOwn(root, "chat")
     ? { ...root, id: chat.id, chat: output }
-    : { id: chat.id, ...output };
+    : { ...output, id: chat.id };
 }

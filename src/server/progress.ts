@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { chunks } from "./store";
 import { runGeneration } from "./generation";
+import { runTitle, queueTitle } from "./titles";
 
 /** One SQLite-backed coordinator per generation, never a global singleton. */
 export class Progress extends DurableObject<Env> {
@@ -50,9 +51,10 @@ export class Progress extends DurableObject<Env> {
   }
   output() {
     const rows = this.ctx.storage.sql
-      .exec<{ kind: string; value: string }>(
-        "SELECT kind,value FROM pieces ORDER BY seq",
-      )
+      .exec<{
+        kind: string;
+        value: string;
+      }>("SELECT kind,value FROM pieces ORDER BY seq")
       .toArray();
     return {
       content: rows
@@ -76,6 +78,26 @@ export class Progress extends DurableObject<Env> {
   async run(jobId: string) {
     try {
       return JSON.stringify(await runGeneration(this.env, jobId, this));
+    } finally {
+      await this.ctx.storage.setAlarm(Date.now() + 86400000);
+    }
+  }
+  async scheduleTitle(jobId: string) {
+    const job = await this.env.DB.prepare(
+      "SELECT chat_id FROM jobs WHERE id=? AND status='complete'",
+    )
+      .bind(jobId)
+      .first<{ chat_id: string }>();
+    if (!job) return null;
+    try {
+      return await queueTitle(this.env, job.chat_id);
+    } catch {
+      return null;
+    }
+  }
+  async runTitle(jobId: string) {
+    try {
+      return await runTitle(this.env, jobId);
     } finally {
       await this.ctx.storage.setAlarm(Date.now() + 86400000);
     }

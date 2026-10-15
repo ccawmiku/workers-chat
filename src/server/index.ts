@@ -10,8 +10,10 @@ import {
   deleteSubtree,
   forkChat,
   requestPreview,
+  sanitizeUsage,
   uuid,
 } from "../shared/chat";
+import { exportSettings, importSettings } from "./backup";
 import { importChats, exportChat } from "../shared/exchange";
 import { HttpError, Store, summary } from "./store";
 import {
@@ -27,6 +29,8 @@ import {
   sessionCookie,
   upstreamUrl,
   redactError,
+  confirmPassword,
+  resetRateLimit,
 } from "./security";
 import {
   activeJob,
@@ -35,38 +39,10 @@ import {
   finalize,
   limitedText,
 } from "./generation";
-export { Generation } from "./workflow";
+export { Generation, TitleGeneration } from "./workflow";
+import { queueTitle, titleStatus } from "./titles";
 export { Progress } from "./progress";
-type Obj = Record<string, unknown>;
-function obj(v: unknown): Obj {
-  if (!v || typeof v !== "object" || Array.isArray(v))
-    throw new HttpError(400, "无效对象");
-  return v as Obj;
-}
-function str(v: unknown, max = 4 * 1024 * 1024): string {
-  if (typeof v !== "string" || v.length > max)
-    throw new HttpError(400, "文字格式或长度无效");
-  return v;
-}
-function parameters(v: unknown) {
-  const data = obj(v),
-    out: Chat["parameters"] = {};
-  for (const key of ["temperature", "top_p", "top_k"] as const) {
-    const n = data[key];
-    if (n === undefined || n === null) continue;
-    const max = key === "temperature" ? 2 : key === "top_p" ? 1 : 100000;
-    if (
-      typeof n !== "number" ||
-      !Number.isFinite(n) ||
-      n < 0 ||
-      n > max ||
-      (key === "top_k" && !Number.isInteger(n))
-    )
-      throw new HttpError(400, "生成参数无效");
-    out[key] = n;
-  }
-  return out;
-}
+import { obj, str, parameters, validatedSettings } from "./validation";
 const publicProvider = (p: Provider) => {
   const { encryptedKey, ...safe } = p;
   return { ...safe, hasKey: !!encryptedKey };
@@ -75,10 +51,7 @@ async function settings(store: Store) {
   return (await store.get<Settings>("settings"))?.value ?? defaultSettings();
 }
 async function providerList(store: Store) {
-  const list = await store.list<{ id: string }>("provider");
-  return Promise.all(
-    list.map(async (p) => (await store.get<Provider>(p.id))!.value),
-  );
+  return (await store.all<Provider>("provider")).map((doc) => doc.value);
 }
 async function readBody(request: Request) {
   const value = await limitedText(new Response(request.body), 10 * 1024 * 1024);
@@ -111,22 +84,39 @@ async function api(request: Request, env: Env) {
     if (recovery) {
       const next = str(body.newPassword, 1024);
       if (next.length < 12) throw new HttpError(400, "新密码至少 12 个字符");
-      await env.DB.batch([
+      const code = uuid() + uuid();
+      const changed = await env.DB.batch([
         env.DB.prepare(
-          "UPDATE auth SET password_hash=?,recovery_hash=? WHERE id=1",
-        ).bind(await passwordHash(next), await passwordHash(uuid() + uuid())),
-        env.DB.prepare("DELETE FROM sessions"),
+          "UPDATE auth SET password_hash=?,recovery_hash=? WHERE id=1 AND recovery_hash=?",
+        ).bind(
+          await passwordHash(next),
+          await passwordHash(code),
+          row.recovery_hash,
+        ),
+        env.DB.prepare("DELETE FROM sessions WHERE (SELECT changes())>0"),
       ]);
-      return Response.json({ ok: true, recoveryConsumed: true });
+      if (!changed[0]!.meta.changes) throw new HttpError(401, "恢复码已失效");
+      await resetRateLimit(request, env);
+      return Response.json({
+        ok: true,
+        recoveryConsumed: true,
+        recoveryCode: code,
+      });
     }
     const token = uuid() + uuid();
-    await env.DB.prepare("INSERT INTO sessions VALUES(?,?,?)")
+    const loginResult = await env.DB.prepare(
+      "INSERT INTO sessions SELECT ?,?,? WHERE (SELECT password_hash FROM auth WHERE id=1)=?",
+    )
       .bind(
         await digest(token),
         (request.headers.get("User-Agent") ?? "未知设备").slice(0, 250),
         Date.now(),
+        row.password_hash,
       )
       .run();
+    if (!loginResult.meta.changes)
+      throw new HttpError(401, "密码已修改，请重新登录");
+    await resetRateLimit(request, env);
     return Response.json(
       { ok: true },
       { headers: { "Set-Cookie": sessionCookie(request, token) } },
@@ -186,41 +176,53 @@ async function api(request: Request, env: Env) {
     const next = str(body.newPassword, 1024);
     if (next.length < 12) throw new HttpError(400, "新密码至少 12 个字符");
     const recovery = uuid() + uuid();
-    await env.DB.batch([
+    const changed = await env.DB.batch([
       env.DB.prepare(
-        "UPDATE auth SET password_hash=?,recovery_hash=? WHERE id=1",
-      ).bind(await passwordHash(next), await passwordHash(recovery)),
-      env.DB.prepare("DELETE FROM sessions"),
+        "UPDATE auth SET password_hash=?,recovery_hash=? WHERE id=1 AND password_hash=? AND EXISTS(SELECT 1 FROM sessions WHERE token_hash=?)",
+      ).bind(
+        await passwordHash(next),
+        await passwordHash(recovery),
+        row.password_hash,
+        session,
+      ),
+      env.DB.prepare("DELETE FROM sessions WHERE (SELECT changes())>0"),
     ]);
+    if (!changed[0]!.meta.changes) throw new HttpError(401, "登录或密码已失效");
+    await resetRateLimit(request, env);
     return Response.json({ ok: true, recoveryCode: recovery });
+  }
+  if (path === "/api/settings/export" && method === "POST")
+    return Response.json(await exportSettings(request, env, body));
+  if (path === "/api/settings/import" && method === "POST")
+    return Response.json(await importSettings(env, body));
+  if (path === "/api/auth/recovery-code" && method === "POST") {
+    await confirmPassword(request, env, body.password);
+    const code = uuid() + uuid();
+    const changed = await env.DB.prepare(
+      "UPDATE auth SET recovery_hash=? WHERE id=1 AND EXISTS(SELECT 1 FROM sessions WHERE token_hash=?)",
+    )
+      .bind(await passwordHash(code), session)
+      .run();
+    if (!changed.meta.changes) throw new HttpError(401, "登录已失效");
+    return Response.json({ recoveryCode: code });
   }
   if (path === "/api/settings" && method === "GET")
     return Response.json(await settings(store));
   if (path === "/api/settings" && method === "PUT") {
     const doc = await store.get<Settings>("settings"),
-      next = { ...defaultSettings(), ...body } as Settings;
-    next.parameters = parameters(body.parameters ?? {});
-    if (!Array.isArray(next.templates) || next.templates.length > 100)
-      throw new HttpError(400, "模板格式无效");
-    next.templates = next.templates.map((t) => ({
-      id: str(t.id, 128),
-      name: str(t.name, 200),
-      content: str(t.content),
-    }));
-    for (const ref of [next.defaultModel, next.titleModel])
-      if (ref) {
-        str(ref.providerId, 128);
-        str(ref.modelId, 500);
-      }
-    next.titlePrompt = str(next.titlePrompt, 10000);
-    await store.save("settings", "settings", next, doc?.revision ?? 0);
+      next = validatedSettings(body);
+    await store.save("settings", "settings", next, doc?.revision ?? 0, {
+      id: "settings",
+    });
     return Response.json(next);
   }
   if (path === "/api/providers" && method === "GET")
     return Response.json((await providerList(store)).map(publicProvider));
   if (path === "/api/providers" && method === "POST") {
-    const id = typeof body.id === "string" ? body.id : uuid(),
-      doc = await store.get<Provider>(id);
+    const id = typeof body.id === "string" ? body.id : uuid();
+    if (!/^[0-9a-f-]{36}$/i.test(id))
+      throw new HttpError(400, "服务商 ID 无效");
+    const doc = await store.get<Provider>(id);
     if (
       doc &&
       !(await store.list<{ id: string }>("provider")).some((p) => p.id === id)
@@ -239,7 +241,11 @@ async function api(request: Request, env: Env) {
         str(body.apiKey, 8192),
         env.ENCRYPTION_KEY,
       );
-    if (doc && doc.value.baseUrl !== p.baseUrl && body.apiKey === undefined)
+    if (
+      doc &&
+      doc.value.baseUrl !== p.baseUrl &&
+      (typeof body.apiKey !== "string" || !body.apiKey)
+    )
       throw new HttpError(
         400,
         "修改地址时请重新输入密钥，避免将旧密钥发送到其他主机",
@@ -278,25 +284,68 @@ async function api(request: Request, env: Env) {
     return Response.json(publicProvider(p));
   }
   const providerMatch = path.match(
-    /^\/api\/providers\/([^/]+)(?:\/(key|models))?$/,
+    /^\/api\/providers\/([^/]+)(?:\/(key|models|test))?$/,
   );
   if (providerMatch) {
     const doc = await store.get<Provider>(providerMatch[1]!);
     if (!doc || !doc.value.models) throw new HttpError(404, "服务商不存在");
     const p = doc.value;
     if (providerMatch[2] === "key") {
-      await rateLimit(request, env);
-      if (
-        !(await verifyPassword(
-          str(body.password, 1024),
-          (await authRow(env)).password_hash,
-        ))
-      )
-        throw new HttpError(401, "密码错误");
+      await confirmPassword(request, env, body.password);
       return Response.json({
         apiKey: p.encryptedKey
           ? await decrypt(p.encryptedKey, env.ENCRYPTION_KEY)
           : "",
+      });
+    }
+    if (providerMatch[2] === "test" && method === "POST") {
+      const model = p.models.find((m) => m.id === body.modelId);
+      if (!model) throw new HttpError(400, "请选择服务商已有模型");
+      const effort = body.effort ?? "max";
+      if (
+        !["inherit", "none", "low", "medium", "high", "max"].includes(
+          String(effort),
+        )
+      )
+        throw new HttpError(400, "思考强度无效");
+      const key = p.encryptedKey
+          ? await decrypt(p.encryptedKey, env.ENCRYPTION_KEY)
+          : "",
+        started = Date.now(),
+        defaults = await settings(store);
+      const response = await fetch(p.baseUrl + "/chat/completions", {
+        method: "POST",
+        redirect: "manual",
+        headers: {
+          "Content-Type": "application/json",
+          ...(key ? { Authorization: "Bearer " + key } : {}),
+        },
+        body: JSON.stringify({
+          model: model.id,
+          stream: false,
+          ...defaults.parameters,
+          ...model.parameters,
+          ...(effort !== "inherit" ? { reasoning_effort: effort } : {}),
+          messages: [{ role: "user", content: "请只回复 OK。" }],
+        }),
+        signal: AbortSignal.timeout(120000),
+      });
+      const text = await limitedText(response, 65536);
+      if (!response.ok)
+        throw new HttpError(
+          400,
+          `连通性测试 HTTP ${response.status}：${redactError(text, key)}`,
+        );
+      const data = JSON.parse(text) as {
+        choices?: unknown[];
+        usage?: Record<string, unknown>;
+      };
+      if (!data.choices?.length) throw new HttpError(400, "接口未返回模型回答");
+      return Response.json({
+        ok: true,
+        modelId: model.id,
+        elapsedMs: Date.now() - started,
+        usage: sanitizeUsage(data.usage),
       });
     }
     if (providerMatch[2] === "models") {
@@ -335,8 +384,40 @@ async function api(request: Request, env: Env) {
       name: str(body.name, 100),
       updatedAt: Date.now(),
     };
-    await store.save(group.id, "group", group, 0);
+    await store.save(group.id, "group", group, 0, group);
     return Response.json(group);
+  }
+  const groupMatch = path.match(/^\/api\/groups\/([^/]+)$/);
+  if (groupMatch) {
+    const doc = await store.get<{
+      id: string;
+      name: string;
+      updatedAt: number;
+    }>(groupMatch[1]!);
+    const groupExists = await env.DB.prepare(
+      "SELECT id FROM documents WHERE id=? AND kind='group'",
+    )
+      .bind(groupMatch[1]!)
+      .first();
+    if (!doc || !groupExists) throw new HttpError(404, "分组不存在");
+    if (method === "PATCH") {
+      const name = str(body.name, 100).trim();
+      if (!name) throw new HttpError(400, "分组名称不能为空");
+      const group = { ...doc.value, name, updatedAt: Date.now() };
+      await store.save(group.id, "group", group, doc.revision, group);
+      return Response.json(group);
+    }
+    if (method === "DELETE") {
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE documents SET summary=json_set(summary,'$.groupId',NULL) WHERE kind='chat' AND json_extract(summary,'$.groupId')=?",
+        ).bind(doc.value.id),
+        env.DB.prepare(
+          "DELETE FROM documents WHERE id=? AND kind='group'",
+        ).bind(doc.value.id),
+      ]);
+      return Response.json({ ok: true });
+    }
   }
   if (path === "/api/chats" && method === "GET")
     return Response.json(await store.list("chat"));
@@ -367,8 +448,12 @@ async function api(request: Request, env: Env) {
   const match = path.match(/^\/api\/chats\/([^/]+)(?:\/(.*))?$/);
   if (match) {
     const id = match[1]!,
-      action = match[2] ?? "",
-      doc = await store.get<Chat>(id);
+      action = match[2] ?? "";
+    if (action === "draft" && method === "PUT") {
+      await store.setDraft(id, str(body.draft));
+      return Response.json({ ok: true });
+    }
+    const doc = await store.get<Chat>(id);
     if (!doc || !doc.value.messages) throw new HttpError(404, "聊天不存在");
     const chat = doc.value,
       job = await activeJob(env, id);
@@ -412,18 +497,30 @@ async function api(request: Request, env: Env) {
             { status: "running" },
           );
       }
+      if (!job && !chat.titleManual) {
+        try {
+          await queueTitle(env, id);
+        } catch {
+          /* No retry of an existing title request. */
+        }
+      }
       return Response.json({
         chat,
         revision: doc.revision,
+        titleJob: await titleStatus(env, id),
         job: job ? { id: job.id, status: job.status } : null,
       });
     }
-    if (action === "export") return Response.json(exportChat(chat));
-    if (action === "draft") {
-      chat.draft = str(body.draft);
-      await store.save(id, "chat", chat, doc.revision, summary(chat));
-      return Response.json({ ok: true });
+    if (action === "title" && method === "POST") {
+      if (job) throw new HttpError(409, "请等待当前回答完成");
+      return Response.json(
+        { jobId: await queueTitle(env, id, true) },
+        { status: 202 },
+      );
     }
+    if (action === "title-status" && method === "GET")
+      return Response.json(await titleStatus(env, id));
+    if (action === "export") return Response.json(exportChat(chat));
     if (action === "seen") {
       chat.unread = false;
       await store.save(id, "chat", chat, doc.revision, summary(chat));
@@ -461,6 +558,7 @@ async function api(request: Request, env: Env) {
       if (body.title !== undefined) {
         chat.title = str(body.title, 500);
         chat.titleManual = true;
+        chat.titleRevision = uuid();
       }
       for (const k of ["pinned", "archived", "deleted", "unread"] as const)
         if (typeof body[k] === "boolean") chat[k] = body[k];
@@ -539,6 +637,8 @@ async function api(request: Request, env: Env) {
         doc.revision,
         await settings(store),
         await providerList(store),
+        undefined,
+        true,
       );
       return Response.json({ jobId }, { status: 202 });
     }

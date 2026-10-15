@@ -10,9 +10,9 @@ npm run dev:init
 npm run dev
 ```
 
-本地地址 `http://localhost:5173`。随机本地登录密码位于 `~/.config/workers-chat/local-login.json`；`.dev.vars` 含本地散列和 AES 密钥，两者均不进入 Git。开发 D1 使用 `.cloudflare/state/v3`。`dev:init` 只在没有表时初始化；后续生产迁移由 `cf d1 migrations apply` 管理。
+本地地址 `http://localhost:5173`。随机本地登录密码位于 `~/.config/workers-chat/local-login.json`；`.dev.vars` 含本地散列和 AES 密钥，两者均不进入 Git。开发 D1 使用 `.cloudflare/state/v3`。`dev:init` 使用 `d1_migrations` 记录并原子应用所有未执行的本地迁移（目前 0001—0003）；后续生产迁移由 `cf d1 migrations apply` 管理，不使用开发初始化脚本。
 
-浏览器测试需要 Chromium。检测到 `/usr/bin/chromium` 时直接使用；其他平台可自行安装 Playwright Chromium。`npm run test:browser` 会启动或复用本地服务器，并新增本地测试聊天。
+浏览器测试需要 Chromium。检测到 `/usr/bin/chromium` 时直接使用；其他平台可自行安装 Playwright Chromium。`npm run test:browser` 会启动或复用本地服务器，新增本地测试聊天，并用不含密钥的测试设置替换本地配置。请使用专用开发数据库，勿对生产运行浏览器测试。
 
 ## 准备正式凭证
 
@@ -50,14 +50,14 @@ npm run deploy:dry
 npx cf deploy --secrets-file /absolute/path/to/deployment-secrets.json
 ```
 
-`cf` 会按配置声明 D1 绑定、SQLite `Progress` 类和 `Generation` Workflow。D1 在部署前已初始化。Secret 从受保护文件上传，不放入命令参数值、Git 或前端构建。启用 HTTPS 域名后登录，在设置中添加上游并开启模型。正式访问使用 HTTPS；本地 HTTP 仅允许 localhost。
+`cf` 会按配置声明 D1 绑定、SQLite `Progress` 类、`Generation` 与 `TitleGeneration` Workflows。D1 在部署前已初始化。Secret 从受保护文件上传，不放入命令参数值、Git 或前端构建。启用 HTTPS 域名后登录，在设置中添加上游并开启模型。正式访问使用 HTTPS；本地 HTTP 仅允许 localhost。
 
 部署后需要实测：真实 `/models` 与指定模型、默认 max 错误保留、流式与非流式、关闭页面超过 30 秒再返回、长回答、停止、运行时中断，以及免费账户 CPU/存储/请求配额。不能用本地截图代替这些线上证据。
 
 ## 恢复
 
-- 忘记密码：在登录页使用离线恢复码设置新密码，所有会话注销，旧恢复码一次使用后失效。当前实现可登录后通过“修改密码”生成新恢复码，立即离线保存。
+- 忘记密码：在登录页使用离线恢复码设置新密码，所有会话注销，旧恢复码一次使用后失效。恢复成功立即提供新恢复码；登录后也可在“账号与设备”单独更新，立即离线保存。
 - 换设备或泄露会话：在“账号与设备”撤销指定设备或全部设备。
 - Key 无法解密：检查是否保留了原 `ENCRYPTION_KEY`。丢失它不能从密文恢复上游 Key，需重新配置服务商。
-- 聊天备份：完整树 JSON 可独立导入为新聊天，Markdown 只有当前路线。当前应用设置备份功能尚未完成，不能把聊天 JSON 当作完整灾难恢复备份。
+- 聊天备份：完整树 JSON 可独立导入为新聊天，Markdown 只有当前路线。应用设置在“设置 → 设置备份”单独导出/恢复，可合并或替换，默认不含 API Key；主动包含时再次验证密码并明确提示普通 JSON。不包含登录密码、恢复码和服务端 AES 密钥，需另行保管部署凭证。不含 Key 的恢复仅保留同 ID、相同地址的已有 Key。
 - 数据库恢复：在免费 D1 的实际 Time Travel 保留窗口内按官方恢复流程处理；保留与数据库匹配的加密密钥。不要在已有生产数据库再次手动执行初始化建表 SQL。

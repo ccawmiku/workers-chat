@@ -59,6 +59,7 @@ import "./style.css";
 import { IconButton, ParameterControl, useDialogFocus } from "./controls";
 import { ModelControls, TemplatePicker, MessageUsage } from "./chat-controls";
 import { SettingsTools, KeyReveal } from "./settings-tools";
+import { ImportDialog } from "./import-dialog";
 type Brief = Pick<
   Chat,
   | "id"
@@ -112,14 +113,8 @@ function App() {
     [selecting, setSelecting] = useState(false),
     [groupMenu, setGroupMenu] = useState<string | null>(null),
     [scrollBottom, setScrollBottom] = useState(false);
-  const [appearance, setAppearance] = useState(() =>
-    JSON.parse(
-      localStorage.getItem("appearance") ??
-        '{"theme":"system","font":16,"width":800,"line":1.8,"collapse":true,"enter":true}',
-    ),
-  );
-  const dialogRef = useRef<HTMLElement>(null),
-    importDialogRef = useRef<HTMLElement>(null);
+  const [appearance, setAppearance] = useState(() => readAppearance());
+  const dialogRef = useRef<HTMLElement>(null);
   useDialogFocus(dialogRef, () => setModal(""), !!modal);
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     Math.min(
@@ -142,6 +137,11 @@ function App() {
   };
   useEffect(() => () => cancelLongPress(), []);
   const navigationSeq = useRef(0);
+  const draftQueue = useRef<Promise<void>>(Promise.resolve()),
+    activeSend = useRef<Promise<void> | null>(null),
+    creating = useRef<Promise<void> | null>(null),
+    submitting = useRef(false),
+    draftVersion = useRef(0);
   const idRef = useRef<string | null>(null),
     dirty = useRef(false),
     draftRef = useRef(""),
@@ -158,11 +158,6 @@ function App() {
         failures: { index: number; reason: string }[];
       };
     } | null>(null);
-  useDialogFocus(
-    importDialogRef,
-    () => setPendingImport(null),
-    !!pendingImport,
-  );
   const run = useCallback(async (fn: () => Promise<void>) => {
     try {
       setError("");
@@ -215,12 +210,25 @@ function App() {
       );
     }
   }, []);
+  function saveDraft(id: string, value: string) {
+    const write = draftQueue.current
+      .catch(() => {})
+      .then(async () => {
+        await api("/chats/" + id + "/draft", "PUT", { draft: value });
+      });
+    draftQueue.current = write;
+    return write;
+  }
   async function flushDraft() {
+    if (submitting.current) return;
+    if (!idRef.current && dirty.current && draftRef.current.trim())
+      await ensureComposerChat();
     const id = idRef.current;
     if (id && dirty.current) {
-      const saved = draftRef.current;
-      await api("/chats/" + id + "/draft", "PUT", { draft: saved });
-      if (draftRef.current === saved && idRef.current === id)
+      const saved = draftRef.current,
+        version = draftVersion.current;
+      await saveDraft(id, saved);
+      if (draftVersion.current === version && idRef.current === id)
         dirty.current = false;
     }
   }
@@ -228,6 +236,9 @@ function App() {
     const sequence = ++navigationSeq.current;
     setOpening(true);
     try {
+      await activeSend.current?.catch(() => {});
+      await creating.current?.catch(() => {});
+      if (sequence !== navigationSeq.current) return;
       await flushDraft();
       const result = await api<{
         chat: Chat;
@@ -243,6 +254,7 @@ function App() {
       setMenu(null);
       setDraft(result.chat.draft);
       draftRef.current = result.chat.draft;
+      draftVersion.current++;
       dirty.current = false;
       stick.current = true;
       if (result.chat.unread && document.visibilityState === "visible") {
@@ -258,6 +270,9 @@ function App() {
     const sequence = ++navigationSeq.current;
     setOpening(true);
     try {
+      await activeSend.current?.catch(() => {});
+      await creating.current?.catch(() => {});
+      if (sequence !== navigationSeq.current) return;
       await flushDraft();
       const c = await api<Chat>("/chats", "POST", { groupId });
       await loadNavigation();
@@ -268,17 +283,27 @@ function App() {
   }
   async function ensureComposerChat() {
     if (idRef.current) return;
-    const created = await api<Chat>("/chats", "POST", {});
-    idRef.current = created.id;
-    setChat(created);
-    localStorage.setItem("lastChat", created.id);
-    if (draftRef.current) {
-      await api("/chats/" + created.id + "/draft", "PUT", {
-        draft: draftRef.current,
-      });
-      dirty.current = false;
+    if (creating.current) return creating.current;
+    const task = (async () => {
+      const created = await api<Chat>("/chats", "POST", {});
+      idRef.current = created.id;
+      setChat(created);
+      localStorage.setItem("lastChat", created.id);
+      if (draftRef.current) {
+        const value = draftRef.current,
+          version = draftVersion.current;
+        await saveDraft(created.id, value);
+        if (version === draftVersion.current && idRef.current === created.id)
+          dirty.current = false;
+      }
+      await loadNavigation();
+    })();
+    creating.current = task;
+    try {
+      await task;
+    } finally {
+      if (creating.current === task) creating.current = null;
     }
-    await loadNavigation();
   }
   useEffect(() => {
     void run(async () => {
@@ -387,26 +412,45 @@ function App() {
     }
   }
   async function send() {
-    if (busy || job || !draft.trim()) return;
+    if (
+      !selectedModel ||
+      submitting.current ||
+      job ||
+      opening ||
+      !draftRef.current.trim()
+    )
+      return;
+    submitting.current = true;
+    const sent = draftRef.current,
+      version = draftVersion.current;
     setBusy(true);
-    try {
-      if (!chat) {
-        const c = await api<Chat>("/chats", "POST", {});
-        idRef.current = c.id;
-        setChat(c);
-        localStorage.setItem("lastChat", c.id);
-      }
-      await api("/chats/" + idRef.current + "/send", "POST", {
-        content: draft,
+    const task = (async () => {
+      await ensureComposerChat();
+      const id = idRef.current!;
+      // Drain older saves before the server atomically clears the sent draft.
+      // Autosaves pause while submitting, then persist any newer input.
+      await draftQueue.current.catch(() => {});
+      await api("/chats/" + id + "/send", "POST", {
+        content: sent,
       });
-      setDraft("");
-      draftRef.current = "";
-      dirty.current = false;
+      if (draftVersion.current === version && idRef.current === id) {
+        setDraft("");
+        draftRef.current = "";
+        draftVersion.current++;
+        dirty.current = false;
+      } else dirty.current = true;
       stick.current = true;
-      await refresh();
+      await refresh(id);
       await loadNavigation();
+    })();
+    activeSend.current = task;
+    try {
+      await task;
     } finally {
+      submitting.current = false;
+      activeSend.current = null;
       setBusy(false);
+      await flushDraft();
     }
   }
   const models = providers.flatMap((p) =>
@@ -474,6 +518,7 @@ function App() {
         Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
     );
   function updateDraft(value: string) {
+    draftVersion.current++;
     setDraft(value);
     draftRef.current = value;
     dirty.current = true;
@@ -1290,6 +1335,11 @@ function App() {
             </IconButton>
           )}
           <div className={"composer " + (expanded ? "expanded" : "")}>
+            {!selectedModel && (
+              <p className="muted" role="status">
+                没有可用的当前模型或默认模型，请在设置中添加服务商并选择有效的默认模型。
+              </p>
+            )}
             <textarea
               ref={textarea}
               disabled={opening}
@@ -1476,7 +1526,7 @@ function App() {
                       : "Top K"
                 }
                 value={chat.parameters[key]}
-                max={key === "temperature" ? 2 : key === "top_p" ? 1 : 1000}
+                max={key === "temperature" ? 2 : key === "top_p" ? 1 : 100000}
                 step={key === "top_k" ? 1 : 0.05}
                 onChange={(value) => {
                   const p = { ...chat.parameters };
@@ -1829,6 +1879,7 @@ function App() {
       )}
       <input
         ref={fileRef}
+        aria-label="聊天导入文件"
         className="hidden"
         type="file"
         accept=".json,application/json"
@@ -1849,41 +1900,11 @@ function App() {
         }}
       />
       {pendingImport && (
-        <div className="modal-backdrop">
-          <section
-            className="modal"
-            ref={importDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-label="导入预览"
-          >
-            <h2>导入预览</h2>
-            <p>
-              {pendingImport.preview.count} 个聊天，
-              {pendingImport.preview.branches} 个分叉点，将移除{" "}
-              {pendingImport.preview.attachments} 个附件引用。
-            </p>
-            {pendingImport.preview.failures.map((f) => (
-              <p key={f.index} className="danger-text">
-                第 {f.index} 项：{f.reason}
-              </p>
-            ))}
-            <p className="muted">每次导入都会新增独立会话。</p>
-            <button onClick={() => setPendingImport(null)}>取消</button>
-            <button
-              className="primary"
-              onClick={() =>
-                void run(async () => {
-                  await api("/import", "POST", { data: pendingImport.data });
-                  setPendingImport(null);
-                  await loadNavigation();
-                })
-              }
-            >
-              确认导入有效聊天
-            </button>
-          </section>
-        </div>
+        <ImportDialog
+          {...pendingImport}
+          close={() => setPendingImport(null)}
+          refresh={loadNavigation}
+        />
       )}
     </div>
   );
@@ -2041,10 +2062,9 @@ function RequestPreview({
   const [data, setData] = useState("");
   useEffect(() => {
     void run(async () => {
-      await api("/chats/" + chat.id + "/draft", "PUT", { draft });
       setData(
         JSON.stringify(
-          await api("/chats/" + chat.id + "/preview", "POST", {}),
+          await api("/chats/" + chat.id + "/preview", "POST", { draft }),
           null,
           2,
         ),
@@ -2068,6 +2088,51 @@ type Appearance = {
   collapse: boolean;
   enter: boolean;
 };
+function readAppearance(): Appearance {
+  const defaults: Appearance = {
+    theme: "system",
+    font: 16,
+    width: 800,
+    line: 1.8,
+    collapse: true,
+    enter: true,
+  };
+  try {
+    const raw: unknown = JSON.parse(
+      localStorage.getItem("appearance") ?? "null",
+    );
+    if (!raw || typeof raw !== "object") return defaults;
+    const value = raw as Record<string, unknown>;
+    return {
+      theme:
+        typeof value.theme === "string" &&
+        ["system", "dark", "light"].includes(value.theme)
+          ? value.theme
+          : defaults.theme,
+      font:
+        typeof value.font === "number" && value.font >= 13 && value.font <= 24
+          ? value.font
+          : defaults.font,
+      width:
+        typeof value.width === "number" &&
+        value.width >= 600 &&
+        value.width <= 1200
+          ? value.width
+          : defaults.width,
+      line:
+        typeof value.line === "number" && value.line >= 1.3 && value.line <= 2.4
+          ? value.line
+          : defaults.line,
+      collapse:
+        typeof value.collapse === "boolean"
+          ? value.collapse
+          : defaults.collapse,
+      enter: typeof value.enter === "boolean" ? value.enter : defaults.enter,
+    };
+  } catch {
+    return defaults;
+  }
+}
 function SettingsPanel({
   providers,
   settings,

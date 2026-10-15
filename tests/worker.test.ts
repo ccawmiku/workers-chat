@@ -161,6 +161,17 @@ beforeAll(async () => {
                   },
                   { status: 400 },
                 );
+              if (mode === "nonstream-hang")
+                return new MFResponse(
+                  new ReadableStream({
+                    start(controller) {
+                      controller.enqueue(
+                        new TextEncoder().encode('{"choices":['),
+                      );
+                    },
+                  }),
+                  { headers: { "Content-Type": "application/json" } },
+                );
               if (!payload.stream)
                 return MFResponse.json({
                   choices: [{ message: { content: "非流式回答" } }],
@@ -171,6 +182,24 @@ beforeAll(async () => {
                   },
                 });
               const encode = new TextEncoder();
+              if (mode === "split-crlf" || mode === "done-open") {
+                const events =
+                  'data: {"choices":[{"delta":{"content":"跨块🙂"},"finish_reason":"stop"}]}\r\n\r\n' +
+                  'data: {"choices":[],"usage":{"total_tokens":7}}\r\n\r\n' +
+                  "data: [DONE]\r\n\r\n";
+                const bytes = encode.encode(events);
+                return new MFResponse(
+                  new ReadableStream({
+                    start(controller) {
+                      for (let i = 0; i < bytes.length; i++)
+                        controller.enqueue(bytes.slice(i, i + 1));
+                      if (mode !== "done-open") controller.close();
+                    },
+                  }),
+                  { headers: { "Content-Type": "text/event-stream" } },
+                );
+              }
+              let cancelled = false;
               return new MFResponse(
                 new ReadableStream({
                   async start(controller) {
@@ -191,6 +220,7 @@ beforeAll(async () => {
                       ),
                     );
                     if (delay) await new Promise((r) => setTimeout(r, delay));
+                    if (cancelled) return;
                     controller.enqueue(
                       encode.encode(
                         mode === "partial"
@@ -209,6 +239,9 @@ beforeAll(async () => {
                       ),
                     );
                     controller.close();
+                  },
+                  cancel() {
+                    cancelled = true;
                   },
                 }),
                 { headers: { "Content-Type": "text/event-stream" } },
@@ -336,6 +369,132 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(
       Object.values(regenerated.messages).filter((m) => m.role === "assistant"),
     ).toHaveLength(3);
+  });
+  it("rejects GET mutations and inherited message IDs without changing saved state", async () => {
+    const chat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + chat.id, "PATCH", { unread: true });
+    for (const path of [
+      "/auth/logout",
+      "/chats/" + chat.id + "/seen",
+      "/chats/" + chat.id + "/stop",
+    ])
+      expect((await request(path)).status).toBe(405);
+    expect((await value<{ chat: Chat }>("/chats/" + chat.id)).chat.unread).toBe(
+      true,
+    );
+    expect(
+      (
+        await request("/chats/" + chat.id + "/edit", "POST", {
+          messageId: "__proto__",
+          content: "invalid",
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (await value<{ chat: Chat }>("/chats/" + chat.id)).chat.messages,
+    ).toEqual({});
+  });
+  it("rejects oversized import batches before writing and isolates bad entries", async () => {
+    const rows = Array.from({ length: 15 }, (_, i) => ({
+      title: "Atomic import " + i,
+      messages: [{ id: "u", role: "user", content: "fixture", parentId: null }],
+    }));
+    const before = (await value<Chat[]>("/chats")).length;
+    expect((await request("/import", "POST", { data: rows })).status).toBe(413);
+    expect((await value<Chat[]>("/chats")).length).toBe(before);
+    const result = await value<{ ids: string[]; failures: unknown[] }>(
+      "/import",
+      "POST",
+      { data: [rows[0], { invalid: true }, rows[1]] },
+    );
+    expect(result.ids).toHaveLength(2);
+    expect(result.failures).toHaveLength(1);
+  });
+  it("reports a missing default model as a configuration error and keeps request previews read-only", async () => {
+    const chat = await value<Chat>("/chats", "POST", {}),
+      before = upstreamCalls.length;
+    await value("/chats/" + chat.id, "PATCH", { model: null });
+    await value("/chats/" + chat.id + "/draft", "PUT", {
+      draft: "saved draft",
+    });
+    await value("/settings", "PUT", { ...settings, defaultModel: null });
+    try {
+      for (const path of ["send", "preview"]) {
+        const response = await request(
+          "/chats/" + chat.id + "/" + path,
+          "POST",
+          { content: "do not send", draft: "local preview" },
+        );
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({
+          error: expect.stringContaining("默认模型"),
+        });
+      }
+      expect(upstreamCalls.length).toBe(before);
+    } finally {
+      await value("/settings", "PUT", settings);
+    }
+    const preview = await value<{ messages: { content: string }[] }>(
+      "/chats/" + chat.id + "/preview",
+      "POST",
+      { draft: "local preview" },
+    );
+    expect(preview.messages.at(-1)?.content).toBe("local preview");
+    expect((await value<{ chat: Chat }>("/chats/" + chat.id)).chat.draft).toBe(
+      "saved draft",
+    );
+  });
+  it("parses CRLF and UTF-8 split across chunks, retaining usage before DONE on an open connection", async () => {
+    try {
+      for (const mode of ["split-crlf", "done-open"]) {
+        controls.mode = mode;
+        const chat = await value<Chat>("/chats", "POST", {});
+        await value("/chats/" + chat.id, "PATCH", {
+          title: "Manual SSE fixture",
+        });
+        await value("/chats/" + chat.id + "/send", "POST", {
+          content: "SSE fixture",
+        });
+        const done = await finished(chat.id, 5000);
+        expect(done.messages[done.currentId!]).toMatchObject({
+          status: "complete",
+          content: "跨块🙂",
+          usage: { total_tokens: 7 },
+        });
+      }
+    } finally {
+      controls.mode = "normal";
+    }
+  });
+  it("aborts a pending non-streaming response and saves stopped rather than error", async () => {
+    controls.mode = "nonstream-hang";
+    const calls = upstreamCalls.length;
+    const chat = await value<Chat>("/chats", "POST", {});
+    try {
+      await value("/chats/" + chat.id, "PATCH", { stream: false });
+      const started = await value<{ jobId: string }>(
+        "/chats/" + chat.id + "/send",
+        "POST",
+        { content: "cancel nonstream" },
+      );
+      const until = Date.now() + 3000;
+      while (upstreamCalls.length === calls && Date.now() < until)
+        await new Promise((r) => setTimeout(r, 20));
+      expect(upstreamCalls.length).toBe(calls + 1);
+      await value("/chats/" + chat.id + "/stop", "POST", {});
+      expect((await finished(chat.id)).messages).toMatchObject({
+        [(await value<{ chat: Chat }>("/chats/" + chat.id)).chat.currentId!]: {
+          status: "stopped",
+        },
+      });
+      const bindings = await mf.getBindings<Env>();
+      const coordinator = bindings.PROGRESS.getByName(started.jobId);
+      await expect
+        .poll(() => coordinator.isRunning(), { timeout: 3000 })
+        .toBe(false);
+    } finally {
+      controls.mode = "normal";
+    }
   });
   it("keeps explicit upstream errors and partial output without retrying or downgrading parameters", async () => {
     const chat = await value<Chat>("/chats", "POST", {});

@@ -8,6 +8,11 @@ export class HttpError extends Error {
 }
 const hasSeparateDraft = Symbol("separate-draft");
 export type Document<T> = { value: T; revision: number };
+export type DocumentHeader = {
+  revision: number;
+  kind: string;
+  summary: string;
+};
 export function chunks(value: string, size = 524288): string[] {
   const result: string[] = [];
   for (let i = 0; i < value.length; ) {
@@ -21,11 +26,17 @@ export function chunks(value: string, size = 524288): string[] {
 }
 export class Store {
   constructor(readonly db: D1Database) {}
-  async get<T>(id: string): Promise<Document<T> | null> {
-    const row = await this.db
-      .prepare("SELECT revision,kind,summary FROM documents WHERE id=?")
-      .bind(id)
-      .first<{ revision: number; kind: string; summary: string }>();
+  async get<T>(
+    id: string,
+    header?: DocumentHeader | null,
+  ): Promise<Document<T> | null> {
+    const row =
+      header === undefined
+        ? await this.db
+            .prepare("SELECT revision,kind,summary FROM documents WHERE id=?")
+            .bind(id)
+            .first<DocumentHeader>()
+        : header;
     if (!row) return null;
     const { results } = await this.db
       .prepare(

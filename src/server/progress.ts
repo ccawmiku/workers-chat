@@ -5,6 +5,7 @@ import { runTitle, queueTitle } from "./titles";
 
 /** One SQLite-backed coordinator per generation, never a global singleton. */
 export class Progress extends DurableObject<Env> {
+  private activeController?: AbortController;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(
@@ -23,6 +24,9 @@ export class Progress extends DurableObject<Env> {
   }
   isCancelled() {
     return this.state("cancelled") === 1;
+  }
+  isRunning() {
+    return this.activeController !== undefined;
   }
   checkpoint(content: string, reasoning: string) {
     if (this.isCancelled()) return false;
@@ -73,12 +77,19 @@ export class Progress extends DurableObject<Env> {
     this.ctx.storage.sql.exec(
       "INSERT INTO state VALUES('cancelled',1) ON CONFLICT(key) DO UPDATE SET value=1",
     );
+    this.activeController?.abort();
     return this.output();
   }
   async run(jobId: string) {
+    if (this.activeController) return JSON.stringify({ skipped: true });
+    const controller = new AbortController();
+    this.activeController = controller;
     try {
-      return JSON.stringify(await runGeneration(this.env, jobId, this));
+      return JSON.stringify(
+        await runGeneration(this.env, jobId, this, controller),
+      );
     } finally {
+      this.activeController = undefined;
       await this.ctx.storage.setAlarm(Date.now() + 86400000);
     }
   }

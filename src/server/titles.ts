@@ -238,6 +238,7 @@ export async function runTitle(env: Env, id: string): Promise<string> {
         key = candidate.provider.encryptedKey
           ? await decrypt(candidate.provider.encryptedKey, env.ENCRYPTION_KEY)
           : "";
+        const signal = AbortSignal.timeout(120000);
         const response = await fetch(
           candidate.provider.baseUrl + "/chat/completions",
           {
@@ -259,10 +260,10 @@ export async function runTitle(env: Env, id: string): Promise<string> {
                 { role: "user", content: JSON.stringify(material) },
               ],
             }),
-            signal: AbortSignal.timeout(120000),
+            signal,
           },
         );
-        const text = await limitedText(response, 65536);
+        const text = await limitedText(response, 65536, signal);
         if (!response.ok)
           throw new Error(
             `标题上游 HTTP ${response.status}：${redactError(text, key)}`,

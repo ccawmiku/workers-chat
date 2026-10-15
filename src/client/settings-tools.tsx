@@ -274,11 +274,14 @@ export function KeyReveal({ provider, run }: { provider: Provider; run: Run }) {
     [password, setPassword] = useState(""),
     [key, setKey] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
-    ref = useRef<HTMLElement>(null);
+    ref = useRef<HTMLElement>(null),
+    revealVersion = useRef(0);
   const close = () => {
+    revealVersion.current++;
     setOpen(false);
     setPassword("");
     setKey(null);
+    setBusy(false);
   };
   useDialogFocus(ref, close, open);
   return (
@@ -309,6 +312,7 @@ export function KeyReveal({ provider, run }: { provider: Provider; run: Run }) {
                 onSubmit={(e) => {
                   e.preventDefault();
                   setBusy(true);
+                  const version = ++revealVersion.current;
                   void run(async () => {
                     try {
                       const result = await api<{ apiKey: string }>(
@@ -316,10 +320,13 @@ export function KeyReveal({ provider, run }: { provider: Provider; run: Run }) {
                         "POST",
                         { password },
                       );
-                      setKey(result.apiKey);
+                      if (version === revealVersion.current)
+                        setKey(result.apiKey);
                     } finally {
-                      setPassword("");
-                      setBusy(false);
+                      if (version === revealVersion.current) {
+                        setPassword("");
+                        setBusy(false);
+                      }
                     }
                   });
                 }}

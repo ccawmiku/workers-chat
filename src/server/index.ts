@@ -9,9 +9,9 @@ import {
   selectBranch,
   deleteSubtree,
   forkChat,
-  requestPreview,
   sanitizeUsage,
   uuid,
+  findMessage,
 } from "../shared/chat";
 import { exportSettings, importSettings } from "./backup";
 import { importChats, exportChat } from "../shared/exchange";
@@ -33,16 +33,18 @@ import {
   resetRateLimit,
 } from "./security";
 import {
-  activeJob,
+  readChat,
   jobOutput,
   startGeneration,
   finalize,
   limitedText,
+  previewRequest,
 } from "./generation";
 export { Generation, TitleGeneration } from "./workflow";
 import { queueTitle, titleStatus } from "./titles";
 export { Progress } from "./progress";
 import { obj, str, parameters, validatedSettings } from "./validation";
+import { requireMethod } from "./routing";
 const publicProvider = (p: Provider) => {
   const { encryptedKey, ...safe } = p;
   return { ...safe, hasKey: !!encryptedKey };
@@ -68,6 +70,7 @@ async function api(request: Request, env: Env) {
     path = url.pathname,
     method = request.method,
     store = new Store(env.DB);
+  requireMethod(path, method);
   const body =
     method === "GET" || method === "HEAD" ? {} : await readBody(request);
   if (path === "/api/auth/login" || path === "/api/auth/recover") {
@@ -253,17 +256,20 @@ async function api(request: Request, env: Env) {
     const key = p.encryptedKey
       ? await decrypt(p.encryptedKey, env.ENCRYPTION_KEY)
       : "";
+    const signal = AbortSignal.timeout(20000);
     const response = await fetch(p.baseUrl + "/models", {
       headers: key ? { Authorization: "Bearer " + key } : {},
       redirect: "manual",
-      signal: AbortSignal.timeout(20000),
+      signal,
     });
     if (!response.ok)
       throw new HttpError(
         400,
-        `获取模型失败 HTTP ${response.status}：${redactError(await limitedText(response, 8192), key)}`,
+        `获取模型失败 HTTP ${response.status}：${redactError(await limitedText(response, 8192, signal), key)}`,
       );
-    const list = JSON.parse(await limitedText(response, 2 * 1024 * 1024)) as {
+    const list = JSON.parse(
+      await limitedText(response, 2 * 1024 * 1024, signal),
+    ) as {
       data?: { id: string }[];
     };
     if (
@@ -313,6 +319,7 @@ async function api(request: Request, env: Env) {
           : "",
         started = Date.now(),
         defaults = await settings(store);
+      const signal = AbortSignal.timeout(120000);
       const response = await fetch(p.baseUrl + "/chat/completions", {
         method: "POST",
         redirect: "manual",
@@ -328,9 +335,9 @@ async function api(request: Request, env: Env) {
           ...(effort !== "inherit" ? { reasoning_effort: effort } : {}),
           messages: [{ role: "user", content: "请只回复 OK。" }],
         }),
-        signal: AbortSignal.timeout(120000),
+        signal,
       });
-      const text = await limitedText(response, 65536);
+      const text = await limitedText(response, 65536, signal);
       if (!response.ok)
         throw new HttpError(
           400,
@@ -438,8 +445,12 @@ async function api(request: Request, env: Env) {
         attachments: result.attachments,
         failures: result.failures,
       });
-    for (const chat of result.chats)
-      await store.save(chat.id, "chat", chat, 0, summary(chat));
+    // Plan the whole request before writing. A free-query limit or oversized
+    // batch must not leave an unreported, partially imported set of chats.
+    const statements = result.chats.flatMap((chat) =>
+      store.planSave(chat.id, "chat", chat, 0, summary(chat)),
+    );
+    if (statements.length) await store.commit(statements);
     return Response.json({
       ids: result.chats.map((c) => c.id),
       failures: result.failures,
@@ -453,10 +464,9 @@ async function api(request: Request, env: Env) {
       await store.setDraft(id, str(body.draft));
       return Response.json({ ok: true });
     }
-    const doc = await store.get<Chat>(id);
+    const { doc, job } = await readChat(env, id);
     if (!doc || !doc.value.messages) throw new HttpError(404, "聊天不存在");
-    const chat = doc.value,
-      job = await activeJob(env, id);
+    const chat = doc.value;
     if (action === "" && method === "GET") {
       if (job) {
         const output = await jobOutput(env, job.id);
@@ -528,11 +538,11 @@ async function api(request: Request, env: Env) {
     }
     if (action === "preview")
       return Response.json(
-        requestPreview(
+        previewRequest(
           chat,
           await settings(store),
           await providerList(store),
-          chat.draft,
+          body.draft === undefined ? chat.draft : str(body.draft),
         ).request,
       );
     if (action === "stop") {
@@ -625,7 +635,9 @@ async function api(request: Request, env: Env) {
     }
     if (chat.deleted) throw new HttpError(400, "请先从回收站恢复聊天");
     const message =
-      typeof body.messageId === "string" ? chat.messages[body.messageId] : null;
+      typeof body.messageId === "string"
+        ? findMessage(chat, body.messageId)
+        : null;
     if (action === "send") {
       const text = str(body.content);
       if (!text.trim()) throw new HttpError(400, "消息不能为空");
@@ -674,7 +686,7 @@ async function api(request: Request, env: Env) {
         return Response.json({ jobId }, { status: 202 });
       }
     } else if (action === "select") {
-      selectBranch(chat, str(body.messageId, 128));
+      selectBranch(chat, str(body.messageId, 500));
     } else if (action === "exclude") {
       if (!message) throw new HttpError(404, "消息不存在");
       message.excluded = !message.excluded;

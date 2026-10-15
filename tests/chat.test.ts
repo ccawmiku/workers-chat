@@ -28,6 +28,26 @@ const provider = (id: string): Provider => ({
   ],
 });
 describe("message tree", () => {
+  it("rejects inherited properties and empty parent references as message IDs", () => {
+    for (const id of ["__proto__", "constructor", "toString", ""]) {
+      const chat = newChat();
+      expect(() => addMessage(chat, "user", "invalid", id)).toThrow(
+        "父消息不存在",
+      );
+      expect(() => selectBranch(chat, id)).toThrow("消息不存在");
+      expect(() => editMessage(chat, id, "invalid")).toThrow("消息不存在");
+      expect(() => route(chat, id)).toThrow("消息树引用不存在的父节点");
+      const imported = importChats({
+        history: {
+          messages: {
+            u: { id: "u", role: "user", parentId: id, content: "invalid" },
+          },
+        },
+      });
+      expect(imported.chats).toHaveLength(0);
+      expect(imported.failures[0]?.reason).toBe("消息树引用不存在的父节点");
+    }
+  });
   it("keeps user edits as sibling routes and overwrites assistant edits without losing descendants", () => {
     const chat = newChat(),
       user = addMessage(chat, "user", "original"),
@@ -103,6 +123,27 @@ describe("message tree", () => {
     expect(
       parts.every((p) => new TextEncoder().encode(p).length < 2000000),
     ).toBe(true);
+  });
+  it("counts the pending user message in the same round budget as the actual send", () => {
+    for (const rounds of [1, 2]) {
+      const chat = newChat({ providerId: "one", modelId: "same-model" });
+      addMessage(chat, "user", "first");
+      addMessage(chat, "assistant", "first answer");
+      addMessage(chat, "user", "second");
+      addMessage(chat, "assistant", "second answer");
+      chat.rounds = rounds;
+      const preview = requestPreview(
+        chat,
+        defaultSettings(),
+        [provider("one")],
+        "next question",
+      ).request.messages;
+      addMessage(chat, "user", "next question");
+      const actual = requestPreview(chat, defaultSettings(), [provider("one")])
+        .request.messages;
+      expect(preview).toEqual(actual);
+      expect(preview.filter((m) => m.role === "user")).toHaveLength(rounds);
+    }
   });
 });
 describe("OpenWebUI v0.12.2 exchange", () => {

@@ -76,6 +76,14 @@ export const defaultSettings = (): Settings => ({
   titleModel: null,
 });
 export const uuid = () => crypto.randomUUID();
+export function findMessage(
+  chat: Chat,
+  id: string | null | undefined,
+): Message | undefined {
+  return typeof id === "string" && Object.hasOwn(chat.messages, id)
+    ? chat.messages[id]
+    : undefined;
+}
 export function newChat(
   model: ModelRef | null = null,
   groupId: string | null = null,
@@ -107,10 +115,10 @@ export function newChat(
 export function route(chat: Chat, currentId = chat.currentId): Message[] {
   const result: Message[] = [],
     seen = new Set<string>();
-  while (currentId) {
+  while (currentId !== null) {
     if (seen.has(currentId)) throw new Error("消息树包含循环");
     seen.add(currentId);
-    const msg: Message | undefined = chat.messages[currentId];
+    const msg = findMessage(chat, currentId);
     if (!msg) throw new Error("消息树引用不存在的父节点");
     result.push(msg);
     currentId = msg.parentId;
@@ -137,9 +145,9 @@ export function validateMessageTree(chat: Chat) {
     const pending: string[] = [],
       visiting = new Set<string>();
     let id: string | null = start;
-    while (id && !complete.has(id)) {
+    while (id !== null && !complete.has(id)) {
       if (visiting.has(id)) throw new Error("消息树包含循环");
-      const message: Message | undefined = chat.messages[id];
+      const message = findMessage(chat, id);
       if (!message) throw new Error("消息树引用不存在的父节点");
       visiting.add(id);
       pending.push(id);
@@ -147,7 +155,7 @@ export function validateMessageTree(chat: Chat) {
     }
     for (const id of pending) complete.add(id);
   }
-  if (chat.currentId && !chat.messages[chat.currentId])
+  if (chat.currentId !== null && !findMessage(chat, chat.currentId))
     throw new Error("当前消息不存在");
 }
 export function children(chat: Chat, parentId: string | null) {
@@ -156,7 +164,7 @@ export function children(chat: Chat, parentId: string | null) {
     .sort((a, b) => a.createdAt - b.createdAt);
 }
 export function selectBranch(chat: Chat, id: string) {
-  if (!chat.messages[id]) throw new Error("消息不存在");
+  if (!findMessage(chat, id)) throw new Error("消息不存在");
   const seen = new Set<string>(),
     index = indexChildren(chat);
   while (!seen.has(id)) {
@@ -174,7 +182,8 @@ export function addMessage(
   content: string,
   parentId = chat.currentId,
 ): Message {
-  if (parentId && !chat.messages[parentId]) throw new Error("父消息不存在");
+  if (parentId !== null && !findMessage(chat, parentId))
+    throw new Error("父消息不存在");
   const msg: Message = {
     id: uuid(),
     role,
@@ -189,7 +198,7 @@ export function addMessage(
   return msg;
 }
 export function editMessage(chat: Chat, id: string, content: string): Message {
-  const msg = chat.messages[id];
+  const msg = findMessage(chat, id);
   if (!msg) throw new Error("消息不存在");
   if (msg.role === "assistant") {
     msg.content = content;
@@ -198,7 +207,7 @@ export function editMessage(chat: Chat, id: string, content: string): Message {
   return addMessage(chat, msg.role, content, msg.parentId);
 }
 export function descendants(chat: Chat, id: string): string[] {
-  if (!chat.messages[id]) throw new Error("消息不存在");
+  if (!findMessage(chat, id)) throw new Error("消息不存在");
   const byParent = indexChildren(chat);
   const ids: string[] = [],
     pending = [id],
@@ -272,11 +281,12 @@ export function contextMessages(chat: Chat, draft?: string) {
     (m) => !m.excluded && (chat.includeStopped || m.status !== "stopped"),
   );
   if (chat.rounds && chat.rounds > 0) {
+    const historyRounds = chat.rounds - (draft ? 1 : 0);
     let rounds = 0,
       index = path.length;
-    while (index > 0) {
+    while (historyRounds > 0 && index > 0) {
       index--;
-      if (path[index]!.role === "user" && ++rounds === chat.rounds) break;
+      if (path[index]!.role === "user" && ++rounds === historyRounds) break;
     }
     path = path.slice(index);
   }

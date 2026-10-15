@@ -7,7 +7,13 @@ import {
   addMessage,
   sanitizeUsage,
 } from "../shared/chat";
-import { Store, HttpError, summary, chunks } from "./store";
+import {
+  Store,
+  HttpError,
+  summary,
+  chunks,
+  type DocumentHeader,
+} from "./store";
 import { decrypt, redactError } from "./security";
 export type JobConfig = {
   options: Record<string, unknown>;
@@ -36,8 +42,40 @@ export async function activeJob(env: Env, id: string) {
     .bind(id)
     .first<Job>();
 }
+type ActiveJob = Pick<
+  Job,
+  "id" | "chat_id" | "message_id" | "status" | "created_at"
+>;
+export async function readChat(env: Env, id: string) {
+  // The immutable document version and its active job must come from one SQL
+  // snapshot. Reading them separately can pair old text with a completed job.
+  const row = await env.DB.prepare(
+    "SELECT d.revision,d.kind,d.summary,(SELECT json_object('id',j.id,'chat_id',j.chat_id,'message_id',j.message_id,'status',j.status,'created_at',j.created_at) FROM jobs j WHERE j.chat_id=d.id AND j.status IN ('pending','running') LIMIT 1) AS active_job FROM documents d WHERE d.id=? AND d.kind='chat'",
+  )
+    .bind(id)
+    .first<DocumentHeader & { active_job: string | null }>();
+  return {
+    doc: await new Store(env.DB).get<Chat>(id, row),
+    job: row?.active_job ? (JSON.parse(row.active_job) as ActiveJob) : null,
+  };
+}
 export async function jobOutput(env: Env, id: string) {
   return env.PROGRESS.getByName(id).output();
+}
+export function previewRequest(
+  chat: Chat,
+  settings: Settings,
+  providers: Provider[],
+  draft?: string,
+) {
+  try {
+    return requestPreview(chat, settings, providers, draft);
+  } catch (error) {
+    throw new HttpError(
+      400,
+      error instanceof Error ? error.message : "请求配置无效",
+    );
+  }
 }
 export async function startGeneration(
   env: Env,
@@ -48,7 +86,7 @@ export async function startGeneration(
   seedId?: string,
   clearDraft = false,
 ) {
-  const { model, provider, request } = requestPreview(
+  const { model, provider, request } = previewRequest(
     chat,
     settings,
     providers,
@@ -126,7 +164,7 @@ export async function startGeneration(
 }
 export async function finalize(
   env: Env,
-  job: Job,
+  job: Pick<Job, "id" | "chat_id" | "message_id" | "created_at">,
   status: "complete" | "stopped" | "error",
   content: string,
   reasoning: string,
@@ -172,6 +210,7 @@ export async function runGeneration(
   env: Env,
   id: string,
   progress: import("./progress").Progress,
+  controller: AbortController,
 ) {
   const claimed = await env.DB.prepare(
     "UPDATE jobs SET attempted=1,status='running',updated_at=? WHERE id=? AND attempted=0 AND status='pending' RETURNING *",
@@ -186,7 +225,7 @@ export async function runGeneration(
     key = "",
     usage: Record<string, unknown> | undefined,
     complete = false;
-  const controller = new AbortController();
+  let seedContent = "";
   try {
     const doc = await store.get<Chat>(claimed.chat_id);
     if (!doc) throw new Error("聊天不存在");
@@ -194,6 +233,7 @@ export async function runGeneration(
     if (!target) throw new Error("回答不存在");
     const seed = config.seedId ? doc.value.messages[config.seedId] : null;
     content = seed?.content ?? "";
+    seedContent = content;
     if (!progress.checkpoint(content, reasoning)) {
       await finalize(env, claimed, "stopped", content, reasoning);
       return { stopped: true };
@@ -244,15 +284,20 @@ export async function runGeneration(
     );
     if (!response.ok)
       throw new Error(
-        `上游 HTTP ${response.status}：${redactError(await limitedText(response, 8192), key)}`,
+        `上游 HTTP ${response.status}：${redactError(await limitedText(response, 8192, controller.signal), key)}`,
       );
     if (config.options.stream) {
       if (!response.body) throw new Error("上游没有返回响应流");
       const reader = response.body.getReader(),
         decoder = new TextDecoder();
+      const abortRead = () => {
+        void reader.cancel().catch(() => {});
+      };
+      controller.signal.addEventListener("abort", abortRead, { once: true });
       let buffer = "",
         lastFlush = Date.now() - 2000,
-        finished = false;
+        finished = false,
+        streamDone = false;
       const consume = (block: string) => {
         const data = block
           .split("\n")
@@ -262,6 +307,7 @@ export async function runGeneration(
         if (!data) return;
         if (data === "[DONE]") {
           finished = true;
+          streamDone = true;
           return;
         }
         const event = JSON.parse(data) as {
@@ -299,13 +345,16 @@ export async function runGeneration(
           ]);
           if (timer !== undefined) clearTimeout(timer);
           if (part) {
-            buffer += decoder
-              .decode(part.value, { stream: !part.done })
-              .replace(/\r\n/g, "\n");
+            buffer = (
+              buffer + decoder.decode(part.value, { stream: !part.done })
+            ).replace(/\r\n|\r(?!$)/g, "\n");
+            if (part.done) buffer = buffer.replace(/\r$/, "\n");
             let split: number;
             while ((split = buffer.indexOf("\n\n")) >= 0) {
+              if (split > 1048576) throw new Error("上游 SSE 事件超过安全上限");
               consume(buffer.slice(0, split));
               buffer = buffer.slice(split + 2);
+              if (streamDone) break;
             }
             if (buffer.length > 1048576)
               throw new Error("上游 SSE 事件超过安全上限");
@@ -317,17 +366,18 @@ export async function runGeneration(
             }
             lastFlush = Date.now();
           }
-          if (part?.done) break;
+          if (part?.done || streamDone) break;
           if (part) pending = reader.read();
         }
-        if (buffer.trim()) consume(buffer);
+        if (!streamDone && buffer.trim()) consume(buffer);
         if (!finished) throw new Error("上游连接提前结束，已保存收到的部分");
       } finally {
+        controller.signal.removeEventListener("abort", abortRead);
         await reader.cancel().catch(() => {});
       }
     } else {
       const result = JSON.parse(
-        await limitedText(response, 8 * 1024 * 1024),
+        await limitedText(response, 8 * 1024 * 1024, controller.signal),
       ) as {
         choices?: {
           message?: { content?: string; reasoning_content?: string };
@@ -342,6 +392,17 @@ export async function runGeneration(
     }
     complete = true;
   } catch (e) {
+    if (progress.isCancelled()) {
+      const output = progress.output();
+      await finalize(
+        env,
+        claimed,
+        "stopped",
+        output.hasData ? output.content : seedContent,
+        output.reasoning,
+      );
+      return { stopped: true };
+    }
     const error = redactError(e instanceof Error ? e.message : "生成失败", key);
     await finalize(env, claimed, "error", content, reasoning, error, usage);
     return { status: "error" };
@@ -360,15 +421,25 @@ export async function runGeneration(
     );
   return { status: "complete" };
 }
-export async function limitedText(response: Response, max: number) {
+export async function limitedText(
+  response: Response,
+  max: number,
+  signal?: AbortSignal,
+) {
   if (!response.body) return "";
   const reader = response.body.getReader(),
     decoder = new TextDecoder();
+  const abortRead = () => {
+    void reader.cancel().catch(() => {});
+  };
+  signal?.addEventListener("abort", abortRead, { once: true });
   let size = 0,
     result = "";
   try {
     while (true) {
+      signal?.throwIfAborted();
       const { value, done } = await reader.read();
+      signal?.throwIfAborted();
       if (done) break;
       size += value.length;
       if (size > max) throw new HttpError(413, "响应超过安全上限");
@@ -376,6 +447,7 @@ export async function limitedText(response: Response, max: number) {
     }
     return result + decoder.decode();
   } finally {
+    signal?.removeEventListener("abort", abortRead);
     await reader.cancel().catch(() => {});
   }
 }

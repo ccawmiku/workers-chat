@@ -1,0 +1,30 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.env
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+secrets/
+*.pem
+*.key
+
+# Dependencies, build output and runtime state
+node_modules/
+dist/
+build/
+.wrangler/
+.cache/
+coverage/
+playwright-report/
+test-results/
+*.log
+
+# Editors and OS metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+__pycache__/
+*.pyc

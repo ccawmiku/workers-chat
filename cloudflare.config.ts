@@ -29,7 +29,10 @@ export default defineConfig({
   worker: {
     ...workerDefinition,
     env: {
-      DB: bindings.d1({ name: "workers-chat" }),
+      DB: bindings.d1({
+        name: "workers-chat",
+        id: "b10d9d32-d892-4aad-80a1-17b6b208fa45",
+      }),
       PROGRESS: bindings.durableObject({
         worker: workerDefinition,
         exportName: "Progress",

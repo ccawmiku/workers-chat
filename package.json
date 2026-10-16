@@ -30,6 +30,7 @@
   },
   "homepage": "https://github.com/ccawmiku/workers-chat#readme",
   "dependencies": {
+    "@lucide/svelte": "1.57.0",
     "@xyflow/svelte": "0.1.39",
     "lucide-react": "^1.57.0",
     "react": "^19.3.1",

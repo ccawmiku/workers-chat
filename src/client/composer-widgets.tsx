@@ -1,6 +1,12 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronRight, RotateCcw, Unplug } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  RotateCcw,
+  Unplug,
+  UserRound,
+} from "lucide-react";
 import type { Effort } from "../shared/chat";
 import { useDialogFocus } from "./controls";
 
@@ -202,15 +208,31 @@ export function EffortControl({
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false),
     [current, setCurrent] = useState(value);
-  useEffect(() => setCurrent(value), [value]);
+  const pending = useRef(0),
+    writes = useRef(Promise.resolve());
+  useEffect(() => {
+    if (!pending.current) setCurrent(value);
+  }, [value]);
+  const persist = (next: Effort) => {
+    setCurrent(next);
+    pending.current++;
+    writes.current = writes.current
+      .catch(() => {})
+      .then(async () => {
+        try {
+          await onChange(next);
+        } finally {
+          pending.current--;
+        }
+      });
+  };
   const explicit = useRef<Effort>(value === "inherit" ? "max" : value);
   if (current !== "inherit") explicit.current = current;
   const inherited = current === "inherit";
   const index = efforts.indexOf(inherited ? explicit.current : current);
   const commit = (position: number) => {
     const next = efforts[position]!;
-    setCurrent(next);
-    void onChange(next);
+    persist(next);
   };
   return (
     <div className="effort-control">
@@ -222,7 +244,7 @@ export function EffortControl({
         aria-haspopup="dialog"
         onClick={() => setOpen(!open)}
       >
-        <span>{effortLabels[value]}</span>
+        <span>{effortLabels[current]}</span>
         <ChevronDown size={12} />
       </button>
       <FloatingPanel
@@ -242,8 +264,7 @@ export function EffortControl({
             aria-pressed={inherited}
             onClick={() => {
               const next = inherited ? explicit.current : "inherit";
-              setCurrent(next);
-              void onChange(next);
+              persist(next);
             }}
           >
             <Unplug size={17} />
@@ -337,7 +358,9 @@ export function AccountMenu({
         onClick={() => setOpen(!open)}
       >
         <span className="du-avatar du-avatar-placeholder">
-          <span className="account-avatar">AI</span>
+          <span className="account-avatar">
+            <UserRound size={17} aria-hidden="true" />
+          </span>
         </span>
         <span className="account-name">
           <strong>个人账户</strong>
@@ -356,7 +379,9 @@ export function AccountMenu({
       >
         <div className="account-summary">
           <span className="du-avatar du-avatar-placeholder">
-            <span className="account-avatar">AI</span>
+            <span className="account-avatar">
+              <UserRound size={17} aria-hidden="true" />
+            </span>
           </span>
           <div>
             <strong>个人账户</strong>

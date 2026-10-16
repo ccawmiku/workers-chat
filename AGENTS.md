@@ -39,6 +39,8 @@
 - 本项目使用 `du-` 前缀，关闭 Tailwind preflight；不要让全局重置或同名样式破坏 OpenWebUI/Svelte Flow 的节点、端口和连线。daisyUI 的 `--border` 是宽度，现有颜色用 `--line-color`，不能混用。
 - 用量圈保留已验证的单 SVG，不能为了换组件重新引入两层圆错位。已有可调整宽度的侧栏和自动主题逻辑可继续复用，避免重复状态。
 
+- 所有界面图标统一使用 Lucide：React 使用 lucide-react，Svelte 使用 @lucide/svelte。不再手写星形/箭头等字形或混用其他图标库。用量进度、图形连线、模型正文中的 emoji 属于内容/数据可视化，保留其功能。
+
 ## 凭证与安全
 
 - 不在代码、提交、问题、PR、截图、日志、测试报告或聊天回答里输出真实 API Key、登录密码、恢复码、Cloudflare token。

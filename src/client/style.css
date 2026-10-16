@@ -207,7 +207,7 @@ small {
   text-align: left;
   color: var(--text);
 }
-.new-chat span {
+.new-chat .new-chat-plus {
   margin-left: auto;
   color: var(--muted);
 }
@@ -2056,4 +2056,9 @@ input.du-toggle {
 .account-popover .du-menu li > button {
   min-height: 40px;
   gap: 12px;
+}
+
+.brand-mark,
+.welcome-symbol {
+  flex-shrink: 0;
 }

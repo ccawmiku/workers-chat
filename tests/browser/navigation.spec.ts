@@ -178,6 +178,11 @@ for (const mobile of [false, true])
       await expect.poll(() => edgeError(page)).toBeLessThan(2);
     }
     await page.getByRole("button", { name: "fit view", exact: true }).click();
+    const controls = page.locator(".svelte-flow__controls button svg");
+    expect(await controls.count()).toBeGreaterThanOrEqual(6);
+    for (const icon of await controls.all())
+      await expect(icon).toHaveAttribute("class", /lucide/);
+
     await page.locator('.svelte-flow__node[data-id="u2"]').click();
     if (mobile) await expect(page.locator(".parameters")).toHaveCount(0);
     else

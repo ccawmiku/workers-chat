@@ -12,12 +12,17 @@
 		Controls,
 		SvelteFlow,
 		BackgroundVariant,
-		ControlButton
+		ControlButton, useSvelteFlow, useStore
 	} from '@xyflow/svelte';
-	import AlignVertical from '../icons/AlignVertical.svelte';
-	import AlignHorizontal from '../icons/AlignHorizontal.svelte';
-	import Pin from '../icons/Pin.svelte';
-	import PinSlash from '../icons/PinSlash.svelte';
+  import AlignVertical from '@lucide/svelte/icons/align-vertical-distribute-center';
+  import AlignHorizontal from '@lucide/svelte/icons/align-horizontal-distribute-center';
+  import Pin from '@lucide/svelte/icons/pin';
+  import PinSlash from '@lucide/svelte/icons/pin-off';
+  import Plus from '@lucide/svelte/icons/plus';
+  import Minus from '@lucide/svelte/icons/minus';
+  import Maximize from '@lucide/svelte/icons/maximize';
+  const { zoomIn, zoomOut, fitView } = useSvelteFlow();
+  const { viewport, minZoom, maxZoom } = useStore();
 
 	export let nodes: import('svelte/store').Writable<import('@xyflow/svelte').Node[]>;
 	export let nodeTypes: import('@xyflow/svelte').NodeTypes;
@@ -43,28 +48,31 @@
 	nodesDraggable={false}
 	on:nodeclick={(e) => dispatch('nodeclick', e.detail)}
 >
-	<Controls showLock={false}>
+	<Controls showLock={false} showZoom={false} showFitView={false}>
+    <ControlButton title="zoom in" aria-label="zoom in" disabled={$viewport.zoom >= $maxZoom} on:click={() => zoomIn()}><Plus size={16}/></ControlButton>
+    <ControlButton title="zoom out" aria-label="zoom out" disabled={$viewport.zoom <= $minZoom} on:click={() => zoomOut()}><Minus size={16}/></ControlButton>
+    <ControlButton title="fit view" aria-label="fit view" on:click={() => fitView()}><Maximize size={16}/></ControlButton>
 		<ControlButton
 			on:click={() => (pinned = !pinned)}
 			title={pinned ? $i18n.t('Viewport Pinned') : $i18n.t('Viewport Unpinned')}
 		>
 			{#if pinned}
-				<Pin />
+				<Pin size={16}/>
 			{:else}
-				<PinSlash />
+				<PinSlash size={16}/>
 			{/if}
 		</ControlButton>
 		<ControlButton
 			on:click={() => setLayoutDirection('vertical')}
 			title={$i18n.t('Vertical Layout')}
 		>
-			<AlignVertical className="size-4" />
+			<AlignVertical size={16}/>
 		</ControlButton>
 		<ControlButton
 			on:click={() => setLayoutDirection('horizontal')}
 			title={$i18n.t('Horizontal Layout')}
 		>
-			<AlignHorizontal className="size-4" />
+			<AlignHorizontal size={16}/>
 		</ControlButton>
 	</Controls>
 	<Background variant={BackgroundVariant.Dots} />

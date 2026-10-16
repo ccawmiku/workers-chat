@@ -11,6 +11,8 @@ import React, {
 import { createRoot } from "react-dom/client";
 import {
   Plus,
+  Sparkles,
+  Pin,
   Settings2,
   PanelLeft,
   SlidersHorizontal,
@@ -762,7 +764,7 @@ function App() {
         ) : c.unread ? (
           <span className="unread" />
         ) : c.pinned ? (
-          <span className="muted">⌃</span>
+          <Pin size={13} className="muted" />
         ) : null}
       </button>
       <ChatListMenu
@@ -831,7 +833,7 @@ function App() {
           }}
         />
         <div className="brand">
-          <span className="brand-mark">✦</span>
+          <Sparkles className="brand-mark" size={25} aria-hidden="true" />
           <strong>在线AI</strong>
           <IconButton label="收起导航" onClick={() => setSidebar(false)}>
             <PanelLeft size={18} />
@@ -843,7 +845,8 @@ function App() {
           onClick={() => void run(() => create())}
         >
           <Pencil size={17} />
-          新聊天<span>＋</span>
+          新聊天
+          <Plus className="new-chat-plus" size={14} aria-hidden="true" />
         </button>
         <div className="nav-list">
           <section className="archive-folder" aria-label="归档文件夹">
@@ -1112,7 +1115,11 @@ function App() {
         >
           {!path.length ? (
             <div className="welcome">
-              <span className="welcome-symbol">✦</span>
+              <Sparkles
+                className="welcome-symbol"
+                size={44}
+                aria-hidden="true"
+              />
               <h1>有什么想聊的？</h1>
               <p>让想法从这里开始。</p>
               {!models.some((m) => m.enabled) && (
@@ -1546,6 +1553,7 @@ function App() {
                   )}
                 </div>
                 <EffortControl
+                  key={chat?.id ?? "new-chat"}
                   value={chat?.effort ?? "max"}
                   model={
                     selectedModel
@@ -2012,7 +2020,7 @@ function Login({
           });
         }}
       >
-        <span className="welcome-symbol">✦</span>
+        <Sparkles className="welcome-symbol" size={44} aria-hidden="true" />
         <h1>在线AI</h1>
         <p className="muted">
           {recovery ? "使用离线恢复码重置访问密码" : "登录，继续你的思考。"}

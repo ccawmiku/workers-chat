@@ -192,6 +192,23 @@ for (const mobile of [false, true]) {
     await slider.press("Home");
     await expect(page.locator(".effort-trigger")).toHaveText("无");
     await page.getByRole("button", { name: "跟随接口", exact: true }).click();
+    await slider.focus();
+    await slider.press("Home");
+    await expect(page.locator(".effort-trigger")).toHaveText("无");
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          async (id) =>
+            (
+              (await (await fetch("/api/chats/" + id)).json()) as {
+                chat: { effort: string };
+              }
+            ).chat.effort,
+          id,
+        ),
+      )
+      .toBe("none");
+    await page.getByRole("button", { name: "跟随接口", exact: true }).click();
     await expect(page.locator(".effort-trigger")).toHaveText("跟随接口");
     await expect(page.locator(".effort-track")).toHaveClass(/inherited/);
     await expect(

@@ -7,3 +7,5 @@
 Cloudflare 官方技能、文档和运行时用于 API/生命周期/配置核对，版本记录见 [RUNTIME.md](RUNTIME.md)。OpenWebUI v0.12.2 的 Overview Svelte 组件已按用户后续要求复用于分支图，保留源码头、许可及设置内说明（见 `src/vendor/open-webui` 和 `public/licenses`）；未复制 Python 后端或 logo。OpenWebUI 自身使用带品牌条款的 Open WebUI License，本项目不将其代码重新标成 MIT/ISC，也不声称可直接在 Workers 运行其后端。
 
 本轮加入 daisyUI 5.7.50、Tailwind CSS/@tailwindcss/vite 4.3.3，均按 MIT 许可使用；包内版权/许可随依赖保留。仅在构建时编译样式，无运行时 CDN。
+
+图标后续统一：新增 @lucide/svelte 1.57.0（ISC），与 React 图标使用同一 Lucide 图标集；替换概述原布局/固定图标，保留 Open WebUI 来源和适配记录。

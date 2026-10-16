@@ -2,6 +2,9 @@ import React, { useState } from "react";
 import type { Chat, Message, Provider } from "../shared/chat";
 import { api } from "./api";
 import { ParameterControl } from "./controls";
+import { directFetch, useDeviceConnection } from "./device-connection";
+import { readCompletion, redactUpstreamError } from "../shared/completion";
+import type { Settings } from "../shared/chat";
 type Run = (fn: () => Promise<void>) => Promise<void>;
 export function ModelControls({
   provider,
@@ -14,6 +17,7 @@ export function ModelControls({
   run: Run;
   refresh: () => Promise<void>;
 }) {
+  const connection = useDeviceConnection();
   const [effort, setEffort] = useState("max"),
     [busy, setBusy] = useState(false),
     [result, setResult] = useState("");
@@ -64,12 +68,59 @@ export function ModelControls({
           setResult("");
           void run(async () => {
             try {
-              const r = await api<{ elapsedMs: number }>(
-                "/providers/" + provider.id + "/test",
-                "POST",
-                { modelId: model.id, effort },
-              );
-              setResult(`连接成功 · ${(r.elapsedMs / 1000).toFixed(1)} 秒`);
+              let elapsedMs: number;
+              if (connection.enabled) {
+                const key = await connection.key({
+                  providerId: provider.id,
+                  baseUrl: provider.baseUrl,
+                  hasKey: !!(provider as Provider & { hasKey?: boolean })
+                    .hasKey,
+                });
+                const defaults = await api<Settings>("/settings"),
+                  started = Date.now();
+                try {
+                  const signal = AbortSignal.timeout(120000);
+                  const response = await directFetch(
+                    provider.baseUrl,
+                    "/chat/completions",
+                    key,
+                    {
+                      model: model.id,
+                      stream: false,
+                      ...defaults.parameters,
+                      ...model.parameters,
+                      ...(effort !== "inherit"
+                        ? { reasoning_effort: effort }
+                        : {}),
+                      messages: [{ role: "user", content: "请只回复 OK。" }],
+                    },
+                    signal,
+                  );
+                  await readCompletion(
+                    response,
+                    false,
+                    signal,
+                    { content: "", reasoning: "" },
+                    () => {},
+                  );
+                  elapsedMs = Date.now() - started;
+                } catch (error) {
+                  throw Error(
+                    redactUpstreamError(
+                      error instanceof Error ? error.message : "直连测试失败",
+                      key,
+                    ),
+                  );
+                }
+              } else {
+                const r = await api<{ elapsedMs: number }>(
+                  "/providers/" + provider.id + "/test",
+                  "POST",
+                  { modelId: model.id, effort },
+                );
+                elapsedMs = r.elapsedMs;
+              }
+              setResult(`连接成功 · ${(elapsedMs / 1000).toFixed(1)} 秒`);
             } finally {
               setBusy(false);
             }

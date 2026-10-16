@@ -1,3 +1,5 @@
+import type { DirectTitleTask } from "../shared/direct";
+import { renderTitlePrompt, extractTitle } from "../shared/title-template";
 import {
   type Chat,
   type Provider,
@@ -28,15 +30,15 @@ type Candidate = {
   parameters: Chat["parameters"];
 };
 type TitleConfig = {
+  transport?: "device";
   titleRevision: string;
   prompt: string;
-  scope: Chat["titleScope"];
   effort: Chat["effort"];
   candidates: Candidate[];
 };
 export async function titleStatus(env: Env, chatId: string) {
   const row = await env.DB.prepare(
-    "SELECT id,status,error,created_at FROM title_jobs WHERE chat_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
+    "SELECT id,status,error,created_at,updated_at,config FROM title_jobs WHERE chat_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
   )
     .bind(chatId)
     .first<{
@@ -44,9 +46,29 @@ export async function titleStatus(env: Env, chatId: string) {
       status: string;
       error: string | null;
       created_at: number;
+      updated_at: number;
+      config: string;
     }>();
   if (!row) return null;
+  const transport = row.config
+    ? (JSON.parse(row.config) as TitleConfig).transport
+    : undefined;
   if (
+    transport === "device" &&
+    ["pending", "running"].includes(row.status) &&
+    Date.now() - row.updated_at > 90000
+  ) {
+    await finishTitleJob(
+      env,
+      row.id,
+      "error",
+      "标题设备直连已中断，请手动重试",
+    );
+    row.status = "error";
+    row.error = "标题设备直连已中断，请手动重试";
+  }
+  if (
+    transport !== "device" &&
     ["pending", "running"].includes(row.status) &&
     Date.now() - row.created_at > 15000
   ) {
@@ -68,9 +90,14 @@ export async function titleStatus(env: Env, chatId: string) {
       // A transient lookup failure cannot justify replaying a model request.
     }
   }
-  return { id: row.id, status: row.status, error: row.error };
+  return { id: row.id, status: row.status, error: row.error, transport };
 }
-export async function queueTitle(env: Env, chatId: string, manual = false) {
+export async function queueTitle(
+  env: Env,
+  chatId: string,
+  manual = false,
+  transport?: "device",
+) {
   const store = new Store(env.DB),
     doc = await store.get<Chat>(chatId);
   if (!doc || doc.value.deleted) return null;
@@ -135,9 +162,11 @@ export async function queueTitle(env: Env, chatId: string, manual = false) {
   }
   const id = uuid(),
     config: TitleConfig = {
+      transport:
+        transport ??
+        (manual ? undefined : chat.messages[selected]?.request?.transport),
       titleRevision: chat.titleRevision ?? "",
       prompt: settings.titlePrompt,
-      scope: manual ? chat.titleScope : "branch",
       effort: chat.effort,
       candidates,
     };
@@ -162,6 +191,7 @@ export async function queueTitle(env: Env, chatId: string, manual = false) {
     }
     throw e;
   }
+  if (config.transport === "device") return id;
   try {
     await env.TITLES.create({ id, params: { jobId: id } });
   } catch {
@@ -181,24 +211,6 @@ export async function finishTitleJob(
   )
     .bind(status, error, Date.now(), id)
     .run();
-}
-export function titleMaterial(
-  chat: Chat,
-  selection: string,
-  scope: Chat["titleScope"],
-) {
-  let path = route(chat, selection).filter(
-    (m) => !m.excluded && (m.role === "user" || m.role === "assistant"),
-  );
-  if (scope === "first") {
-    const start = path.findIndex((m) => m.role === "user");
-    const answer = path.findIndex(
-      (m, i) => i > start && m.role === "assistant",
-    );
-    path =
-      start < 0 ? [] : path.slice(start, answer < 0 ? start + 1 : answer + 1);
-  }
-  return path.map((m) => ({ role: m.role, content: m.content }));
 }
 export async function runTitle(env: Env, id: string): Promise<string> {
   const job = await env.DB.prepare(
@@ -229,7 +241,7 @@ export async function runTitle(env: Env, id: string): Promise<string> {
       await finishTitleJob(env, id, "superseded");
       return "superseded";
     }
-    const material = titleMaterial(doc.value, job.message_id, config.scope);
+    const prompt = renderTitlePrompt(config.prompt, doc.value, job.message_id);
     let title = "",
       error = "没有可用的标题模型或默认聊天模型";
     for (const candidate of config.candidates) {
@@ -255,10 +267,7 @@ export async function runTitle(env: Env, id: string): Promise<string> {
               ...(config.effort !== "inherit"
                 ? { reasoning_effort: config.effort }
                 : {}),
-              messages: [
-                { role: "system", content: config.prompt },
-                { role: "user", content: JSON.stringify(material) },
-              ],
+              messages: [{ role: "user", content: prompt }],
             }),
             signal,
           },
@@ -271,9 +280,7 @@ export async function runTitle(env: Env, id: string): Promise<string> {
         const data = JSON.parse(text) as {
           choices?: { message?: { content?: string } }[];
         };
-        title = data.choices?.[0]?.message?.content?.trim() ?? "";
-        if (!title || title.length > 500)
-          throw new Error("标题为空或超过 500 个字符");
+        title = extractTitle(data.choices?.[0]?.message?.content ?? "");
         break;
       } catch (e) {
         error = redactError(
@@ -284,40 +291,7 @@ export async function runTitle(env: Env, id: string): Promise<string> {
       }
     }
     if (!title) throw new Error(error);
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const latest = await store.get<Chat>(job.chat_id);
-      if (
-        !latest ||
-        latest.value.deleted ||
-        (latest.value.titleRevision ?? "") !== config.titleRevision ||
-        (!job.manual && latest.value.titleManual)
-      ) {
-        await finishTitleJob(env, id, "superseded");
-        return "superseded";
-      }
-      latest.value.title = title;
-      latest.value.titleManual = !!job.manual;
-      latest.value.titleRevision = uuid();
-      if (job.manual) latest.value.updatedAt = Date.now();
-      try {
-        await store.save(
-          job.chat_id,
-          "chat",
-          latest.value,
-          latest.revision,
-          summary(latest.value),
-          [
-            env.DB.prepare(
-              "UPDATE title_jobs SET status='complete',config='{}',updated_at=? WHERE id=?",
-            ).bind(Date.now(), id),
-          ],
-        );
-        return "complete";
-      } catch (e) {
-        if (!(e instanceof HttpError && e.status === 409) || attempt === 3)
-          throw e;
-      }
-    }
+    return await applyTitle(env, job, config, title);
   } catch (e) {
     await finishTitleJob(
       env,
@@ -327,4 +301,117 @@ export async function runTitle(env: Env, id: string): Promise<string> {
     );
   }
   return "error";
+}
+
+async function applyTitle(
+  env: Env,
+  job: TitleJob,
+  config: TitleConfig,
+  title: string,
+) {
+  const store = new Store(env.DB);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const latest = await store.get<Chat>(job.chat_id);
+    if (
+      !latest ||
+      latest.value.deleted ||
+      (latest.value.titleRevision ?? "") !== config.titleRevision ||
+      (!job.manual && latest.value.titleManual)
+    ) {
+      await finishTitleJob(env, job.id, "superseded");
+      return "superseded";
+    }
+    latest.value.title = title;
+    latest.value.titleManual = !!job.manual;
+    latest.value.titleRevision = uuid();
+    if (job.manual) latest.value.updatedAt = Date.now();
+    try {
+      await store.save(
+        job.chat_id,
+        "chat",
+        latest.value,
+        latest.revision,
+        summary(latest.value),
+        [
+          env.DB.prepare(
+            "UPDATE title_jobs SET status='complete',config='{}',updated_at=? WHERE id=?",
+          ).bind(Date.now(), job.id),
+        ],
+      );
+      return "complete";
+    } catch (e) {
+      if (!(e instanceof HttpError && e.status === 409) || attempt === 3)
+        throw e;
+    }
+  }
+  return "error";
+}
+export async function claimDeviceTitle(
+  env: Env,
+  id: string,
+): Promise<DirectTitleTask | null> {
+  const job = await env.DB.prepare(
+    "UPDATE title_jobs SET attempted=1,status='running',updated_at=? WHERE id=? AND status='pending' AND attempted=0 AND json_extract(config,'$.transport')='device' RETURNING *",
+  )
+    .bind(Date.now(), id)
+    .first<TitleJob>();
+  if (!job) return null;
+  const config = JSON.parse(job.config) as TitleConfig;
+  const doc = await new Store(env.DB).get<Chat>(job.chat_id);
+  if (!doc) throw new HttpError(404, "聊天不存在");
+  const prompt = renderTitlePrompt(config.prompt, doc.value, job.message_id);
+  return {
+    jobId: id,
+    chatId: job.chat_id,
+    candidates: config.candidates.map((candidate) => ({
+      providerId: candidate.model.providerId,
+      baseUrl: candidate.provider.baseUrl,
+      hasKey: !!candidate.provider.encryptedKey,
+      request: {
+        model: candidate.model.modelId,
+        stream: false,
+        ...candidate.parameters,
+        ...(config.effort !== "inherit"
+          ? { reasoning_effort: config.effort }
+          : {}),
+        messages: [{ role: "user", content: prompt }],
+      },
+    })),
+  };
+}
+export async function finishDeviceTitle(
+  env: Env,
+  id: string,
+  body: Record<string, unknown>,
+) {
+  const job = await env.DB.prepare(
+    "SELECT * FROM title_jobs WHERE id=? AND status='running'",
+  )
+    .bind(id)
+    .first<TitleJob>();
+  if (!job) throw new HttpError(409, "标题任务已结束");
+  const config = JSON.parse(job.config) as TitleConfig;
+  if (config.transport !== "device")
+    throw new HttpError(400, "不是设备直连标题");
+  if (body.heartbeat === true) {
+    await env.DB.prepare(
+      "UPDATE title_jobs SET updated_at=? WHERE id=? AND status='running'",
+    )
+      .bind(Date.now(), id)
+      .run();
+    return { ok: true };
+  }
+  if (typeof body.content === "string")
+    return {
+      status: await applyTitle(env, job, config, extractTitle(body.content)),
+    };
+  let error = typeof body.error === "string" ? body.error : "标题生成失败";
+  for (const candidate of config.candidates) {
+    const key = candidate.provider.encryptedKey
+      ? await decrypt(candidate.provider.encryptedKey, env.ENCRYPTION_KEY)
+      : "";
+    error = redactError(error, key);
+  }
+  await finishTitleJob(env, id, "error", error);
+  return { status: "error" };
 }

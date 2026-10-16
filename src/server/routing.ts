@@ -1,6 +1,8 @@
 import { HttpError } from "./store";
 
 const routes: [RegExp, string[]][] = [
+  [/^\/api\/device\/titles\/[^/]+\/(claim|finish)$/, ["POST"]],
+  [/^\/api\/device\/jobs\/[^/]+\/(checkpoint|finish)$/, ["POST"]],
   [
     /^\/api\/auth\/(login|recover|logout|password|revoke|recovery-code)$/,
     ["POST"],
@@ -21,7 +23,7 @@ const routes: [RegExp, string[]][] = [
   [/^\/api\/chats\/[^/]+\/draft$/, ["PUT"]],
   [/^\/api\/chats\/[^/]+\/permanent$/, ["DELETE"]],
   [
-    /^\/api\/chats\/[^/]+\/(send|seen|stop|title|regenerate|retry|continue|edit|select|exclude|fork)$/,
+    /^\/api\/chats\/[^/]+\/(send|seen|stop|title|regenerate|retry|continue|edit|select|exclude|fork|duplicate)$/,
     ["POST"],
   ],
   [/^\/api\/import(?:\/preview)?$/, ["POST"]],

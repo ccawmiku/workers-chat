@@ -1,3 +1,4 @@
+import { DEFAULT_TITLE_PROMPT } from "./default-title-prompt";
 export type Role = "user" | "assistant" | "system";
 export type Effort = "inherit" | "none" | "low" | "medium" | "high" | "max";
 export type Parameters = {
@@ -17,7 +18,12 @@ export type Message = {
   status?: "complete" | "running" | "stopped" | "error";
   model?: ModelRef;
   usage?: Record<string, unknown>;
-  request?: { parameters: Parameters; effort: Effort; stream: boolean };
+  request?: {
+    parameters: Parameters;
+    effort: Effort;
+    stream: boolean;
+    transport?: "device";
+  };
   elapsedMs?: number;
   error?: string;
   raw?: Record<string, unknown>;
@@ -45,7 +51,8 @@ export type Chat = {
   includeStopped: boolean;
   rounds?: number;
   templateMode: "replace" | "append";
-  titleScope: "branch" | "first";
+  /** Legacy imported field, no longer controls title requests. */
+  titleScope?: "branch" | "first";
   raw?: Record<string, unknown>;
 };
 export type Provider = {
@@ -72,7 +79,7 @@ export const defaultSettings = (): Settings => ({
   defaultModel: null,
   parameters: {},
   templates: [],
-  titlePrompt: "为以下对话生成一个简短中文标题，只返回标题。",
+  titlePrompt: DEFAULT_TITLE_PROMPT,
   titleModel: null,
 });
 export const uuid = () => crypto.randomUUID();
@@ -109,7 +116,6 @@ export function newChat(
     system: [],
     includeStopped: true,
     templateMode: "replace",
-    titleScope: "branch",
   };
 }
 export function route(chat: Chat, currentId = chat.currentId): Message[] {
@@ -260,6 +266,32 @@ export function forkChat(chat: Chat, id: string, titles: string[]): Chat {
   copy.draft = "";
   copy.createdAt = copy.updatedAt = Date.now();
   copy.deleted = copy.archived = copy.unread = false;
+  return copy;
+}
+export function duplicateChat(chat: Chat, titles: string[]): Chat {
+  const copy = structuredClone(chat);
+  const ids = new Map(Object.keys(chat.messages).map((id) => [id, uuid()]));
+  copy.messages = Object.fromEntries(
+    Object.values(chat.messages).map((message) => {
+      const cloned = structuredClone(message);
+      cloned.id = ids.get(message.id)!;
+      cloned.parentId = message.parentId ? ids.get(message.parentId)! : null;
+      return [cloned.id, cloned];
+    }),
+  );
+  copy.id = uuid();
+  copy.currentId = chat.currentId ? ids.get(chat.currentId)! : null;
+  const base = chat.title.replace(/ · 副本(?:\d+)?$/, "");
+  let index = 1;
+  do {
+    copy.title = base + " · 副本" + (index === 1 ? "" : index);
+    index++;
+  } while (titles.includes(copy.title));
+  copy.titleManual = true;
+  copy.titleRevision = uuid();
+  copy.createdAt = copy.updatedAt = Date.now();
+  copy.pinned = copy.archived = copy.deleted = copy.unread = false;
+  copy.draft = "";
   return copy;
 }
 export function resolveModel(

@@ -212,11 +212,27 @@ test("settings restore, model identity, template copies, groups and mobile long 
     ),
   ).toBeNull();
   await page.getByRole("button", { name: "账户菜单", exact: true }).click();
-  await page.getByRole("button", { name: "多选聊天", exact: true }).click();
-  await expect(page.getByText("已选 0 项", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "全选当前列表", exact: true }).click();
-  await expect(page.locator(".batch-bar")).not.toContainText("已选 0 项");
-  await page.getByRole("button", { name: "取消多选", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "多选聊天", exact: true }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page
+    .locator(".chat-row.selected")
+    .getByRole("button", { name: /^管理 / })
+    .click();
+  const chatMenu = page.getByRole("dialog", { name: "对话菜单" });
+  await expect(chatMenu.getByRole("button")).toHaveText([
+    "导出 JSON",
+    "重命名",
+    "重新生成标题",
+    "置顶",
+    "复制",
+    "归档",
+    "删除",
+  ]);
+  await chatMenu.getByRole("button", { name: "复制", exact: true }).click();
+  await expect(page.locator(".header-title")).toContainText("副本");
+  await expect(page.locator(".batch-bar")).toHaveCount(0);
   const mobileId = await page.evaluate(async () => {
     const data = {
       title: "手机分支操作",

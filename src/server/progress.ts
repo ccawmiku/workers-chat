@@ -53,6 +53,18 @@ export class Progress extends DurableObject<Env> {
     });
     return true;
   }
+  async deviceCheckpoint(sequence: number, content: string, reasoning: string) {
+    if (this.isCancelled()) return { accepted: false, cancelled: true };
+    if (this.state("updatedAt") && sequence <= this.state("deviceSequence"))
+      return { accepted: false, cancelled: false };
+    this.checkpoint(content, reasoning);
+    this.ctx.storage.sql.exec(
+      "INSERT INTO state VALUES('deviceSequence',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      sequence,
+    );
+    await this.ctx.storage.setAlarm(Date.now() + 86400000);
+    return { accepted: true, cancelled: false };
+  }
   output() {
     const rows = this.ctx.storage.sql
       .exec<{

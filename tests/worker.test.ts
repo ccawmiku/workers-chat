@@ -23,10 +23,12 @@ async function request(
   body?: unknown,
   useCookie = true,
   origin = "https://chat.test",
+  device = false,
 ) {
   return mf.dispatchFetch("https://chat.test/api" + path, {
     method,
     headers: {
+      ...(device ? { "X-Chat-Transport": "device" } : {}),
       ...(useCookie ? { Cookie: cookie } : {}),
       ...(method !== "GET"
         ? { "Content-Type": "application/json", Origin: origin }
@@ -130,10 +132,7 @@ beforeAll(async () => {
                 role: string;
                 content: string;
               }[];
-              if (
-                messages[0]?.role === "system" &&
-                messages[1]?.content?.startsWith('[{"role":')
-              ) {
+              if (messages[0]?.content?.includes("<chat_history>")) {
                 titleCalls.push(payload);
                 const titleMode = controls.titleMode,
                   titleDelay = controls.titleDelay;
@@ -148,7 +147,13 @@ beforeAll(async () => {
                     { status: 400 },
                   );
                 return MFResponse.json({
-                  choices: [{ message: { content: "模型生成的标题" } }],
+                  choices: [
+                    {
+                      message: {
+                        content: JSON.stringify({ title: "模型生成的标题" }),
+                      },
+                    },
+                  ],
                 });
               }
               upstreamCalls.push(payload);
@@ -931,7 +936,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     settings.titleModel = null;
     await value("/settings", "PUT", settings);
   });
-  it("uses the selected title scope and keeps title errors separate from saved answers", async () => {
+  it("uses global title placeholders and keeps title errors separate from saved answers", async () => {
     const imported = await value<{ ids: string[] }>("/import", "POST", {
       data: [
         {
@@ -977,9 +982,12 @@ describe("workerd HTTP + D1 + Workflows", () => {
     await finished(id);
     const request = titleCalls.at(-1)!;
     const messages = request.messages as { role: string; content: string }[];
-    expect(JSON.parse(messages[1]!.content)).toEqual([
-      { role: "user", content: "first question" },
-      { role: "assistant", content: "first answer" },
+    const inserted = messages[0]!.content.match(
+      /<chat_history>\s*([\s\S]*?)\s*<\/chat_history>/,
+    )![1]!;
+    expect(JSON.parse(inserted)).toEqual([
+      { role: "user", content: "second question" },
+      { role: "assistant", content: "second answer" },
     ]);
     expect(JSON.stringify(request)).not.toContain("private reasoning");
     controls.titleMode = "reject-all";
@@ -994,6 +1002,133 @@ describe("workerd HTTP + D1 + Workflows", () => {
     await value("/chats/" + id);
     expect(titleCalls.length).toBe(count + 1);
     controls.titleMode = "normal";
+  });
+  it("runs device generation and titles without server upstream calls or replay", async () => {
+    const device = async <T>(path: string, body: unknown): Promise<T> => {
+      const response = await request(
+        path,
+        "POST",
+        body,
+        true,
+        "https://chat.test",
+        true,
+      );
+      const result = await response.json();
+      expect(response.status, JSON.stringify(result)).toBeLessThan(400);
+      return result as T;
+    };
+    const count = upstreamCalls.length,
+      titles = titleCalls.length;
+    const chat = await value<Chat>("/chats", "POST", {});
+    const start = await device<{
+      jobId: string;
+      direct: {
+        request: {
+          model: string;
+          messages: { role: string; content: string }[];
+        };
+        messageId: string;
+      };
+    }>("/chats/" + chat.id + "/send", { content: "device question" });
+    expect(start.direct.request.model).toBe("Gemini3.8flash-low");
+    expect(JSON.stringify(start)).not.toMatch(
+      /encryptedKey|synthetic-fixture-key/,
+    );
+    expect(
+      (
+        await request(
+          "/device/jobs/" + start.jobId + "/checkpoint",
+          "POST",
+          {},
+          false,
+        )
+      ).status,
+    ).toBe(401);
+    await device("/device/jobs/" + start.jobId + "/checkpoint", {
+      sequence: 1,
+      content: "device ",
+      reasoning: "thinking",
+    });
+    expect(
+      (
+        await request("/device/jobs/" + start.jobId + "/checkpoint", "POST", {
+          sequence: 1,
+          content: "older",
+          reasoning: "",
+        })
+      ).status,
+    ).toBe(409);
+    const read = await value<{ chat: Chat; job: { transport: string } }>(
+      "/chats/" + chat.id,
+    );
+    expect(read.job.transport).toBe("device");
+    expect(read.chat.messages[start.direct.messageId]!.content).toBe("device ");
+    const finish = await device<{ titleJobId: string }>(
+      "/device/jobs/" + start.jobId + "/finish",
+      {
+        sequence: 2,
+        status: "complete",
+        content: "device answer",
+        reasoning: "thinking",
+        usage: { total_tokens: 20 },
+      },
+    );
+    const title = await device<{
+      candidates: { request: { messages: { content: string }[] } }[];
+    }>("/device/titles/" + finish.titleJobId + "/claim", {});
+    expect(JSON.stringify(title)).not.toMatch(
+      /encryptedKey|synthetic-fixture-key/,
+    );
+    expect(title.candidates[0]!.request.messages[0]!.content).toContain(
+      "device answer",
+    );
+    expect(
+      await device("/device/titles/" + finish.titleJobId + "/claim", {}),
+    ).toBeNull();
+    await device("/device/titles/" + finish.titleJobId + "/finish", {
+      content: '{"title":"📱 设备直连"}',
+    });
+    const saved = await finished(chat.id);
+    expect(saved.title).toBe("📱 设备直连");
+    expect(saved.messages[start.direct.messageId]!.usage).toMatchObject({
+      total_tokens: 20,
+    });
+    expect(upstreamCalls.length).toBe(count);
+    expect(titleCalls.length).toBe(titles);
+    const copy = await value<Chat>(
+      "/chats/" + chat.id + "/duplicate",
+      "POST",
+      {},
+    );
+    expect(copy.id).not.toBe(chat.id);
+    expect(Object.keys(copy.messages)).toHaveLength(2);
+    expect(copy.messages[start.direct.messageId]).toBeUndefined();
+    const stopped = await device<{ jobId: string }>(
+      "/chats/" + chat.id + "/send",
+      { content: "will stop" },
+    );
+    await device("/device/jobs/" + stopped.jobId + "/checkpoint", {
+      sequence: 1,
+      content: "partial",
+      reasoning: "",
+    });
+    await value("/chats/" + chat.id + "/stop", "POST", {});
+    expect(
+      (
+        await request("/device/jobs/" + stopped.jobId + "/finish", "POST", {
+          sequence: 2,
+          status: "complete",
+          content: "partial late",
+          reasoning: "",
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      Object.values((await finished(chat.id)).messages)
+        .filter((m) => m.status === "stopped")
+        .map((m) => m.content),
+    ).toEqual(["partial"]);
+    expect(upstreamCalls.length).toBe(count);
   });
   it("exports settings without credentials by default, reauthenticates key export, and restores atomically", async () => {
     const clean = await value<Record<string, unknown>>(

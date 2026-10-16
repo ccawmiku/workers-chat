@@ -1,3 +1,4 @@
+import { deviceGeneration } from "./device-generation";
 import {
   type Chat,
   type Provider,
@@ -10,6 +11,7 @@ import {
   route,
   toggleContextTurn,
   forkChat,
+  duplicateChat,
   sanitizeUsage,
   uuid,
   findMessage,
@@ -37,12 +39,18 @@ import {
   readChat,
   jobOutput,
   startGeneration,
+  generationStart,
   finalize,
   limitedText,
   previewRequest,
 } from "./generation";
 export { Generation, TitleGeneration } from "./workflow";
-import { queueTitle, titleStatus } from "./titles";
+import {
+  queueTitle,
+  titleStatus,
+  claimDeviceTitle,
+  finishDeviceTitle,
+} from "./titles";
 export { Progress } from "./progress";
 import { obj, str, parameters, validatedSettings } from "./validation";
 import { requireMethod } from "./routing";
@@ -70,7 +78,11 @@ async function api(request: Request, env: Env) {
   const url = new URL(request.url),
     path = url.pathname,
     method = request.method,
-    store = new Store(env.DB);
+    store = new Store(env.DB),
+    transport =
+      request.headers.get("X-Chat-Transport") === "device"
+        ? "device"
+        : undefined;
   requireMethod(path, method);
   const body =
     method === "GET" || method === "HEAD" ? {} : await readBody(request);
@@ -137,6 +149,20 @@ async function api(request: Request, env: Env) {
     }
   }
   const session = await authenticate(request, env);
+  const deviceMatch = path.match(
+    /^\/api\/device\/jobs\/([^/]+)\/(checkpoint|finish)$/,
+  );
+  if (deviceMatch)
+    return deviceGeneration(env, deviceMatch[1]!, deviceMatch[2]!, body);
+  const titleDeviceMatch = path.match(
+    /^\/api\/device\/titles\/([^/]+)\/(claim|finish)$/,
+  );
+  if (titleDeviceMatch)
+    return Response.json(
+      titleDeviceMatch[2] === "claim"
+        ? await claimDeviceTitle(env, titleDeviceMatch[1]!)
+        : await finishDeviceTitle(env, titleDeviceMatch[1]!, body),
+    );
   if (path === "/api/auth/logout") {
     await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?")
       .bind(session)
@@ -254,28 +280,45 @@ async function api(request: Request, env: Env) {
         400,
         "修改地址时请重新输入密钥，避免将旧密钥发送到其他主机",
       );
-    const key = p.encryptedKey
-      ? await decrypt(p.encryptedKey, env.ENCRYPTION_KEY)
-      : "";
-    const signal = AbortSignal.timeout(20000);
-    const response = await fetch(p.baseUrl + "/models", {
-      headers: key ? { Authorization: "Bearer " + key } : {},
-      redirect: "manual",
-      signal,
-    });
-    if (!response.ok)
-      throw new HttpError(
-        400,
-        `获取模型失败 HTTP ${response.status}：${redactError(await limitedText(response, 8192, signal), key)}`,
-      );
-    const list = JSON.parse(
-      await limitedText(response, 2 * 1024 * 1024, signal),
-    ) as {
-      data?: { id: string }[];
-    };
+    let list: { data?: { id: string }[] };
+    if (transport === "device") {
+      if (!Array.isArray(body.models))
+        throw new HttpError(400, "缺少设备获取的模型列表");
+      list = {
+        data: body.models.map((item) => ({ id: str(obj(item).id, 1000) })),
+      };
+    } else {
+      const key = p.encryptedKey
+        ? await decrypt(p.encryptedKey, env.ENCRYPTION_KEY)
+        : "";
+      const signal = AbortSignal.timeout(20000);
+      const response = await fetch(p.baseUrl + "/models", {
+        headers: key ? { Authorization: "Bearer " + key } : {},
+        redirect: "manual",
+        signal,
+      });
+      if (!response.ok)
+        throw new HttpError(
+          400,
+          `获取模型失败 HTTP ${response.status}：${redactError(await limitedText(response, 8192, signal), key)}`,
+        );
+      list = JSON.parse(
+        await limitedText(response, 2 * 1024 * 1024, signal),
+      ) as {
+        data?: { id: string }[];
+      };
+      if (
+        !Array.isArray(list.data) ||
+        list.data.some((m) => typeof m.id !== "string")
+      )
+        throw new HttpError(400, "上游模型列表格式无效");
+    }
     if (
       !Array.isArray(list.data) ||
-      list.data.some((m) => typeof m.id !== "string")
+      list.data.length > 10000 ||
+      list.data.some(
+        (m) => typeof m.id !== "string" || !m.id || m.id.length > 1000,
+      )
     )
       throw new HttpError(400, "上游模型列表格式无效");
     p.models = [...new Set(list.data.map((m) => m.id))].map(
@@ -471,7 +514,30 @@ async function api(request: Request, env: Env) {
     if (action === "" && method === "GET") {
       if (job) {
         const output = await jobOutput(env, job.id);
-        if (Date.now() - (output.updatedAt || job.created_at) > 15000) {
+        if (
+          job.transport === "device" &&
+          Date.now() - (output.updatedAt || job.created_at) > 90000
+        ) {
+          await env.PROGRESS.getByName(job.id).cancel();
+          await finalize(
+            env,
+            job,
+            "error",
+            output.content,
+            output.reasoning,
+            "设备直连已断开，已保留收到的部分；不会自动重复模型请求。",
+          );
+          const latest = await store.get<Chat>(id);
+          return Response.json({
+            chat: latest!.value,
+            revision: latest!.revision,
+            job: null,
+          });
+        }
+        if (
+          job.transport !== "device" &&
+          Date.now() - (output.updatedAt || job.created_at) > 15000
+        ) {
           try {
             const state = await (await env.GENERATION.get(job.id)).status();
             if (
@@ -519,13 +585,15 @@ async function api(request: Request, env: Env) {
         chat,
         revision: doc.revision,
         titleJob: await titleStatus(env, id),
-        job: job ? { id: job.id, status: job.status } : null,
+        job: job
+          ? { id: job.id, status: job.status, transport: job.transport }
+          : null,
       });
     }
     if (action === "title" && method === "POST") {
       if (job) throw new HttpError(409, "请等待当前回答完成");
       return Response.json(
-        { jobId: await queueTitle(env, id, true) },
+        { jobId: await queueTitle(env, id, true, transport) },
         { status: 202 },
       );
     }
@@ -622,13 +690,19 @@ async function api(request: Request, env: Env) {
       }
       if (body.templateMode === "replace" || body.templateMode === "append")
         chat.templateMode = body.templateMode;
-      if (body.titleScope === "branch" || body.titleScope === "first")
-        chat.titleScope = body.titleScope;
       chat.updatedAt = Date.now();
       await store.save(id, "chat", chat, doc.revision, summary(chat));
       return Response.json(chat);
     }
     if (job) throw new HttpError(409, "当前聊天仍在生成，请先停止或等待完成");
+    if (action === "duplicate") {
+      const copy = duplicateChat(
+        chat,
+        (await store.list<{ title: string }>("chat")).map((c) => c.title),
+      );
+      await store.save(copy.id, "chat", copy, 0, summary(copy));
+      return Response.json(copy);
+    }
     if (action === "permanent" && method === "DELETE") {
       if (!chat.deleted) throw new HttpError(400, "请先移入回收站");
       await store.remove(id);
@@ -652,8 +726,9 @@ async function api(request: Request, env: Env) {
         await providerList(store),
         undefined,
         true,
+        transport,
       );
-      return Response.json({ jobId }, { status: 202 });
+      return Response.json(await generationStart(env, jobId), { status: 202 });
     }
     if (
       action === "regenerate" ||
@@ -677,8 +752,10 @@ async function api(request: Request, env: Env) {
         await settings(store),
         await providerList(store),
         action === "continue" ? message.id : undefined,
+        false,
+        transport,
       );
-      return Response.json({ jobId }, { status: 202 });
+      return Response.json(await generationStart(env, jobId), { status: 202 });
     }
     if (action === "edit") {
       if (!message) throw new HttpError(404, "消息不存在");
@@ -690,8 +767,13 @@ async function api(request: Request, env: Env) {
           doc.revision,
           await settings(store),
           await providerList(store),
+          undefined,
+          false,
+          transport,
         );
-        return Response.json({ jobId }, { status: 202 });
+        return Response.json(await generationStart(env, jobId), {
+          status: 202,
+        });
       }
     } else if (action === "select") {
       selectBranch(chat, str(body.messageId, 500));
@@ -738,7 +820,7 @@ export default {
     headers.set("Referrer-Policy", "no-referrer");
     headers.set(
       "Content-Security-Policy",
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     );
     if (new URL(request.url).protocol === "https:")
       headers.set("Strict-Transport-Security", "max-age=31536000");

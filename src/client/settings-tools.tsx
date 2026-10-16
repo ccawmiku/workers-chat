@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect } from "react";
 import { Eye, X } from "lucide-react";
 import type { Provider, Settings } from "../shared/chat";
 import type { SettingsBackup } from "../shared/backup";
+import { DEFAULT_TITLE_PROMPT } from "../shared/default-title-prompt";
 import { api, download } from "./api";
 import { IconButton, ParameterControl, useDialogFocus } from "./controls";
 type Run = (fn: () => Promise<void>) => Promise<void>;
@@ -112,6 +113,19 @@ export function SettingsTools({
             }}
           />
         </label>
+        <p className="muted">
+          {"{{MESSAGES:END:2}}"} 插入当前路线最后两条用户/助手消息；也支持
+          START:N 和 END:N。只提取返回 JSON 的 title 字段。
+        </p>
+        <button
+          onClick={() =>
+            void run(() =>
+              save({ ...settings, titlePrompt: DEFAULT_TITLE_PROMPT }),
+            )
+          }
+        >
+          恢复默认标题提示词
+        </button>
         <p className="muted">
           首轮回答后自动生成。失败后最多尝试一次不同的默认聊天模型，手动改名不会被旧的后台任务覆盖。
         </p>

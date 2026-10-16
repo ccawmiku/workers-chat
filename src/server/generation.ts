@@ -1,9 +1,11 @@
+import type { DirectTask, GenerationStart } from "../shared/direct";
 import {
   type Chat,
   type Provider,
   type Settings,
   requestPreview,
   route,
+  contextMessages,
   addMessage,
   sanitizeUsage,
 } from "../shared/chat";
@@ -23,6 +25,7 @@ export type JobConfig = {
   includeStopped: boolean;
   model: NonNullable<Chat["model"]>;
   seedId?: string;
+  transport?: "device";
 };
 export type Job = {
   id: string;
@@ -45,12 +48,12 @@ export async function activeJob(env: Env, id: string) {
 type ActiveJob = Pick<
   Job,
   "id" | "chat_id" | "message_id" | "status" | "created_at"
->;
+> & { transport?: "device" };
 export async function readChat(env: Env, id: string) {
   // The immutable document version and its active job must come from one SQL
   // snapshot. Reading them separately can pair old text with a completed job.
   const row = await env.DB.prepare(
-    "SELECT d.revision,d.kind,d.summary,(SELECT json_object('id',j.id,'chat_id',j.chat_id,'message_id',j.message_id,'status',j.status,'created_at',j.created_at) FROM jobs j WHERE j.chat_id=d.id AND j.status IN ('pending','running') LIMIT 1) AS active_job FROM documents d WHERE d.id=? AND d.kind='chat'",
+    "SELECT d.revision,d.kind,d.summary,(SELECT json_object('id',j.id,'chat_id',j.chat_id,'message_id',j.message_id,'status',j.status,'created_at',j.created_at,'transport',json_extract(j.config,'$.transport')) FROM jobs j WHERE j.chat_id=d.id AND j.status IN ('pending','running') LIMIT 1) AS active_job FROM documents d WHERE d.id=? AND d.kind='chat'",
   )
     .bind(id)
     .first<DocumentHeader & { active_job: string | null }>();
@@ -85,6 +88,7 @@ export async function startGeneration(
   providers: Provider[],
   seedId?: string,
   clearDraft = false,
+  transport?: "device",
 ) {
   const { model, provider, request } = previewRequest(
     chat,
@@ -106,6 +110,7 @@ export async function startGeneration(
     },
     effort: chat.effort,
     stream: chat.stream,
+    ...(transport ? { transport } : {}),
   };
   chat.unread = false;
   const config: JobConfig = {
@@ -120,6 +125,7 @@ export async function startGeneration(
     includeStopped: chat.includeStopped,
     model,
     seedId,
+    transport,
   };
   const id = crypto.randomUUID();
   // The chat revision is the mutation lock; only one concurrent start can commit it.
@@ -127,16 +133,26 @@ export async function startGeneration(
   await store.save(chat.id, "chat", chat, revision, summary(chat), [
     ...(clearDraft ? store.planDraft(chat.id, "") : []),
     env.DB.prepare(
-      "INSERT INTO jobs(id,chat_id,message_id,status,created_at,updated_at,config) VALUES(?,?,?,'pending',?,?,?)",
+      "INSERT INTO jobs(id,chat_id,message_id,status,attempted,created_at,updated_at,config) VALUES(?,?,?,?,?,?,?,?)",
     ).bind(
       id,
       chat.id,
       message.id,
+      transport === "device" ? "running" : "pending",
+      transport === "device" ? 1 : 0,
       Date.now(),
       Date.now(),
       JSON.stringify(config),
     ),
   ]);
+  if (transport === "device") {
+    await env.PROGRESS.getByName(id).deviceCheckpoint(
+      0,
+      seed?.content ?? "",
+      "",
+    );
+    return id;
+  }
   try {
     await env.GENERATION.create({ id, params: { jobId: id } });
   } catch {
@@ -206,6 +222,56 @@ export async function finalize(
     }
   }
 }
+export function requestForJob(
+  chat: Chat,
+  job: Pick<Job, "message_id">,
+  config: JobConfig,
+) {
+  const target = chat.messages[job.message_id];
+  if (!target) throw new HttpError(404, "回答不存在");
+  const messages = contextMessages({
+    ...chat,
+    currentId: target.parentId,
+    system: config.system,
+    rounds: config.rounds,
+    includeStopped: config.includeStopped,
+  });
+  const seed = config.seedId ? chat.messages[config.seedId] : null;
+  if (seed) {
+    messages.push({ role: "assistant", content: seed.content });
+    messages.push({
+      role: "user",
+      content: "请继续上面的回答，不要重复已经写出的内容。",
+    });
+  }
+  return { ...config.options, messages };
+}
+export async function generationStart(
+  env: Env,
+  jobId: string,
+): Promise<GenerationStart> {
+  const job = await env.DB.prepare("SELECT * FROM jobs WHERE id=?")
+    .bind(jobId)
+    .first<Job>();
+  if (!job) throw new HttpError(404, "任务不存在");
+  const config = JSON.parse(job.config) as JobConfig;
+  if (config.transport !== "device") return { jobId };
+  const doc = await new Store(env.DB).get<Chat>(job.chat_id);
+  if (!doc) throw new HttpError(404, "聊天不存在");
+  const direct: DirectTask = {
+    jobId,
+    chatId: job.chat_id,
+    messageId: job.message_id,
+    providerId: config.model.providerId,
+    baseUrl: config.provider.baseUrl,
+    hasKey: !!config.provider.encryptedKey,
+    seedContent: config.seedId
+      ? (doc.value.messages[config.seedId]?.content ?? "")
+      : "",
+    request: requestForJob(doc.value, job, config),
+  };
+  return { jobId, direct };
+}
 export async function runGeneration(
   env: Env,
   id: string,
@@ -238,31 +304,7 @@ export async function runGeneration(
       await finalize(env, claimed, "stopped", content, reasoning);
       return { stopped: true };
     }
-    let path = route(doc.value, target.parentId).filter(
-      (m) => !m.excluded && (config.includeStopped || m.status !== "stopped"),
-    );
-    if (config.rounds && config.rounds > 0) {
-      let rounds = 0,
-        i = path.length;
-      while (i > 0) {
-        i--;
-        if (path[i]!.role === "user" && ++rounds === config.rounds) break;
-      }
-      path = path.slice(i);
-    }
-    const messages = path.map((m) => ({ role: m.role, content: m.content }));
-    const system = config.system
-      .map((t) => t.content)
-      .filter(Boolean)
-      .join("\n\n");
-    if (system) messages.unshift({ role: "system", content: system });
-    if (seed) {
-      messages.push({ role: "assistant", content: seed.content });
-      messages.push({
-        role: "user",
-        content: "请继续上面的回答，不要重复已经写出的内容。",
-      });
-    }
+    const request = requestForJob(doc.value, claimed, config);
     key = config.provider.encryptedKey
       ? await decrypt(config.provider.encryptedKey, env.ENCRYPTION_KEY)
       : "";
@@ -275,7 +317,7 @@ export async function runGeneration(
           "Content-Type": "application/json",
           ...(key ? { Authorization: "Bearer " + key } : {}),
         },
-        body: JSON.stringify({ ...config.options, messages }),
+        body: JSON.stringify(request),
         signal: AbortSignal.any([
           controller.signal,
           AbortSignal.timeout(30 * 60 * 1000),

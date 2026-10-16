@@ -4,6 +4,8 @@ import React, {
   useMemo,
   useRef,
   useState,
+  lazy,
+  Suspense,
 } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -45,7 +47,6 @@ import {
   Palette,
   UserRound,
   Pin,
-  CheckCheck,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -69,7 +70,17 @@ import { IconButton, ParameterControl, useDialogFocus } from "./controls";
 import { ModelControls, TemplatePicker, MessageUsage } from "./chat-controls";
 import { SettingsTools, KeyReveal } from "./settings-tools";
 import { ImportDialog } from "./import-dialog";
+import {
+  DeviceConnectionProvider,
+  useDeviceConnection,
+  directModels,
+} from "./device-connection";
+import type { GenerationStart } from "../shared/direct";
+import type { CompletionOutput } from "../shared/completion";
+import type { DirectTask } from "../shared/direct";
+import { ChatListMenu } from "./chat-list-menu";
 import { ContextUsage, EffortControl, AccountMenu } from "./composer-widgets";
+const BranchOverview = lazy(() => import("./branch-overview"));
 type Brief = Pick<
   Chat,
   | "id"
@@ -90,6 +101,7 @@ function desktopInput() {
   );
 }
 function App() {
+  const connection = useDeviceConnection();
   const [auth, setAuth] = useState<boolean | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -97,17 +109,23 @@ function App() {
   const [chats, setChats] = useState<Brief[]>([]),
     [groups, setGroups] = useState<Group[]>([]),
     [chat, setChat] = useState<Chat | null>(null),
-    [job, setJob] = useState<{ id: string; status: string } | null>(null),
+    [job, setJob] = useState<{
+      id: string;
+      status: string;
+      transport?: "device";
+    } | null>(null),
     [titleJob, setTitleJob] = useState<{
       id: string;
       status: string;
       error: string | null;
+      transport?: "device";
     } | null>(null);
   const [providers, setProviders] = useState<ProviderView[]>([]),
     [settings, setSettings] = useState<Settings>(defaultSettings());
   const [draft, setDraft] = useState(""),
     [sidebar, setSidebar] = useState(innerWidth > 760),
     [panel, setPanel] = useState(false),
+    [panelTab, setPanelTab] = useState("settings"),
     [modal, setModal] = useState(""),
     [modelMenu, setModelMenu] = useState(false),
     [search, setSearch] = useState(""),
@@ -117,8 +135,6 @@ function App() {
     [editing, setEditing] = useState<{ id: string; content: string } | null>(
       null,
     ),
-    [selected, setSelected] = useState<string[]>([]),
-    [selecting, setSelecting] = useState(false),
     [groupMenu, setGroupMenu] = useState<string | null>(null),
     [scrollBottom, setScrollBottom] = useState(false);
   const [settingsTab, setSettingsTab] = useState("providers");
@@ -181,14 +197,17 @@ function App() {
         failures: { index: number; reason: string }[];
       };
     } | null>(null);
-  const run = useCallback(async (fn: () => Promise<void>) => {
-    try {
-      setError("");
-      await fn();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "操作失败");
-    }
-  }, []);
+  const run = useCallback(
+    async (fn: () => Promise<void>, clearError = true) => {
+      try {
+        if (clearError) setError("");
+        await fn();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "操作失败");
+      }
+    },
+    [],
+  );
   const loadNavigation = useCallback(async () => {
     const [c, g] = await Promise.all([
       api<Brief[]>("/chats"),
@@ -219,7 +238,7 @@ function App() {
       titleJob: typeof titleJob;
     }>("/chats/" + id);
     if (idRef.current !== id) return;
-    setChat(result.chat);
+    setChat(connection.overlay(result.chat));
     setJob(result.job);
     setTitleJob(result.titleJob ?? null);
     if (
@@ -351,6 +370,23 @@ function App() {
     });
   }, [auth]);
   useEffect(() => {
+    if (auth === false) connection.lock();
+  }, [auth]);
+  useEffect(() => {
+    if (
+      auth &&
+      titleJob?.transport === "device" &&
+      titleJob.status === "pending"
+    )
+      connection.title(titleJob.id, (error) => {
+        if (error) setError(error);
+        void run(async () => {
+          await refresh();
+          await loadNavigation();
+        }, false);
+      });
+  }, [auth, titleJob?.id, titleJob?.status]);
+  useEffect(() => {
     localStorage.setItem("appearance", JSON.stringify(appearance));
     const media = matchMedia("(prefers-color-scheme: dark)");
     const apply = () =>
@@ -377,7 +413,7 @@ function App() {
           if (job || ["pending", "running"].includes(titleJob?.status ?? ""))
             await refresh();
           await loadNavigation();
-        }),
+        }, false),
       job || ["pending", "running"].includes(titleJob?.status ?? "")
         ? 1500
         : 6000,
@@ -399,7 +435,7 @@ function App() {
       void run(async () => {
         await refresh();
         await loadNavigation();
-      });
+      }, false);
     };
     document.addEventListener("visibilitychange", activate);
     return () => document.removeEventListener("visibilitychange", activate);
@@ -420,14 +456,50 @@ function App() {
     await refresh();
     await loadNavigation();
   }
+  function acceptGeneration(result: GenerationStart) {
+    if (!result.direct) return;
+    const task = result.direct;
+    connection.start(
+      task,
+      (active: DirectTask, output: CompletionOutput) => {
+        setChat((previous) =>
+          !previous ||
+          previous.id !== active.chatId ||
+          !previous.messages[active.messageId]
+            ? previous
+            : {
+                ...previous,
+                messages: {
+                  ...previous.messages,
+                  [active.messageId]: {
+                    ...previous.messages[active.messageId]!,
+                    ...output,
+                    status: "running",
+                  },
+                },
+              },
+        );
+      },
+      (error) => {
+        if (error) setError(error);
+        void run(async () => {
+          await refresh(task.chatId);
+          await loadNavigation();
+        }, false);
+      },
+    );
+  }
   async function action(name: string, body: Record<string, unknown> = {}) {
     if (!chat) return;
+    if (name === "stop" && connection.stop(chat.id)) return;
     await flushDraft();
-    const result = await api<Chat>(
+    const result = await api<Chat & GenerationStart>(
       "/chats/" + chat.id + "/" + name,
       "POST",
       body,
     );
+    if (["regenerate", "retry", "continue", "edit"].includes(name))
+      acceptGeneration(result);
     setMenu(null);
     if (name === "fork") {
       await loadNavigation();
@@ -456,9 +528,12 @@ function App() {
       // Drain older saves before the server atomically clears the sent draft.
       // Autosaves pause while submitting, then persist any newer input.
       await draftQueue.current.catch(() => {});
-      await api("/chats/" + id + "/send", "POST", {
-        content: sent,
-      });
+      const result = await api<GenerationStart>(
+        "/chats/" + id + "/send",
+        "POST",
+        { content: sent },
+      );
+      acceptGeneration(result);
       if (draftVersion.current === version && idRef.current === id) {
         setDraft("");
         draftRef.current = "";
@@ -573,11 +648,50 @@ function App() {
       download("在线AI-chats.json", JSON.stringify(values, null, 2));
     });
   }
-  async function batch(value: Partial<Chat>) {
-    for (const id of selected) await api("/chats/" + id, "PATCH", value);
-    setSelected([]);
+  async function listAction(c: Brief, name: string) {
+    if (name === "export") {
+      await downloadChats([c.id]);
+      return;
+    }
+    if (name === "rename") {
+      const title = prompt("重命名聊天", c.title);
+      if (!title) return;
+      await api("/chats/" + c.id, "PATCH", { title });
+    } else if (name === "title") {
+      const result = await api<{ jobId: string }>(
+        "/chats/" + c.id + "/title",
+        "POST",
+        {},
+      );
+      connection.title(result.jobId, (error) => {
+        if (error) setError(error);
+        void run(loadNavigation, false);
+      });
+    } else if (name === "duplicate") {
+      const copy = await api<Chat>("/chats/" + c.id + "/duplicate", "POST", {});
+      await loadNavigation();
+      await open(copy.id);
+      return;
+    } else if (name === "delete" && c.deleted) {
+      if (!confirm("永久删除这个聊天？无法恢复。")) return;
+      await api("/chats/" + c.id + "/permanent", "DELETE", {});
+      if (idRef.current === c.id) {
+        idRef.current = null;
+        setChat(null);
+        localStorage.removeItem("lastChat");
+      }
+    } else
+      await api(
+        "/chats/" + c.id,
+        "PATCH",
+        name === "pin"
+          ? { pinned: !c.pinned }
+          : name === "archive"
+            ? { archived: !c.archived }
+            : { deleted: true },
+      );
+    if (idRef.current === c.id) await refresh();
     await loadNavigation();
-    if (chat) await refresh();
   }
   const chatRow = (c: Brief) => (
     <div
@@ -586,28 +700,7 @@ function App() {
       draggable
       onDragStart={(e) => e.dataTransfer.setData("text/plain", c.id)}
     >
-      {(selecting || selected.length > 0) && (
-        <input
-          aria-label={"选择 " + c.title}
-          type="checkbox"
-          checked={selected.includes(c.id)}
-          onChange={() =>
-            setSelected(
-              selected.includes(c.id)
-                ? selected.filter((id) => id !== c.id)
-                : [...selected, c.id],
-            )
-          }
-        />
-      )}
-      <button
-        className="chat-open"
-        onClick={() => void run(() => open(c.id))}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          setSelected([c.id]);
-        }}
-      >
+      <button className="chat-open" onClick={() => void run(() => open(c.id))}>
         <span className="chat-title">{c.title}</span>
         {c.status === "running" || c.status === "pending" ? (
           <LoaderCircle size={13} className="spin" />
@@ -619,18 +712,10 @@ function App() {
           <span className="muted">⌃</span>
         ) : null}
       </button>
-      <button
-        className="chat-more"
-        aria-label={"管理 " + c.title}
-        onClick={() =>
-          void run(async () => {
-            await open(c.id);
-            setPanel(true);
-          })
-        }
-      >
-        <MoreHorizontal size={16} />
-      </button>
+      <ChatListMenu
+        chat={c}
+        onAction={(name) => void run(() => listAction(c, name))}
+      />
     </div>
   );
   if (auth === null)
@@ -861,15 +946,6 @@ function App() {
                 onClick: () => showSettings("security"),
               },
               {
-                label: selecting ? "退出多选" : "多选聊天",
-                icon: <CheckCheck size={19} />,
-                separator: true,
-                onClick: () => {
-                  setSelecting(!selecting);
-                  setSelected([]);
-                },
-              },
-              {
                 label: "导入聊天",
                 icon: <Upload size={19} />,
                 onClick: () => fileRef.current?.click(),
@@ -953,62 +1029,21 @@ function App() {
           <div className="error-banner" role="alert">
             <CircleAlert size={16} />
             <span>{error}</span>
+            {chat && connection.unsaved(chat.id) && (
+              <button
+                onClick={() =>
+                  void run(async () => {
+                    await connection.retrySave(chat.id);
+                    setError("");
+                    await refresh();
+                  })
+                }
+              >
+                重试保存回答
+              </button>
+            )}
             <IconButton label="关闭提示" onClick={() => setError("")}>
               <X size={15} />
-            </IconButton>
-          </div>
-        )}
-        {(selecting || selected.length > 0) && (
-          <div className="batch-bar">
-            <span>已选 {selected.length} 项</span>
-            <button
-              onClick={() =>
-                void run(() => batch({ archived: view !== "archive" }))
-              }
-            >
-              {view === "archive" ? "取消归档" : "归档"}
-            </button>
-            <button
-              onClick={() =>
-                void run(() => batch({ deleted: view !== "trash" }))
-              }
-            >
-              {view === "trash" ? "恢复" : "移入回收站"}
-            </button>
-            <select
-              aria-label="批量移动"
-              defaultValue=""
-              onChange={(e) =>
-                void run(() =>
-                  batch({
-                    groupId:
-                      e.target.value === "__main__" ? null : e.target.value,
-                  }),
-                )
-              }
-            >
-              <option value="" disabled>
-                移动到…
-              </option>
-              <option value="__main__">主列表</option>
-              {groups.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-            <button onClick={() => void downloadChats(selected)}>导出</button>
-            <button onClick={() => setSelected(filteredChats.map((c) => c.id))}>
-              全选当前列表
-            </button>
-            <IconButton
-              label="取消多选"
-              onClick={() => {
-                setSelected([]);
-                setSelecting(false);
-              }}
-            >
-              <X size={16} />
             </IconButton>
           </div>
         )}
@@ -1131,40 +1166,12 @@ function App() {
                               : "")
                           }
                         >
-                          <Markdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              img: ({ alt, src }) => (
-                                <a
-                                  href={
-                                    typeof src === "string" &&
-                                    /^https:\/\//.test(src)
-                                      ? src
-                                      : undefined
-                                  }
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  [图片：{alt ?? "链接"}]
-                                </a>
-                              ),
-                              a: ({ children, href }) => (
-                                <a
-                                  href={href}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  {children}
-                                </a>
-                              ),
-                              pre: ({ children }) => (
-                                <CodeBlock>{children}</CodeBlock>
-                              ),
-                            }}
-                          >
-                            {m.content ||
-                              (m.status === "running" ? "" : "（空消息）")}
-                          </Markdown>
+                          <MessageMarkdown
+                            content={
+                              m.content ||
+                              (m.status === "running" ? "" : "（空消息）")
+                            }
+                          />
                         </div>
                         {appearance.collapse && m.content.length > 5000 && (
                           <button
@@ -1543,294 +1550,313 @@ function App() {
       {panel && chat && (
         <aside className="parameters">
           <div className="panel-heading">
-            <strong>当前聊天设置</strong>
+            <div className="panel-tabs">
+              <button
+                className={panelTab === "settings" ? "selected" : ""}
+                onClick={() => setPanelTab("settings")}
+              >
+                当前聊天设置
+              </button>
+              <button
+                aria-label="分支总览"
+                className={panelTab === "overview" ? "selected" : ""}
+                onClick={() => setPanelTab("overview")}
+              >
+                概述
+              </button>
+            </div>
             <IconButton label="返回聊天" onClick={() => setPanel(false)}>
               <X size={18} />
             </IconButton>
           </div>
-          <div className="panel-content">
-            <label className="toggle">
-              流式回答
-              <input
-                type="checkbox"
-                checked={chat.stream}
-                onChange={(e) =>
-                  void run(() => patch({ stream: e.target.checked }))
-                }
-              />
-            </label>
-            <h3>生成参数</h3>
-            {(["temperature", "top_p", "top_k"] as const).map((key) => (
-              <ParameterControl
-                key={key}
-                name={
-                  key === "temperature"
-                    ? "温度"
-                    : key === "top_p"
-                      ? "Top P"
-                      : "Top K"
-                }
-                value={chat.parameters[key]}
-                max={key === "temperature" ? 2 : key === "top_p" ? 1 : 100000}
-                step={key === "top_k" ? 1 : 0.05}
-                onChange={(value) => {
-                  const p = { ...chat.parameters };
-                  if (value === undefined) delete p[key];
-                  else p[key] = value;
-                  void run(() => patch({ parameters: p }));
-                }}
-              />
-            ))}
-            <label>
-              最近上下文轮数
-              <input
-                type="number"
-                min="1"
-                placeholder="全部"
-                defaultValue={chat.rounds ?? ""}
-                key={chat.id}
-                onBlur={(e) =>
-                  void run(() =>
-                    patch({
-                      rounds: e.target.value ? Number(e.target.value) : null,
-                    }),
-                  )
-                }
-              />
-            </label>
-            <label className="toggle">
-              停止的部分纳入上下文
-              <input
-                type="checkbox"
-                checked={chat.includeStopped}
-                onChange={(e) =>
-                  void run(() => patch({ includeStopped: e.target.checked }))
-                }
-              />
-            </label>
-            <h3>系统提示词</h3>
-            <label>
-              选择模板时
-              <select
-                value={chat.templateMode}
-                onChange={(e) =>
-                  void run(() =>
-                    patch({
-                      templateMode: e.target.value as Chat["templateMode"],
-                    }),
-                  )
-                }
-              >
-                <option value="replace">替换</option>
-                <option value="append">追加</option>
-              </select>
-            </label>
-            <TemplatePicker
-              templates={settings.templates}
-              onApply={(templates) =>
-                run(() =>
-                  patch({
-                    system:
-                      chat.templateMode === "replace"
-                        ? templates
-                        : [...chat.system, ...templates],
-                  }),
-                )
-              }
-            />
-            {chat.system.map((t, i) => (
-              <div className="template-card" key={t.id + "-" + i}>
-                <div>
-                  {t.name}
-                  <IconButton
-                    label="上移模板"
-                    disabled={i === 0}
-                    onClick={() => {
-                      const next = [...chat.system];
-                      [next[i - 1], next[i]] = [next[i]!, next[i - 1]!];
-                      void run(() => patch({ system: next }));
-                    }}
-                  >
-                    <ArrowUp size={13} />
-                  </IconButton>
-                  <IconButton
-                    label="删除模板卡片"
-                    onClick={() =>
-                      void run(() =>
-                        patch({
-                          system: chat.system.filter((_, j) => j !== i),
-                        }),
-                      )
-                    }
-                  >
-                    <X size={13} />
-                  </IconButton>
-                </div>
-                <textarea
-                  aria-label={t.name}
-                  defaultValue={t.content}
+          {panelTab === "settings" ? (
+            <div className="panel-content">
+              <label className="toggle">
+                流式回答
+                <input
+                  type="checkbox"
+                  checked={chat.stream}
+                  onChange={(e) =>
+                    void run(() => patch({ stream: e.target.checked }))
+                  }
+                />
+              </label>
+              <h3>生成参数</h3>
+              {(["temperature", "top_p", "top_k"] as const).map((key) => (
+                <ParameterControl
+                  key={key}
+                  name={
+                    key === "temperature"
+                      ? "温度"
+                      : key === "top_p"
+                        ? "Top P"
+                        : "Top K"
+                  }
+                  value={chat.parameters[key]}
+                  max={key === "temperature" ? 2 : key === "top_p" ? 1 : 100000}
+                  step={key === "top_k" ? 1 : 0.05}
+                  onChange={(value) => {
+                    const p = { ...chat.parameters };
+                    if (value === undefined) delete p[key];
+                    else p[key] = value;
+                    void run(() => patch({ parameters: p }));
+                  }}
+                />
+              ))}
+              <label>
+                最近上下文轮数
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="全部"
+                  defaultValue={chat.rounds ?? ""}
+                  key={chat.id}
                   onBlur={(e) =>
                     void run(() =>
                       patch({
-                        system: chat.system.map((v, j) =>
-                          j === i ? { ...v, content: e.target.value } : v,
-                        ),
+                        rounds: e.target.value ? Number(e.target.value) : null,
                       }),
                     )
                   }
                 />
-              </div>
-            ))}
-            <button
-              onClick={() =>
-                void run(() =>
-                  patch({
-                    system: [
-                      ...chat.system,
-                      {
-                        id: crypto.randomUUID(),
-                        name: "自定义提示词",
-                        content: "",
-                      },
-                    ],
-                  }),
-                )
-              }
-            >
-              ＋ 添加提示词卡片
-            </button>
-            <h3>标题材料范围</h3>
-            <select
-              value={chat.titleScope}
-              onChange={(e) =>
-                void run(() =>
-                  patch({ titleScope: e.target.value as Chat["titleScope"] }),
-                )
-              }
-            >
-              <option value="branch">当前分支问答</option>
-              <option value="first">仅首轮问答</option>
-            </select>
-            <button onClick={() => setModal("preview")}>预览下次请求</button>
-            <button onClick={() => setModal("tree")}>分支总览</button>
-            <h3>聊天管理</h3>
-            <div className="chat-management">
-              <button
-                onClick={() => {
-                  const title = prompt("重命名聊天", chat.title);
-                  if (title) void run(() => patch({ title }));
-                }}
-              >
-                <Pencil size={16} />
-                重命名聊天
-              </button>
-              <button
-                disabled={
-                  !!job ||
-                  ["pending", "running"].includes(titleJob?.status ?? "")
+              </label>
+              <label className="toggle">
+                停止的部分纳入上下文
+                <input
+                  type="checkbox"
+                  checked={chat.includeStopped}
+                  onChange={(e) =>
+                    void run(() => patch({ includeStopped: e.target.checked }))
+                  }
+                />
+              </label>
+              <h3>系统提示词</h3>
+              <label>
+                选择模板时
+                <select
+                  value={chat.templateMode}
+                  onChange={(e) =>
+                    void run(() =>
+                      patch({
+                        templateMode: e.target.value as Chat["templateMode"],
+                      }),
+                    )
+                  }
+                >
+                  <option value="replace">替换</option>
+                  <option value="append">追加</option>
+                </select>
+              </label>
+              <TemplatePicker
+                templates={settings.templates}
+                onApply={(templates) =>
+                  run(() =>
+                    patch({
+                      system:
+                        chat.templateMode === "replace"
+                          ? templates
+                          : [...chat.system, ...templates],
+                    }),
+                  )
                 }
-                onClick={() => void run(() => action("title"))}
+              />
+              {chat.system.map((t, i) => (
+                <div className="template-card" key={t.id + "-" + i}>
+                  <div>
+                    {t.name}
+                    <IconButton
+                      label="上移模板"
+                      disabled={i === 0}
+                      onClick={() => {
+                        const next = [...chat.system];
+                        [next[i - 1], next[i]] = [next[i]!, next[i - 1]!];
+                        void run(() => patch({ system: next }));
+                      }}
+                    >
+                      <ArrowUp size={13} />
+                    </IconButton>
+                    <IconButton
+                      label="删除模板卡片"
+                      onClick={() =>
+                        void run(() =>
+                          patch({
+                            system: chat.system.filter((_, j) => j !== i),
+                          }),
+                        )
+                      }
+                    >
+                      <X size={13} />
+                    </IconButton>
+                  </div>
+                  <textarea
+                    aria-label={t.name}
+                    defaultValue={t.content}
+                    onBlur={(e) =>
+                      void run(() =>
+                        patch({
+                          system: chat.system.map((v, j) =>
+                            j === i ? { ...v, content: e.target.value } : v,
+                          ),
+                        }),
+                      )
+                    }
+                  />
+                </div>
+              ))}
+              <button
+                onClick={() =>
+                  void run(() =>
+                    patch({
+                      system: [
+                        ...chat.system,
+                        {
+                          id: crypto.randomUUID(),
+                          name: "自定义提示词",
+                          content: "",
+                        },
+                      ],
+                    }),
+                  )
+                }
               >
-                <RotateCcw size={16} />
-                重新生成标题
+                ＋ 添加提示词卡片
               </button>
-              {titleJob?.status === "error" && (
-                <p className="danger-text">标题生成失败：{titleJob.error}</p>
-              )}
+              <button onClick={() => setModal("preview")}>预览下次请求</button>
 
-              <button
-                onClick={() => void run(() => patch({ pinned: !chat.pinned }))}
-              >
-                <Pin size={16} />
-                {chat.pinned ? "取消置顶" : "置顶聊天"}
-              </button>
-              <button
-                onClick={() =>
-                  void run(() => patch({ archived: !chat.archived }))
-                }
-              >
-                <Archive size={16} />
-                {chat.archived ? "取消归档" : "归档聊天"}
-              </button>
-              <select
-                aria-label="移动聊天"
-                value={chat.groupId ?? ""}
-                onChange={(e) =>
-                  void run(() => patch({ groupId: e.target.value || null }))
-                }
-              >
-                <option value="">主列表</option>
-                {groups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
-              <button onClick={() => void downloadChats([chat.id])}>
-                <Download size={16} />
-                导出完整树 JSON
-              </button>
-              <button
-                onClick={() =>
-                  download(
-                    chat.title + ".md",
-                    markdownExport(chat),
-                    "text/markdown",
-                  )
-                }
-              >
-                <FileText size={16} />
-                导出当前路线 Markdown
-              </button>
-              <button
-                onClick={() =>
-                  void downloadChats(
-                    chats.filter((c) => !c.deleted).map((c) => c.id),
-                  )
-                }
-              >
-                <Download size={16} />
-                导出全部聊天（含归档）
-              </button>
-              <button onClick={() => fileRef.current?.click()}>
-                <Upload size={16} />
-                导入 OpenWebUI JSON
-              </button>
-              <button
-                className="danger-text"
-                onClick={() =>
-                  void run(async () => {
-                    await patch({ deleted: !chat.deleted });
-                    setModal("");
-                  })
-                }
-              >
-                <Trash2 size={16} />
-                {chat.deleted ? "从回收站恢复" : "移入回收站"}
-              </button>
-              {chat.deleted && (
+              <h3>聊天管理</h3>
+              <div className="chat-management">
                 <button
-                  className="danger-text"
                   onClick={() => {
-                    if (confirm("永久删除这个聊天？无法恢复。"))
-                      void run(async () => {
-                        await api(
-                          "/chats/" + chat.id + "/permanent",
-                          "DELETE",
-                          {},
-                        );
-                        idRef.current = null;
-                        setChat(null);
-                        setModal("");
-                        await loadNavigation();
-                      });
+                    const title = prompt("重命名聊天", chat.title);
+                    if (title) void run(() => patch({ title }));
                   }}
                 >
-                  永久删除聊天
+                  <Pencil size={16} />
+                  重命名聊天
                 </button>
-              )}
+                <button
+                  disabled={
+                    !!job ||
+                    ["pending", "running"].includes(titleJob?.status ?? "")
+                  }
+                  onClick={() => void run(() => action("title"))}
+                >
+                  <RotateCcw size={16} />
+                  重新生成标题
+                </button>
+                {titleJob?.status === "error" && (
+                  <p className="danger-text">标题生成失败：{titleJob.error}</p>
+                )}
+
+                <button
+                  onClick={() =>
+                    void run(() => patch({ pinned: !chat.pinned }))
+                  }
+                >
+                  <Pin size={16} />
+                  {chat.pinned ? "取消置顶" : "置顶聊天"}
+                </button>
+                <button
+                  onClick={() =>
+                    void run(() => patch({ archived: !chat.archived }))
+                  }
+                >
+                  <Archive size={16} />
+                  {chat.archived ? "取消归档" : "归档聊天"}
+                </button>
+                <select
+                  aria-label="移动聊天"
+                  value={chat.groupId ?? ""}
+                  onChange={(e) =>
+                    void run(() => patch({ groupId: e.target.value || null }))
+                  }
+                >
+                  <option value="">主列表</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+                <button onClick={() => void downloadChats([chat.id])}>
+                  <Download size={16} />
+                  导出完整树 JSON
+                </button>
+                <button
+                  onClick={() =>
+                    download(
+                      chat.title + ".md",
+                      markdownExport(chat),
+                      "text/markdown",
+                    )
+                  }
+                >
+                  <FileText size={16} />
+                  导出当前路线 Markdown
+                </button>
+                <button
+                  onClick={() =>
+                    void downloadChats(
+                      chats.filter((c) => !c.deleted).map((c) => c.id),
+                    )
+                  }
+                >
+                  <Download size={16} />
+                  导出全部聊天（含归档）
+                </button>
+                <button onClick={() => fileRef.current?.click()}>
+                  <Upload size={16} />
+                  导入 OpenWebUI JSON
+                </button>
+                <button
+                  className="danger-text"
+                  onClick={() =>
+                    void run(async () => {
+                      await patch({ deleted: !chat.deleted });
+                      setModal("");
+                    })
+                  }
+                >
+                  <Trash2 size={16} />
+                  {chat.deleted ? "从回收站恢复" : "移入回收站"}
+                </button>
+                {chat.deleted && (
+                  <button
+                    className="danger-text"
+                    onClick={() => {
+                      if (confirm("永久删除这个聊天？无法恢复。"))
+                        void run(async () => {
+                          await api(
+                            "/chats/" + chat.id + "/permanent",
+                            "DELETE",
+                            {},
+                          );
+                          idRef.current = null;
+                          setChat(null);
+                          setModal("");
+                          await loadNavigation();
+                        });
+                    }}
+                  >
+                    永久删除聊天
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="overview-content">
+              <Suspense fallback={<div className="center">加载分支…</div>}>
+                <BranchOverview
+                  chat={chat}
+                  providers={providers}
+                  onSelect={(id) => {
+                    if (!job)
+                      void run(() => action("select", { messageId: id }));
+                  }}
+                />
+              </Suspense>
+            </div>
+          )}
         </aside>
       )}
       {modal && (
@@ -1899,30 +1925,6 @@ function App() {
                     </button>
                   ))}
               </div>
-            ) : modal === "tree" && chat ? (
-              <div className="tree">
-                {Object.values(chat.messages).map((m) => (
-                  <button
-                    key={m.id}
-                    disabled={!!job}
-                    className={pathIds.has(m.id) ? "on-route" : ""}
-                    style={{
-                      paddingLeft:
-                        16 + Math.min(depths.get(m.id) ?? 1, 15) * 14,
-                    }}
-                    onClick={() =>
-                      void run(async () => {
-                        await action("select", { messageId: m.id });
-                        setModal("");
-                      })
-                    }
-                  >
-                    <GitBranch size={14} />
-                    <strong>{m.role === "user" ? "你" : "AI"}</strong>
-                    <span>{m.content.slice(0, 90) || "生成中"}</span>
-                  </button>
-                ))}
-              </div>
             ) : modal === "preview" && chat ? (
               <RequestPreview chat={chat} draft={draft} run={run} />
             ) : modal.startsWith("request:") &&
@@ -1981,6 +1983,40 @@ function App() {
     </div>
   );
 }
+const MessageMarkdown = React.memo(function MessageMarkdown({
+  content,
+}: {
+  content: string;
+}) {
+  return (
+    <Markdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        img: ({ alt, src }) => (
+          <a
+            href={
+              typeof src === "string" && /^https:\/\//.test(src)
+                ? src
+                : undefined
+            }
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            [图片：{alt ?? "链接"}]
+          </a>
+        ),
+        a: ({ children, href }) => (
+          <a href={href} target="_blank" rel="noopener noreferrer">
+            {children}
+          </a>
+        ),
+        pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+      }}
+    >
+      {content}
+    </Markdown>
+  );
+});
 function plainText(id: string) {
   const source = document.getElementById("text-" + id);
   if (!source) return "";
@@ -2226,6 +2262,7 @@ function SettingsPanel({
   refresh: () => Promise<void>;
   onLogout: () => void;
 }) {
+  const connection = useDeviceConnection();
   const [tab, setTab] = useState(initialTab),
     [form, setForm] = useState({
       name: "",
@@ -2248,6 +2285,39 @@ function SettingsPanel({
     await api("/settings", "PUT", next);
     await refresh();
   }
+  async function saveProvider(value: {
+    id?: string;
+    name: string;
+    baseUrl: string;
+    prefix: string;
+    apiKey?: string;
+  }) {
+    let models: { id: string }[] | undefined;
+    let key = value.apiKey;
+    if (connection.enabled) {
+      const existing = providers.find((p) => p.id === value.id);
+      if (
+        existing &&
+        existing.baseUrl !== value.baseUrl.replace(/\/$/, "") &&
+        !key
+      )
+        throw Error("修改地址时请重新输入密钥");
+      key ??= existing
+        ? await connection.key({
+            providerId: existing.id,
+            baseUrl: existing.baseUrl,
+            hasKey: existing.hasKey,
+          })
+        : "";
+      models = await directModels(value.baseUrl, key);
+    }
+    const saved = await api<ProviderView>("/providers", "POST", {
+      ...value,
+      models,
+    });
+    if (key !== undefined) connection.remember(saved.id, saved.baseUrl, key);
+    return saved;
+  }
   useEffect(() => {
     if (tab === "security")
       void run(async () => setSessions(await api("/auth/sessions")));
@@ -2263,6 +2333,7 @@ function SettingsPanel({
     <div className="settings-body">
       <nav>
         {[
+          ["connection", "连接"],
           ["providers", "服务商"],
           ["models", "模型"],
           ["templates", "提示词模板"],
@@ -2270,6 +2341,7 @@ function SettingsPanel({
           ["backup", "设置备份"],
           ["appearance", "外观"],
           ["security", "账号与设备"],
+          ["about", "关于"],
         ].map(([key, title]) => (
           <button
             className={tab === key ? "selected" : ""}
@@ -2281,6 +2353,61 @@ function SettingsPanel({
         ))}
       </nav>
       <div className="settings-content">
+        {tab === "connection" && (
+          <>
+            <h3>请求方式</h3>
+            <label className="toggle">
+              此设备直连
+              <input
+                type="checkbox"
+                aria-label="此设备直连"
+                checked={connection.enabled}
+                onChange={(event) =>
+                  connection.setEnabled(event.target.checked)
+                }
+              />
+            </label>
+            <p className="muted">
+              开启后，此设备直接通过 HTTPS
+              请求服务商，流式内容即时显示。上游必须允许 CORS
+              跨域；密钥经访问密码验证后只保留在页面内存。关闭页面会中断直连生成，后台持续生成请使用服务端模式。开关只在此设备保存。
+            </p>
+            <button onClick={connection.lock}>清除临时密钥</button>
+          </>
+        )}
+        {tab === "about" && (
+          <>
+            <h3>关于在线AI</h3>
+            <p>
+              分支总览组件源自{" "}
+              <a
+                href="https://github.com/open-webui/open-webui/tree/v0.12.2/src/lib/components/chat/Overview"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open WebUI v0.12.2
+              </a>
+              ，使用 Svelte Flow，已适配本应用。
+            </p>
+            <p>
+              <a
+                href="/licenses/open-webui.txt"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open WebUI License
+              </a>{" "}
+              ·{" "}
+              <a
+                href="/licenses/open-webui-history.txt"
+                target="_blank"
+                rel="noreferrer"
+              >
+                许可历史
+              </a>
+            </p>
+          </>
+        )}
         <SettingsTools
           tab={tab}
           settings={settings}
@@ -2292,7 +2419,8 @@ function SettingsPanel({
           <>
             <h3>服务商</h3>
             <p className="muted">
-              连接你自己的 OpenAI 兼容接口。密钥仅保存在服务端。
+              连接你自己的 OpenAI
+              兼容接口。密钥加密保存在服务端，设备直连时经验证临时解锁。
             </p>
             {providers.map((p) => (
               <div className="provider-card" key={p.id}>
@@ -2323,7 +2451,7 @@ function SettingsPanel({
                   label={"刷新 " + p.name + " 模型"}
                   onClick={() =>
                     void run(async () => {
-                      await api("/providers", "POST", {
+                      await saveProvider({
                         id: p.id,
                         name: p.name,
                         baseUrl: p.baseUrl,
@@ -2355,7 +2483,7 @@ function SettingsPanel({
                 setSaving(true);
                 void run(async () => {
                   try {
-                    await api("/providers", "POST", {
+                    await saveProvider({
                       ...form,
                       id: form.id || undefined,
                       apiKey: form.apiKey || undefined,
@@ -2838,6 +2966,8 @@ function SettingsPanel({
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <DeviceConnectionProvider>
+      <App />
+    </DeviceConnectionProvider>
   </React.StrictMode>,
 );

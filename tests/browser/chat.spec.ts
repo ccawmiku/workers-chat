@@ -227,13 +227,25 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
     .screenshot({ path: "docs/screenshots/composer-dark.png" });
   await page.getByRole("button", { name: "当前聊天设置", exact: true }).click();
   await page.getByRole("button", { name: "分支总览", exact: true }).click();
+  await expect(page.locator(".svelte-flow__node")).toHaveCount(3);
+  await page.getByRole("button", { name: "fit view", exact: true }).click();
   await page
-    .getByRole("dialog")
-    .getByRole("button")
+    .locator(".parameters")
+    .screenshot({ path: "docs/screenshots/overview-dark.png" });
+  await page
+    .getByRole("button", { name: "Horizontal Layout", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Vertical Layout", exact: true })
+    .click();
+  await page
+    .locator(".svelte-flow__node")
     .filter({ hasText: "从目标开始" })
     .click();
   await expect(
-    page.getByText("从目标开始，逐步分解。", { exact: true }),
+    page
+      .locator(".message.assistant .markdown")
+      .getByText("从目标开始，逐步分解。", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "返回聊天", exact: true }).click();
   await page.getByRole("button", { name: "账户菜单", exact: true }).click();
@@ -246,6 +258,11 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
   await page.getByRole("button", { name: "收起导航", exact: true }).click();
   await page.getByRole("button", { name: "当前聊天设置", exact: true }).click();
   await expect(page.getByText("当前聊天设置", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "分支总览", exact: true }).click();
+  await page.getByRole("button", { name: "fit view", exact: true }).click();
+  await page
+    .locator(".parameters")
+    .screenshot({ path: "docs/screenshots/overview-mobile.png" });
   await page.getByRole("button", { name: "返回聊天", exact: true }).click();
   await page.screenshot({ path: "docs/screenshots/mobile-light.png" });
   await page

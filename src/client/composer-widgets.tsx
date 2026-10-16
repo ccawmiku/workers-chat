@@ -115,6 +115,13 @@ export function ContextUsage({
   const [hover, setHover] = useState(false),
     [pinned, setPinned] = useState(false);
   const percent = Math.round((used / capacity) * 100);
+  const fraction = Math.max(0, Math.min(1, used / Math.max(1, capacity)));
+  const arc = (start: number, end: number) => {
+    const point = (angle: number) =>
+      `${10 + 7 * Math.sin(angle)} ${10 - 7 * Math.cos(angle)}`;
+    return `M ${point(start)} A 7 7 0 ${end - start > Math.PI ? 1 : 0} 1 ${point(end)}`;
+  };
+  const whole = "M 10 3 A 7 7 0 1 1 10 17 A 7 7 0 1 1 10 3";
   return (
     <>
       <button
@@ -128,14 +135,25 @@ export function ContextUsage({
         onBlur={() => setHover(false)}
         onClick={() => setPinned(!pinned)}
       >
-        <span
+        <svg
           className={"context-ring " + (used > capacity ? "over" : "")}
-          style={
-            {
-              "--progress": Math.min(percent, 100) + "%",
-            } as React.CSSProperties
-          }
-        />
+          viewBox="0 0 20 20"
+          aria-hidden="true"
+          fill="none"
+          strokeWidth="2.5"
+        >
+          {fraction === 0 || fraction === 1 ? (
+            <path d={whole} stroke={fraction ? "currentColor" : "#7c7c7c"} />
+          ) : (
+            <>
+              <path d={arc(0, fraction * Math.PI * 2)} stroke="currentColor" />
+              <path
+                d={arc(fraction * Math.PI * 2, Math.PI * 2)}
+                stroke="#7c7c7c"
+              />
+            </>
+          )}
+        </svg>
       </button>
       <FloatingPanel
         anchor={anchor}

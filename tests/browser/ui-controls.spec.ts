@@ -146,6 +146,23 @@ for (const mobile of [false, true]) {
     await expect(
       page.getByText("删除消息与后续分支", { exact: true }),
     ).toHaveCount(0);
+    for (const zoom of [0.8, 1, 1.25]) {
+      await page.locator(".composer").evaluate((element, value) => {
+        element.style.zoom = String(value);
+      }, zoom);
+      const ring = page.locator("svg.context-ring");
+      await expect(ring).toHaveCount(1);
+      const box = await ring.boundingBox();
+      expect(Math.abs(box!.width - box!.height)).toBeLessThan(0.1);
+      expect(
+        await ring.evaluate(
+          (element) => getComputedStyle(element, "::after").content,
+        ),
+      ).toBe("none");
+    }
+    await page.locator(".composer").evaluate((element) => {
+      element.style.zoom = "1";
+    });
 
     const first = page.locator(".message.assistant").first();
     await first

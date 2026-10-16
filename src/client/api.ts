@@ -1,14 +1,21 @@
+import { deviceMode } from "./device-mode";
 export async function api<T = unknown>(
   path: string,
   method = "GET",
   body?: unknown,
+  options: RequestInit = {},
 ): Promise<T> {
   const response = await fetch("/api" + path, {
     method,
     credentials: "same-origin",
+    ...options,
+    headers: {
+      ...(deviceMode() ? { "X-Chat-Transport": "device" } : {}),
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...options.headers,
+    },
     ...(body !== undefined
       ? {
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         }
       : {}),

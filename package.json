@@ -10,12 +10,13 @@
     "build": "cf build",
     "typecheck": "cf workers types && tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm test && npm run build",
+    "check": "npm run typecheck && npm run check:svelte && npm test && npm run build",
     "deploy": "cf deploy",
     "deploy:dry": "cf deploy --dry-run",
     "auth:prepare": "node scripts/prepare-auth.mjs",
     "dev:init": "node scripts/dev-init.mjs",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "check:svelte": "svelte-check --fail-on-warnings"
   },
   "repository": {
     "type": "git",
@@ -29,16 +30,19 @@
   },
   "homepage": "https://github.com/ccawmiku/workers-chat#readme",
   "dependencies": {
+    "@xyflow/svelte": "0.1.39",
     "lucide-react": "^1.57.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "svelte": "5.57.2"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^2.0.0-beta.v.0",
     "@cloudflare/workers-types": "^5.20261015.1",
     "@playwright/test": "^1.64.1",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -46,7 +50,8 @@
     "cf": "^1.0.0-beta.17",
     "esbuild": "^0.28.2",
     "miniflare": "^5.20261012.0-beta",
-    "typescript": "^7.0.2",
+    "svelte-check": "4.7.2",
+    "typescript": "6.0.2",
     "vite": "^8.3.4",
     "vitest": "^5.0.5"
   },

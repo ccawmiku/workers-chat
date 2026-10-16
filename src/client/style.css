@@ -259,12 +259,21 @@ small {
   flex: 1;
 }
 .chat-more {
-  display: none;
+  display: flex;
+  opacity: 0;
   padding: 4px;
   margin-right: 3px;
 }
-.chat-row:hover .chat-more {
-  display: flex;
+.chat-row:hover .chat-more,
+.chat-row:focus-within .chat-more,
+.chat-row.selected .chat-more,
+.chat-more[aria-expanded="true"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .chat-more {
+    opacity: 1;
+  }
 }
 .nav-empty {
   font-size: 12px;
@@ -671,26 +680,19 @@ summary {
 }
 
 .context-ring {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: conic-gradient(var(--accent) var(--progress), #7c7c7c 0);
-  position: relative;
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
   flex-shrink: 0;
   cursor: help;
   display: block;
 }
-.context-ring:after {
-  content: "";
-  position: absolute;
-  inset: 2px;
-  background: var(--input);
-  border-radius: 50%;
-}
 .context-ring.over {
-  background: var(--danger);
+  color: var(--danger);
 }
 .context-trigger {
+  display: grid;
+  place-items: center;
   padding: 5px;
   width: 26px;
   height: 30px;
@@ -899,6 +901,24 @@ summary {
   background: var(--border);
   border: 0;
   margin: 7px 10px;
+}
+.chat-list-menu {
+  padding: 6px;
+  border-radius: 18px;
+}
+.chat-list-menu > button {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  justify-content: flex-start;
+  padding: 10px 13px;
+  gap: 12px;
+  font-size: 14px;
+}
+.chat-list-menu > button:last-child {
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 12px 12px;
+  margin-top: 4px;
 }
 .model-popover {
   position: absolute;

@@ -36,4 +36,8 @@
 
 2026-10-15 UTC 查询官方 latest release 为 **v0.12.2**，发布于 2026-10-14 21:07:29 UTC；tag 对应提交 `6a18585ff4c2e5f6805f682222cfbc46dc669ef8`。
 
-读取该版本 `src/lib/utils/index.ts` 的 `convertMessagesToHistory`、`sanitizeHistory`、路线相关结构及 `backend/open_webui/utils/chat_fork.py`。本项目独立实现消息树与交换逻辑，未迁入其 Python 后端或 UI 组件。当前测试依据这些结构自行构造 fixture；真实 OpenWebUI 导出/再导入验收仍待完成。
+读取该版本 `src/lib/utils/index.ts` 的 `convertMessagesToHistory`、`sanitizeHistory`、路线相关结构及 `backend/open_webui/utils/chat_fork.py`。本项目独立实现消息树与交换逻辑，未迁入其 Python 后端。2026-10-16 后续按用户指令引入其 Overview Svelte Flow UI 组件，版本、适配和许可见 `src/vendor/open-webui/PROVENANCE.md`。当前测试依据这些结构自行构造 fixture；真实 OpenWebUI 导出/再导入验收仍待完成。
+
+## 设备直连（2026-10-16）
+
+设备模式不启动生成 Workflow；Worker 只建立任务和无密钥请求描述，浏览器临时解锁 Key 后直接通过 HTTPS/CORS 调用上游。每约 2 秒更新 DO 检查点，最终正文与任务状态仍原子保存至 D1。生成 90 秒无心跳在状态读取时转为中断，不重放上游请求。关闭页面不保证继续生成，原服务端模式继续承担该能力。标题也使用原子 claim 和 attempted 防止刷新重复调用。模型列表和连通性测试在直连开关开启时同样由浏览器发出。CSP 允许 HTTPS 连接，fetch 仍拒绝 HTTP、URL 凭证、重定向，并不携带站点 Cookie。

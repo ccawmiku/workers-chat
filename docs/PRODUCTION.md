@@ -1,6 +1,17 @@
 # 生产部署记录
 
-## 当前版本：daisyUI / 提示词排序 / 归档文件夹 / Lucide
+## 当前版本：设置整理 / 对话刻度 / 紧凑排版
+
+- 生产地址：[在线AI](https://workers-chat.1907018245.workers.dev/)。应用提交 `88d5d36`；CF Version：`ef856226-6ae5-45cf-ae44-5b1173a9ef33`。
+- 服务商改为紧凑列表与独立编辑弹窗，保存配置和刷新模型分离；模型页电脑两栏、手机一栏，上下文预算纳入“模型设置”。分组命名使用 daisyUI 弹窗，菜单补 Lucide 图标并缩短文字。
+- 参数单行排列，普通滑条两侧等粗、滑块与横条等高；继续回答为 CirclePlay，favicon 为粉色 Sparkles。上游返回缓存率时显示，没有时隐藏；删除用量冗余文字。
+- 左侧增加当前路线的问答刻度、预览与跳转，无书签。正文两端对齐，默认行高 1.6、段距 12px，组件和文字尺度收紧；旧默认行距迁移，保留其他自定义值。
+- 41 项单元/workerd、TypeScript/Svelte 检查、完整 19 个 Chromium/WebKit 场景通过；最后行距调整后的 6 个桌面/手机场景再次通过。最终构建、部署 dry run 与秘密扫描通过。
+- 真实 HTTPS 检查确认缓存条件显示、刻度跳转、排版、图标、参数、服务商表单、模型两栏/手机一栏和分组弹窗。0 页面错误、0 模型请求、0 服务商写入；整体设置与服务商配置前后完全一致，合成聊天和测试会话已清理。
+- 沿用原 D1、DO、Workflows 和加密密钥，无数据迁移或初始化，免费套餐不变。
+- 本地合成截图：[服务商](screenshots/providers-desktop.png)、[模型设置](screenshots/model-cards-desktop.png)、[紧凑参数](screenshots/compact-parameters-desktop.png)、[对话刻度](screenshots/conversation-timeline-desktop.png)。
+
+## 前一版本：daisyUI / 提示词排序 / 归档文件夹 / Lucide
 
 - 生产地址：[在线AI](https://workers-chat.1907018245.workers.dev/)。应用提交 `3598421`（功能提交 `e28b5f5`、`3fc6deb`）；CF Version：`5e9cbfa0-6068-410d-8dba-0866820712f8`。
 - 提示词为“＋选择已保存模板”的排序列表，支持电脑/触屏拖动和上下箭头、按名称展开编辑本聊天副本及移除；删除替换/追加和空白卡片。归档是对话列表固定文件夹，不能改名删除，头像菜单移除误导入口。

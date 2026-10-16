@@ -81,6 +81,12 @@ const effortLabels = {
   high: "高",
   max: "最高",
 };
+// A phone remains a touch device after rotating past the layout breakpoint.
+function desktopInput() {
+  return (
+    innerWidth > 760 && matchMedia("(hover: hover) and (pointer: fine)").matches
+  );
+}
 function App() {
   const [auth, setAuth] = useState<boolean | null>(null),
     [error, setError] = useState(""),
@@ -252,6 +258,9 @@ function App() {
       setJob(result.job);
       setTitleJob(result.titleJob ?? null);
       setMenu(null);
+      setEditing(null);
+      setModelMenu(false);
+      cancelLongPress();
       setDraft(result.chat.draft);
       draftRef.current = result.chat.draft;
       draftVersion.current++;
@@ -261,7 +270,7 @@ function App() {
         await api("/chats/" + id + "/seen", "POST", {});
         await loadNavigation();
       }
-      if (innerWidth < 760) setSidebar(false);
+      if (innerWidth <= 760) setSidebar(false);
     } finally {
       if (sequence === navigationSeq.current) setOpening(false);
     }
@@ -614,7 +623,9 @@ function App() {
       )}
       <aside
         className={"sidebar " + (sidebar ? "open" : "")}
-        style={innerWidth > 760 ? { width: sidebarWidth } : undefined}
+        style={
+          { "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties
+        }
       >
         <div
           className="sidebar-resize"
@@ -1353,7 +1364,7 @@ function App() {
                   e.key === "Enter" &&
                   !e.shiftKey &&
                   !e.nativeEvent.isComposing &&
-                  innerWidth > 760 &&
+                  desktopInput() &&
                   appearance.enter
                 ) {
                   e.preventDefault();
@@ -1401,7 +1412,7 @@ function App() {
                       <Search size={15} />
                       <input
                         aria-label="搜索模型"
-                        autoFocus={innerWidth > 760}
+                        autoFocus={desktopInput()}
                         placeholder="搜索模型或服务商"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}

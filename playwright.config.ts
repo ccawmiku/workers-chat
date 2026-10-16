@@ -7,12 +7,23 @@ export default defineConfig({
   use: {
     baseURL: "http://localhost:5173",
     headless: true,
-    launchOptions: {
-      ...(existsSync("/usr/bin/chromium")
-        ? { executablePath: "/usr/bin/chromium" }
-        : {}),
-    },
   },
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        browserName: "chromium",
+        launchOptions: existsSync("/usr/bin/chromium")
+          ? { executablePath: "/usr/bin/chromium" }
+          : {},
+      },
+    },
+    {
+      name: "webkit-mobile",
+      testMatch: "mobile.spec.ts",
+      use: { browserName: "webkit" },
+    },
+  ],
   webServer: {
     command: "node scripts/dev-init.mjs && npm run dev",
     url: "http://localhost:5173",

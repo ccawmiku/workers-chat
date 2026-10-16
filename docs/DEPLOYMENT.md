@@ -12,7 +12,7 @@ npm run dev
 
 本地地址 `http://localhost:5173`。随机本地登录密码位于 `~/.config/workers-chat/local-login.json`；`.dev.vars` 含本地散列和 AES 密钥，两者均不进入 Git。开发 D1 使用 `.cloudflare/state/v3`。`dev:init` 使用 `d1_migrations` 记录并原子应用所有未执行的本地迁移（目前 0001—0003）；后续生产迁移由 `cf d1 migrations apply` 管理，不使用开发初始化脚本。
 
-浏览器测试需要 Chromium。检测到 `/usr/bin/chromium` 时直接使用；其他平台可自行安装 Playwright Chromium。`npm run test:browser` 会启动或复用本地服务器，新增本地测试聊天，并用不含密钥的测试设置替换本地配置。请使用专用开发数据库，勿对生产运行浏览器测试。
+浏览器测试需要 Chromium 和 WebKit，可运行 `npx playwright install --with-deps chromium webkit` 安装浏览器和系统依赖（Linux 安装系统依赖需要相应权限）。检测到 `/usr/bin/chromium` 时直接使用；仅跑 Chromium 可用 `npm run test:browser -- --project=chromium`。`npm run test:browser` 会启动或复用本地服务器，新增本地测试聊天，并用不含密钥的测试设置替换本地配置。请使用专用开发数据库，勿对生产运行浏览器测试。
 
 ## 准备正式凭证
 

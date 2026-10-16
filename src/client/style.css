@@ -161,7 +161,7 @@ small {
   font-size: 14px;
 }
 .sidebar {
-  width: 264px;
+  width: var(--sidebar-width, 264px);
   flex-shrink: 0;
   display: none;
   flex-direction: column;
@@ -1124,7 +1124,7 @@ summary {
     width: 280px;
   }
   .sidebar {
-    width: 230px;
+    width: var(--sidebar-width, 230px);
   }
   .model-trigger {
     max-width: 190px;
@@ -1468,6 +1468,8 @@ summary {
     left: 16px;
     right: 16px;
     max-width: none;
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
     padding: 10px;
     z-index: 55;
     box-shadow: 0 0 0 100vmax #0005;

@@ -7,6 +7,7 @@ import {
   addMessage,
   editMessage,
   selectBranch,
+  route,
   toggleContextTurn,
   forkChat,
   sanitizeUsage,
@@ -661,7 +662,14 @@ async function api(request: Request, env: Env) {
     ) {
       if (!message || message.role !== "assistant")
         throw new HttpError(400, "请选择 AI 回答");
-      chat.currentId = message.parentId;
+      if (action === "regenerate") {
+        const question = route(chat, message.id).findLast(
+          (m) => m.role === "user",
+        );
+        if (!question)
+          throw new HttpError(400, "这条回答没有关联的用户问题，无法重新发送");
+        addMessage(chat, "user", question.content, question.parentId);
+      } else chat.currentId = message.parentId;
       const jobId = await startGeneration(
         env,
         chat,

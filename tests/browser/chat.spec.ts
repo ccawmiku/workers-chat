@@ -2,6 +2,122 @@ import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+test("repeated questions switch complete user-answer sends on desktop and phone", async ({
+  page,
+}) => {
+  const { password } = JSON.parse(
+    await readFile(
+      join(homedir(), ".config/workers-chat/local-login.json"),
+      "utf8",
+    ),
+  );
+  let generations = 0;
+  await page.route(
+    /\/api\/chats\/[^/]+\/(send|regenerate|retry|continue|title)$/,
+    async (route) => {
+      generations++;
+      await route.fulfill({
+        status: 400,
+        json: { error: "Synthetic branch fixture only" },
+      });
+    },
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+  await page.getByLabel("访问密码", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await page.locator(".new-chat").waitFor();
+  const id = await page.evaluate(async () => {
+    const response = await fetch("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data: [
+          {
+            chat: {
+              title: "重新发送切换验证",
+              history: {
+                currentId: "a2",
+                messages: {
+                  u1: {
+                    id: "u1",
+                    parentId: null,
+                    role: "user",
+                    content: "完全相同的问题",
+                    timestamp: 1700000000,
+                  },
+                  a1: {
+                    id: "a1",
+                    parentId: "u1",
+                    role: "assistant",
+                    content: "第一次发送的回答",
+                    timestamp: 1700000001,
+                  },
+                  u2: {
+                    id: "u2",
+                    parentId: null,
+                    role: "user",
+                    content: "完全相同的问题",
+                    timestamp: 1700000002,
+                  },
+                  a2: {
+                    id: "a2",
+                    parentId: "u2",
+                    role: "assistant",
+                    content: "重新发送后的回答",
+                    timestamp: 1700000003,
+                  },
+                },
+              },
+            },
+          },
+        ],
+      }),
+    });
+    if (!response.ok) throw Error("Branch fixture import failed");
+    const result = (await response.json()) as { ids: string[] };
+    localStorage.setItem("lastChat", result.ids[0]!);
+    return result.ids[0]!;
+  });
+  await page.reload();
+  await expect(page.locator(".header-title")).toHaveText("重新发送切换验证");
+  for (const viewport of [
+    { width: 1440, height: 1000 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    if (viewport.width < 760 && (await page.locator(".sidebar").isVisible()))
+      await page.getByRole("button", { name: "收起导航", exact: true }).click();
+    const user = page.locator(".message.user");
+    await expect(user).toHaveCount(1);
+    await expect(
+      user.getByRole("button", { name: "选择消息版本", exact: true }),
+    ).toHaveText("2 / 2");
+    await expect(page.locator(".message.assistant")).toHaveText(
+      /重新发送后的回答/,
+    );
+    await user.getByRole("button", { name: "上个版本", exact: true }).click();
+    await expect(
+      user.getByRole("button", { name: "选择消息版本", exact: true }),
+    ).toHaveText("1 / 2");
+    await expect(page.locator(".message.assistant")).toHaveText(
+      /第一次发送的回答/,
+    );
+    await user.getByRole("button", { name: "下个版本", exact: true }).click();
+    await expect(page.locator(".message.assistant")).toHaveText(
+      /重新发送后的回答/,
+    );
+  }
+  const result = await page.evaluate(async (chatId) => {
+    const response = await fetch("/api/chats/" + chatId);
+    return (await response.json()) as {
+      chat: { messages: Record<string, unknown> };
+    };
+  }, id);
+  expect(Object.keys(result.chat.messages)).toHaveLength(4);
+  expect(generations).toBe(0);
+});
 test("desktop/mobile login, import, branch navigation and cloud draft", async ({
   page,
 }) => {

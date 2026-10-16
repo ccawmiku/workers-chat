@@ -445,6 +445,119 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(
       Object.values(regenerated.messages).filter((m) => m.role === "assistant"),
     ).toHaveLength(3);
+    const regeneratedReply = regenerated.messages[regenerated.currentId!]!;
+    const repeatedQuestion = regenerated.messages[regeneratedReply.parentId!]!;
+    expect(repeatedQuestion.id).not.toBe(reply.parentId);
+    expect(repeatedQuestion).toMatchObject({
+      role: "user",
+      content: "hello",
+      parentId: null,
+    });
+    expect(upstreamCalls.at(-1)!.messages).toEqual([
+      { role: "user", content: "hello" },
+    ]);
+    await value("/chats/" + chat.id + "/select", "POST", {
+      messageId: reply.parentId,
+    });
+    expect(
+      (await value<{ chat: Chat }>("/chats/" + chat.id)).chat.currentId,
+    ).toBe(continued.currentId);
+    await value("/chats/" + chat.id + "/select", "POST", {
+      messageId: repeatedQuestion.id,
+    });
+    expect(
+      (await value<{ chat: Chat }>("/chats/" + chat.id)).chat.currentId,
+    ).toBe(regenerated.currentId);
+  });
+  it("regenerates an earlier question as an independent send while retaining ancestors, followups and drafts", async () => {
+    const imported = await value<{ ids: string[] }>("/import", "POST", {
+      data: [
+        {
+          chat: {
+            title: "regenerate send fixture",
+            history: {
+              currentId: "laterA",
+              messages: {
+                p: {
+                  id: "p",
+                  parentId: null,
+                  role: "user",
+                  content: "ancestor question",
+                },
+                pa: {
+                  id: "pa",
+                  parentId: "p",
+                  role: "assistant",
+                  content: "ancestor answer",
+                },
+                u: {
+                  id: "u",
+                  parentId: "pa",
+                  role: "user",
+                  content: "repeat this question",
+                },
+                a: {
+                  id: "a",
+                  parentId: "u",
+                  role: "assistant",
+                  content: "original answer",
+                },
+                laterU: {
+                  id: "laterU",
+                  parentId: "a",
+                  role: "user",
+                  content: "old followup",
+                },
+                laterA: {
+                  id: "laterA",
+                  parentId: "laterU",
+                  role: "assistant",
+                  content: "old followup answer",
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+    const id = imported.ids[0]!;
+    await value("/chats/" + id + "/draft", "PUT", {
+      draft: "keep unsent draft",
+    });
+    await value("/chats/" + id + "/exclude", "POST", { messageId: "u" });
+    const count = upstreamCalls.length;
+    await value("/chats/" + id + "/regenerate", "POST", { messageId: "a" });
+    const regenerated = await finished(id);
+    expect(upstreamCalls).toHaveLength(count + 1);
+    expect(upstreamCalls.at(-1)!.messages).toEqual([
+      { role: "user", content: "ancestor question" },
+      { role: "assistant", content: "ancestor answer" },
+      { role: "user", content: "repeat this question" },
+    ]);
+    const reply = regenerated.messages[regenerated.currentId!]!;
+    const question = regenerated.messages[reply.parentId!]!;
+    expect(question).toMatchObject({
+      role: "user",
+      content: "repeat this question",
+      parentId: "pa",
+    });
+    expect(question.id).not.toBe("u");
+    expect(question.excluded).not.toBe(true);
+    expect(regenerated.messages.a?.content).toBe("original answer");
+    expect(regenerated.messages.laterA?.content).toBe("old followup answer");
+    expect(regenerated.draft).toBe("keep unsent draft");
+    await value("/chats/" + id + "/exclude", "POST", {
+      messageId: question.id,
+    });
+    const toggled = await value<Chat>("/chats/" + id + "/exclude", "POST", {
+      messageId: "u",
+    });
+    expect(toggled.messages.u?.excluded).toBe(false);
+    expect(toggled.messages[question.id]?.excluded).toBe(true);
+    await value("/chats/" + id + "/select", "POST", { messageId: "u" });
+    expect((await value<{ chat: Chat }>("/chats/" + id)).chat.currentId).toBe(
+      "laterA",
+    );
   });
   it("rejects GET mutations and inherited message IDs without changing saved state", async () => {
     const chat = await value<Chat>("/chats", "POST", {});

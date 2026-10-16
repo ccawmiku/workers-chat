@@ -31,3 +31,7 @@
 - 截图：[Chromium 手机](screenshots/mobile-touch-chromium.png)、[WebKit 手机](screenshots/mobile-touch-webkit-mobile.png)。仅含构造数据。
 
 实体手机的系统键盘、浏览器地址栏、文字选择与辅助功能仍需后续设备覆盖；这不是额外的原生 App 功能，也不影响已完成的本地浏览器测试结论。其他产品实现限制继续以 [PROGRESS.md](PROGRESS.md) 为准。本轮没有真实上游生成或生产部署。
+
+## 后续 UI 样式统一
+
+用户最新选择桌面 Codex 输入框样式，同时用于手机。保留禁用加号，模型及思考强度并排，移除模型名后的重复箭头，展开入口放输入区右上角。模型菜单对齐工具栏右侧，限制高度并允许内部滚动。7 项浏览器回归通过；320px 场景额外核对模型控件组与发送按钮完整可见。单独预览：[暗色](screenshots/composer-dark.png) · [手机浅色](screenshots/composer-mobile.png)。

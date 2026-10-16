@@ -55,6 +55,37 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
     },
   ];
   const importedId = await page.evaluate(async (data) => {
+    // Keep visual checks independent of settings left by other test runs.
+    const providerId = crypto.randomUUID();
+    const setup = await fetch("/api/settings/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: "replace",
+        data: {
+          format: "workers-chat.settings",
+          version: 1,
+          settings: { defaultModel: { providerId, modelId: "Demo" } },
+          providers: [
+            {
+              id: providerId,
+              name: "界面构造测试",
+              baseUrl: "https://fixture.invalid/v1",
+              prefix: "",
+              models: [
+                {
+                  id: "Demo",
+                  enabled: true,
+                  capacity: 1048576,
+                  parameters: {},
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    });
+    if (!setup.ok) throw new Error("visual fixture settings failed");
     const response = await fetch("/api/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -74,6 +105,9 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
   await page.getByLabel("主题", { exact: true }).selectOption("dark");
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.screenshot({ path: "docs/screenshots/desktop-dark.png" });
+  await page
+    .locator(".composer")
+    .screenshot({ path: "docs/screenshots/composer-dark.png" });
   await page.getByRole("button", { name: "当前聊天设置", exact: true }).click();
   await page.getByRole("button", { name: "分支总览", exact: true }).click();
   await page
@@ -96,6 +130,9 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
   await expect(page.getByText("当前聊天设置", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "返回聊天", exact: true }).click();
   await page.screenshot({ path: "docs/screenshots/mobile-light.png" });
+  await page
+    .locator(".composer")
+    .screenshot({ path: "docs/screenshots/composer-mobile.png" });
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

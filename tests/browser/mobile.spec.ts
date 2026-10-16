@@ -130,6 +130,8 @@ test("touch phone: narrow content, rotation, newline, menus and saved drafts", a
   });
   await seed(page);
   await inViewport(page, ".composer");
+  await inViewport(page, ".composer-model-settings");
+  await inViewport(page, ".send-button");
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

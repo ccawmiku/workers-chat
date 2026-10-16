@@ -1351,127 +1351,155 @@ function App() {
                 没有可用的当前模型或默认模型，请在设置中添加服务商并选择有效的默认模型。
               </p>
             )}
-            <textarea
-              ref={textarea}
-              disabled={opening}
-              aria-label="消息"
-              placeholder="发送消息…"
-              value={draft}
-              rows={expanded ? 14 : 2}
-              onChange={(e) => updateDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (
-                  e.key === "Enter" &&
-                  !e.shiftKey &&
-                  !e.nativeEvent.isComposing &&
-                  desktopInput() &&
-                  appearance.enter
-                ) {
-                  e.preventDefault();
-                  void run(send);
-                }
-              }}
-            />
-            <div className="composer-controls">
+            <div className="composer-input">
+              <textarea
+                ref={textarea}
+                disabled={opening}
+                aria-label="消息"
+                placeholder="发送消息…"
+                value={draft}
+                rows={expanded ? 14 : 2}
+                onChange={(e) => updateDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === "Enter" &&
+                    !e.shiftKey &&
+                    !e.nativeEvent.isComposing &&
+                    desktopInput() &&
+                    appearance.enter
+                  ) {
+                    e.preventDefault();
+                    void run(send);
+                  }
+                }}
+              />
               <IconButton
                 label={expanded ? "收起编辑区" : "展开编辑区"}
+                className="composer-expand"
                 onClick={() => setExpanded(!expanded)}
               >
                 <Expand size={16} />
               </IconButton>
-              <div className="composer-spacer" />
-              <span
-                className={
-                  "context-ring " + (estimate > capacity ? "over" : "")
-                }
-                title={`本地估算 ${estimate.toLocaleString()} / ${capacity.toLocaleString()} Token`}
-                style={
-                  {
-                    "--progress":
-                      Math.min((estimate / capacity) * 100, 100) + "%",
-                  } as React.CSSProperties
-                }
-              />
-              <div className="model-control">
-                <button
-                  className="model-trigger"
-                  disabled={opening}
-                  onClick={() => {
-                    setModelMenu(!modelMenu);
-                    setSearch("");
-                  }}
-                >
-                  {selectedModel
-                    ? selectedModel.provider.prefix + selectedModel.id
-                    : "选择模型"}
-                  <ChevronDown size={12} />
-                </button>
-                {modelMenu && (
-                  <div className="model-popover">
-                    <div className="search-box">
-                      <Search size={15} />
-                      <input
-                        aria-label="搜索模型"
-                        autoFocus={desktopInput()}
-                        placeholder="搜索模型或服务商"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                      />
-                    </div>
-                    <div className="model-options">
-                      {filteredModels.map((m) => (
-                        <button
-                          key={m.provider.id + "/" + m.id}
-                          onClick={() =>
-                            void run(async () => {
-                              if (!chat) {
-                                await ensureComposerChat();
-                                await api("/chats/" + idRef.current, "PATCH", {
-                                  model: m.ref,
-                                });
-                                await refresh();
-                              } else await patch({ model: m.ref });
-                              setModelMenu(false);
-                            })
-                          }
-                        >
-                          <span>
-                            {m.provider.prefix + m.id}
-                            <small>{m.provider.name}</small>
-                          </span>
-                          {m.id === current?.modelId &&
-                            m.provider.id === current.providerId && (
-                              <Check size={15} />
-                            )}
-                        </button>
-                      ))}
-                      {!filteredModels.length && (
-                        <p className="muted">没有启用的匹配模型</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <select
-                className="effort"
-                aria-label="思考强度"
-                value={chat?.effort ?? "max"}
-                onChange={(e) =>
-                  void run(async () => {
-                    if (!chat) await ensureComposerChat();
-                    await api("/chats/" + idRef.current, "PATCH", {
-                      effort: e.target.value,
-                    });
-                    await refresh();
-                  })
-                }
+            </div>
+            <div className="composer-controls">
+              <button
+                className="icon-button composer-plus"
+                aria-label="更多功能（预留）"
+                title="预留入口"
+                disabled
               >
-                {Object.entries(effortLabels).map(([v, label]) => (
-                  <option key={v} value={v}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+                <Plus size={24} strokeWidth={1.7} />
+              </button>
+              <div className="composer-spacer" />
+              <div className="composer-model-settings">
+                <span
+                  className={
+                    "context-ring " + (estimate > capacity ? "over" : "")
+                  }
+                  title={`本地估算 ${estimate.toLocaleString()} / ${capacity.toLocaleString()} Token`}
+                  style={
+                    {
+                      "--progress":
+                        Math.min((estimate / capacity) * 100, 100) + "%",
+                    } as React.CSSProperties
+                  }
+                />
+                <div className="model-control">
+                  <button
+                    className="model-trigger"
+                    aria-label="选择模型"
+                    title={
+                      selectedModel
+                        ? selectedModel.provider.prefix + selectedModel.id
+                        : "选择模型"
+                    }
+                    aria-expanded={modelMenu}
+                    disabled={opening}
+                    onClick={() => {
+                      setModelMenu(!modelMenu);
+                      setSearch("");
+                    }}
+                  >
+                    <span>
+                      {selectedModel
+                        ? selectedModel.provider.prefix + selectedModel.id
+                        : "选择模型"}
+                    </span>
+                  </button>
+                  {modelMenu && (
+                    <div className="model-popover">
+                      <div className="search-box">
+                        <Search size={15} />
+                        <input
+                          aria-label="搜索模型"
+                          autoFocus={desktopInput()}
+                          placeholder="搜索模型或服务商"
+                          value={search}
+                          onChange={(e) => setSearch(e.target.value)}
+                        />
+                      </div>
+                      <div className="model-options">
+                        {filteredModels.map((m) => (
+                          <button
+                            key={m.provider.id + "/" + m.id}
+                            onClick={() =>
+                              void run(async () => {
+                                if (!chat) {
+                                  await ensureComposerChat();
+                                  await api(
+                                    "/chats/" + idRef.current,
+                                    "PATCH",
+                                    {
+                                      model: m.ref,
+                                    },
+                                  );
+                                  await refresh();
+                                } else await patch({ model: m.ref });
+                                setModelMenu(false);
+                              })
+                            }
+                          >
+                            <span>
+                              {m.provider.prefix + m.id}
+                              <small>{m.provider.name}</small>
+                            </span>
+                            {m.id === current?.modelId &&
+                              m.provider.id === current.providerId && (
+                                <Check size={15} />
+                              )}
+                          </button>
+                        ))}
+                        {!filteredModels.length && (
+                          <p className="muted">没有启用的匹配模型</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="effort-control">
+                  <select
+                    className="effort"
+                    aria-label="思考强度"
+                    value={chat?.effort ?? "max"}
+                    onChange={(e) =>
+                      void run(async () => {
+                        if (!chat) await ensureComposerChat();
+                        await api("/chats/" + idRef.current, "PATCH", {
+                          effort: e.target.value,
+                        });
+                        await refresh();
+                      })
+                    }
+                  >
+                    {Object.entries(effortLabels).map(([v, label]) => (
+                      <option key={v} value={v}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={12} aria-hidden="true" />
+                </div>
+              </div>
               {job ? (
                 <IconButton
                   label="停止生成"

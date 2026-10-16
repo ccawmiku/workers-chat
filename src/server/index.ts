@@ -7,7 +7,7 @@ import {
   addMessage,
   editMessage,
   selectBranch,
-  deleteSubtree,
+  toggleContextTurn,
   forkChat,
   sanitizeUsage,
   uuid,
@@ -689,10 +689,7 @@ async function api(request: Request, env: Env) {
       selectBranch(chat, str(body.messageId, 500));
     } else if (action === "exclude") {
       if (!message) throw new HttpError(404, "消息不存在");
-      message.excluded = !message.excluded;
-    } else if (action === "delete-message") {
-      if (!message) throw new HttpError(404, "消息不存在");
-      deleteSubtree(chat, message.id);
+      toggleContextTurn(chat, message.id);
     } else if (action === "fork") {
       if (!message) throw new HttpError(404, "消息不存在");
       const fork = forkChat(

@@ -58,9 +58,9 @@ test("large imports and delayed send preserve newer cloud drafts", async ({
   await page
     .getByRole("button", { name: "确认导入有效聊天", exact: true })
     .click();
-  await expect(page.getByRole("status")).toHaveText(
-    "已导入 15 个聊天，失败 1 项。",
-  );
+  await expect(
+    page.getByRole("status").filter({ hasText: /^已导入/ }),
+  ).toHaveText("已导入 15 个聊天，失败 1 项。");
   await page.getByRole("button", { name: "关闭导入结果", exact: true }).click();
   const id = await page.evaluate(async (prefix) => {
     const chats = (await (await fetch("/api/chats")).json()) as Chat[];
@@ -187,6 +187,7 @@ test("large imports and delayed send preserve newer cloud drafts", async ({
       body: JSON.stringify({ apiKey: "synthetic-display-key" }),
     });
   });
+  await page.getByRole("button", { name: "账户菜单", exact: true }).click();
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page
     .getByRole("button", { name: "查看 离线测试 密钥", exact: true })

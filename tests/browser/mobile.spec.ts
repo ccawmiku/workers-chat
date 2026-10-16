@@ -164,10 +164,10 @@ test("touch phone: narrow content, rotation, newline, menus and saved drafts", a
   await page.getByRole("button", { name: "返回聊天", exact: true }).tap();
   await page
     .locator(".message.assistant")
-    .getByRole("button", { name: "消息操作", exact: true })
+    .getByRole("button", { name: "消息详情", exact: true })
     .tap();
-  await inViewport(page, ".message-menu");
-  await page.getByRole("button", { name: "关闭菜单", exact: true }).tap();
+  await inViewport(page, ".modal");
+  await page.getByRole("button", { name: "关闭", exact: true }).tap();
   await page.setViewportSize({ width: 390, height: 844 });
   if (testInfo.project.name === "chromium") {
     const session = await page.context().newCDPSession(page);
@@ -196,18 +196,18 @@ test("touch phone: narrow content, rotation, newline, menus and saved drafts", a
           .evaluate((element) => element.scrollTop),
       )
       .toBeGreaterThan(60);
-    await expect(page.locator(".message-menu")).toHaveCount(0);
+    await expect(page.locator(".message-actions.visible")).toHaveCount(0);
     // A real browser touch hold, in addition to the deterministic pointer timer cases below.
     await session.send("Input.dispatchTouchEvent", {
       type: "touchStart",
       touchPoints: [{ x: 160, y: 250 }],
     });
-    await expect(page.locator(".message-menu")).toBeVisible();
+    await expect(page.locator(".message-actions.visible")).toBeVisible();
     await session.send("Input.dispatchTouchEvent", {
       type: "touchEnd",
       touchPoints: [],
     });
-    await page.getByRole("button", { name: "关闭菜单", exact: true }).tap();
+    await page.keyboard.press("Escape");
     await session.detach();
   }
   // Pointer sequences exercise the hold timer and scroll cancellation without relying on OS timing.
@@ -223,15 +223,15 @@ test("touch phone: narrow content, rotation, newline, menus and saved drafts", a
     clientY: 130,
   });
   await page.waitForTimeout(550);
-  await expect(page.locator(".message-menu")).toHaveCount(0);
+  await expect(page.locator(".message-actions.visible")).toHaveCount(0);
   await message.dispatchEvent("pointerdown", {
     pointerType: "touch",
     clientX: 100,
     clientY: 100,
   });
-  await expect(page.locator(".message-menu")).toBeVisible();
+  await expect(page.locator(".message-actions.visible")).toBeVisible();
   await message.dispatchEvent("pointerup", { pointerType: "touch" });
-  await page.getByRole("button", { name: "关闭菜单", exact: true }).tap();
+  await page.keyboard.press("Escape");
   await input.fill("手机云端草稿\n第二行");
   await expect
     .poll(() =>

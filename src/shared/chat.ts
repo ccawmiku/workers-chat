@@ -276,10 +276,47 @@ export function resolveModel(
   if (exists(settings.defaultModel)) return settings.defaultModel;
   throw new Error("当前模型不存在，且没有可用默认模型；请在设置中选择默认模型");
 }
+export function contextTurns(chat: Chat) {
+  const turns: Message[][] = [];
+  for (const message of route(chat)) {
+    if (message.role === "user" || !turns.length) turns.push([]);
+    turns.at(-1)!.push(message);
+  }
+  return turns;
+}
+
+// A question and every answer version belong to the same context switch.
+// Stop at the next user node so later rounds and edited-user branches stay independent.
+export function toggleContextTurn(chat: Chat, messageId: string) {
+  let root = findMessage(chat, messageId);
+  if (!root) throw new Error("消息不存在");
+  const ancestors = new Set<string>();
+  while (root.role !== "user" && root.parentId !== null) {
+    if (ancestors.has(root.id)) throw new Error("消息树包含循环");
+    ancestors.add(root.id);
+    const parent = findMessage(chat, root.parentId);
+    if (!parent) break;
+    root = parent;
+  }
+  const children = indexChildren(chat),
+    pending = [root],
+    members: Message[] = [];
+  while (pending.length) {
+    const node = pending.pop()!;
+    members.push(node);
+    for (const child of children.get(node.id) ?? [])
+      if (child.role !== "user") pending.push(child);
+  }
+  const excluded = !members.some((m) => m.excluded);
+  for (const node of members) node.excluded = excluded;
+  return excluded;
+}
+
 export function contextMessages(chat: Chat, draft?: string) {
-  let path = route(chat).filter(
-    (m) => !m.excluded && (chat.includeStopped || m.status !== "stopped"),
-  );
+  let path = contextTurns(chat)
+    .filter((turn) => !turn.some((m) => m.excluded))
+    .flat()
+    .filter((m) => chat.includeStopped || m.status !== "stopped");
   if (chat.rounds && chat.rounds > 0) {
     const historyRounds = chat.rounds - (draft ? 1 : 0);
     let rounds = 0,

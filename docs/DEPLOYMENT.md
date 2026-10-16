@@ -36,7 +36,7 @@ npx cf d1 create --name workers-chat --dry-run
 npx cf d1 create --name workers-chat
 ```
 
-记录创建响应中的真实 D1 ID，在 `cloudflare.config.ts` 的 `bindings.d1({ name: 'workers-chat', id: '<实际返回 ID>' })` 中配置。不要将本地模拟 ID 用于远端。使用该真实 ID 应用迁移：
+记录创建响应中的真实 D1 ID，在 `database.config.ts` 中配置，由 `cloudflare.config.ts` 和仅连接本地模拟器的 `dev:init` 共用该身份。不要将本地模拟 ID 用于远端。现有生产数据库沿用已保存的 ID。使用该真实 ID 应用迁移：
 
 ```sh
 npx cf d1 migrations apply <实际返回的数据库ID> --dir migrations

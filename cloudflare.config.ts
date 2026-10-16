@@ -1,5 +1,6 @@
 import { bindings, defineConfig, defineWorker, exports } from "cf/config";
 import * as entrypoint from "./src/server/index.ts" with { type: "cf-worker" };
+import { database } from "./database.config.ts";
 const workerDefinition = defineWorker({
   name: "workers-chat",
   compatibilityDate: "2026-10-15",
@@ -29,10 +30,7 @@ export default defineConfig({
   worker: {
     ...workerDefinition,
     env: {
-      DB: bindings.d1({
-        name: "workers-chat",
-        id: "b10d9d32-d892-4aad-80a1-17b6b208fa45",
-      }),
+      DB: bindings.d1(database),
       PROGRESS: bindings.durableObject({
         worker: workerDefinition,
         exportName: "Progress",

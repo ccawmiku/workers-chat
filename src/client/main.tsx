@@ -37,6 +37,15 @@ import {
   Moon,
   Search,
   CircleAlert,
+  FileText,
+  Info,
+  ArrowRight,
+  MessageSquareOff,
+  MessageSquarePlus,
+  Palette,
+  UserRound,
+  Pin,
+  CheckCheck,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -48,7 +57,7 @@ import {
   type ModelRef,
   route,
   indexChildren,
-  descendants,
+  contextTurns,
   markdownExport,
   estimateTokens,
   contextMessages,
@@ -60,6 +69,7 @@ import { IconButton, ParameterControl, useDialogFocus } from "./controls";
 import { ModelControls, TemplatePicker, MessageUsage } from "./chat-controls";
 import { SettingsTools, KeyReveal } from "./settings-tools";
 import { ImportDialog } from "./import-dialog";
+import { ContextUsage, EffortControl, AccountMenu } from "./composer-widgets";
 type Brief = Pick<
   Chat,
   | "id"
@@ -73,14 +83,6 @@ type Brief = Pick<
 > & { status?: string };
 type Group = { id: string; name: string; updatedAt: number };
 type ProviderView = Provider & { hasKey: boolean };
-const effortLabels = {
-  inherit: "跟随接口",
-  none: "无",
-  low: "低",
-  medium: "中",
-  high: "高",
-  max: "最高",
-};
 // A phone remains a touch device after rotating past the layout breakpoint.
 function desktopInput() {
   return (
@@ -119,6 +121,7 @@ function App() {
     [selecting, setSelecting] = useState(false),
     [groupMenu, setGroupMenu] = useState<string | null>(null),
     [scrollBottom, setScrollBottom] = useState(false);
+  const [settingsTab, setSettingsTab] = useState("providers");
   const [appearance, setAppearance] = useState(() => readAppearance());
   const dialogRef = useRef<HTMLElement>(null);
   useDialogFocus(dialogRef, () => setModal(""), !!modal);
@@ -142,6 +145,20 @@ function App() {
     longPress.current = null;
   };
   useEffect(() => () => cancelLongPress(), []);
+  useEffect(() => {
+    const outside = (event: PointerEvent) => {
+      if (!(event.target as HTMLElement).closest(".message")) setMenu(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenu(null);
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, []);
   const navigationSeq = useRef(0);
   const draftQueue = useRef<Promise<void>>(Promise.resolve()),
     activeSend = useRef<Promise<void> | null>(null),
@@ -488,6 +505,18 @@ function App() {
         .includes(search.toLowerCase()),
   );
   const path = useMemo(() => (chat ? route(chat) : []), [chat]);
+  const excludedIds = useMemo(
+    () =>
+      new Set(
+        chat
+          ? contextTurns(chat)
+              .filter((turn) => turn.some((m) => m.excluded))
+              .flat()
+              .map((m) => m.id)
+          : [],
+      ),
+    [chat],
+  );
   const byParent = useMemo(
     () => (chat ? indexChildren(chat) : new Map<string | null, Message[]>()),
     [chat?.messages],
@@ -531,6 +560,10 @@ function App() {
     setDraft(value);
     draftRef.current = value;
     dirty.current = true;
+  }
+  function showSettings(tab = "providers") {
+    setSettingsTab(tab);
+    setModal("settings");
   }
   function downloadChats(ids: string[]) {
     return run(async () => {
@@ -589,7 +622,12 @@ function App() {
       <button
         className="chat-more"
         aria-label={"管理 " + c.title}
-        onClick={() => setSelected([c.id])}
+        onClick={() =>
+          void run(async () => {
+            await open(c.id);
+            setPanel(true);
+          })
+        }
       >
         <MoreHorizontal size={16} />
       </button>
@@ -805,45 +843,73 @@ function App() {
           )}
         </div>
         <div className="nav-footer">
-          <button
-            onClick={() => {
-              setSelecting(!selecting);
-              setSelected([]);
-            }}
-          >
-            {selecting ? "退出多选" : "多选聊天"}
-          </button>
-          {view === "trash" && (
-            <button
-              onClick={() =>
-                void downloadChats(
-                  chats.filter((c) => c.deleted).map((c) => c.id),
-                )
-              }
-            >
-              导出回收站
-            </button>
-          )}
-          <button onClick={() => fileRef.current?.click()}>
-            <Upload size={16} />
-            导入聊天
-          </button>
-          <button
-            onClick={() => setView(view === "archive" ? "active" : "archive")}
-          >
-            <Archive size={16} />
-            {view === "archive" ? "返回聊天" : "归档"}
-          </button>
-          <button
-            onClick={() => setView(view === "trash" ? "active" : "trash")}
-          >
-            <Trash2 size={16} />
-            {view === "trash" ? "返回聊天" : "回收站"}
-          </button>
-          <button onClick={() => setModal("settings")}>
-            <Settings2 size={16} />
-            设置
-          </button>
+          <AccountMenu
+            items={[
+              {
+                label: "设置",
+                icon: <Settings2 size={19} />,
+                onClick: () => showSettings(),
+              },
+              {
+                label: "外观",
+                icon: <Palette size={19} />,
+                onClick: () => showSettings("appearance"),
+              },
+              {
+                label: "账号与设备",
+                icon: <UserRound size={19} />,
+                onClick: () => showSettings("security"),
+              },
+              {
+                label: selecting ? "退出多选" : "多选聊天",
+                icon: <CheckCheck size={19} />,
+                separator: true,
+                onClick: () => {
+                  setSelecting(!selecting);
+                  setSelected([]);
+                },
+              },
+              {
+                label: "导入聊天",
+                icon: <Upload size={19} />,
+                onClick: () => fileRef.current?.click(),
+              },
+              {
+                label: view === "archive" ? "返回聊天" : "归档",
+                icon: <Archive size={19} />,
+                onClick: () =>
+                  setView(view === "archive" ? "active" : "archive"),
+              },
+              {
+                label: view === "trash" ? "返回聊天" : "回收站",
+                icon: <Trash2 size={19} />,
+                onClick: () => setView(view === "trash" ? "active" : "trash"),
+              },
+              ...(view === "trash"
+                ? [
+                    {
+                      label: "导出回收站",
+                      icon: <Download size={19} />,
+                      onClick: () =>
+                        void downloadChats(
+                          chats.filter((c) => c.deleted).map((c) => c.id),
+                        ),
+                    },
+                  ]
+                : []),
+              {
+                label: "退出登录",
+                icon: <LogOut size={19} />,
+                separator: true,
+                onClick: () =>
+                  void run(async () => {
+                    await api("/auth/logout", "POST", {});
+                    setAuth(false);
+                    setChat(null);
+                  }),
+              },
+            ]}
+          />
         </div>
       </aside>
       <main>
@@ -873,12 +939,6 @@ function App() {
             )}
             {chat && (
               <>
-                <IconButton
-                  label="聊天管理"
-                  onClick={() => setModal("chat-menu")}
-                >
-                  <MoreHorizontal size={20} />
-                </IconButton>
                 <IconButton
                   label="当前聊天设置"
                   onClick={() => setPanel(!panel)}
@@ -970,7 +1030,7 @@ function App() {
               {!models.some((m) => m.enabled) && (
                 <button
                   className="subtle-button"
-                  onClick={() => setModal("settings")}
+                  onClick={() => showSettings()}
                 >
                   配置服务商与模型 <ChevronRight size={14} />
                 </button>
@@ -989,7 +1049,9 @@ function App() {
                   <article
                     key={m.id}
                     className={
-                      "message " + m.role + (m.excluded ? " excluded" : "")
+                      "message " +
+                      m.role +
+                      (excludedIds.has(m.id) ? " excluded" : "")
                     }
                     onPointerDown={(e) => {
                       if (
@@ -1166,10 +1228,76 @@ function App() {
                             </IconButton>
                           )}
                           <IconButton
-                            label="消息操作"
-                            onClick={() => setMenu(menu === m.id ? null : m.id)}
+                            label="从这里 Fork"
+                            disabled={!!job}
+                            onClick={() =>
+                              void run(() =>
+                                action("fork", { messageId: m.id }),
+                              )
+                            }
                           >
-                            <MoreHorizontal size={16} />
+                            <GitBranch size={15} />
+                          </IconButton>
+                          {m.role === "assistant" && (
+                            <IconButton
+                              label="继续回答"
+                              disabled={!!job}
+                              onClick={() =>
+                                void run(() =>
+                                  action("continue", { messageId: m.id }),
+                                )
+                              }
+                            >
+                              <ArrowRight size={15} />
+                            </IconButton>
+                          )}
+                          {m.role === "assistant" && m.status === "error" && (
+                            <IconButton
+                              label="重试为新版本"
+                              disabled={!!job}
+                              onClick={() =>
+                                void run(() =>
+                                  action("retry", { messageId: m.id }),
+                                )
+                              }
+                            >
+                              <RotateCcw size={15} />
+                            </IconButton>
+                          )}
+                          <IconButton
+                            label={
+                              excludedIds.has(m.id)
+                                ? "加入本轮上下文"
+                                : "移除本轮上下文"
+                            }
+                            disabled={!!job}
+                            onClick={() =>
+                              void run(() =>
+                                action("exclude", { messageId: m.id }),
+                              )
+                            }
+                          >
+                            {excludedIds.has(m.id) ? (
+                              <MessageSquarePlus size={15} />
+                            ) : (
+                              <MessageSquareOff size={15} />
+                            )}
+                          </IconButton>
+                          <IconButton
+                            label="复制纯文字"
+                            onClick={() =>
+                              void run(() =>
+                                navigator.clipboard.writeText(plainText(m.id)),
+                              )
+                            }
+                          >
+                            <FileText size={15} />
+                          </IconButton>
+                          <IconButton
+                            label="消息详情"
+                            onClick={() => setModal("request:" + m.id)}
+                          >
+                            <Info size={15} />
                           </IconButton>
                           {siblings.length > 1 && (
                             <div className="versions">
@@ -1215,111 +1343,6 @@ function App() {
                             message={m}
                             historical={m.id !== lastAssistant && menu !== m.id}
                           />
-                        )}
-                        {menu === m.id && (
-                          <div className="message-menu">
-                            <button onClick={() => setMenu(null)}>
-                              关闭菜单
-                            </button>
-                            {m.request && (
-                              <details>
-                                <summary>请求详情</summary>
-                                <pre className="request-meta">
-                                  {JSON.stringify(
-                                    {
-                                      model: m.model,
-                                      parameters: m.request.parameters,
-                                      effort: m.request.effort,
-                                      stream: m.request.stream,
-                                      usage: m.usage,
-                                    },
-                                    null,
-                                    2,
-                                  )}
-                                </pre>
-                              </details>
-                            )}
-                            <button
-                              disabled={!!job}
-                              onClick={() =>
-                                void run(() =>
-                                  action("fork", { messageId: m.id }),
-                                )
-                              }
-                            >
-                              <GitBranch size={15} />
-                              从这里 Fork
-                            </button>
-                            {m.role === "assistant" && (
-                              <>
-                                <button
-                                  disabled={!!job}
-                                  onClick={() =>
-                                    void run(() =>
-                                      action("continue", { messageId: m.id }),
-                                    )
-                                  }
-                                >
-                                  继续回答
-                                </button>
-                                {m.status === "error" && (
-                                  <button
-                                    disabled={!!job}
-                                    onClick={() =>
-                                      void run(() =>
-                                        action("retry", { messageId: m.id }),
-                                      )
-                                    }
-                                  >
-                                    重试为新版本
-                                  </button>
-                                )}
-                              </>
-                            )}
-                            <button
-                              disabled={!!job}
-                              onClick={() =>
-                                void run(() =>
-                                  action("exclude", { messageId: m.id }),
-                                )
-                              }
-                            >
-                              {m.excluded ? "重新加入上下文" : "从上下文排除"}
-                            </button>
-                            <button
-                              onClick={() =>
-                                void run(() =>
-                                  navigator.clipboard.writeText(
-                                    plainText(m.id),
-                                  ),
-                                )
-                              }
-                            >
-                              复制纯文字
-                            </button>
-                            <button
-                              className="danger-text"
-                              disabled={!!job}
-                              onClick={() => {
-                                if (
-                                  chat &&
-                                  confirm(
-                                    `将永久删除这条消息及其 ${descendants(chat, m.id).length - 1} 条后续消息。继续？`,
-                                  )
-                                )
-                                  void run(() =>
-                                    action("delete-message", {
-                                      messageId: m.id,
-                                    }),
-                                  );
-                              }}
-                            >
-                              删除消息与后续分支
-                            </button>
-                            <small>
-                              {new Date(m.createdAt).toLocaleString()}
-                            </small>
-                          </div>
                         )}
                       </div>
                     )}
@@ -1392,18 +1415,7 @@ function App() {
               </button>
               <div className="composer-spacer" />
               <div className="composer-model-settings">
-                <span
-                  className={
-                    "context-ring " + (estimate > capacity ? "over" : "")
-                  }
-                  title={`本地估算 ${estimate.toLocaleString()} / ${capacity.toLocaleString()} Token`}
-                  style={
-                    {
-                      "--progress":
-                        Math.min((estimate / capacity) * 100, 100) + "%",
-                    } as React.CSSProperties
-                  }
-                />
+                <ContextUsage used={estimate} capacity={capacity} />
                 <div className="model-control">
                   <button
                     className="model-trigger"
@@ -1476,29 +1488,26 @@ function App() {
                     </div>
                   )}
                 </div>
-                <div className="effort-control">
-                  <select
-                    className="effort"
-                    aria-label="思考强度"
-                    value={chat?.effort ?? "max"}
-                    onChange={(e) =>
-                      void run(async () => {
-                        if (!chat) await ensureComposerChat();
+                <EffortControl
+                  value={chat?.effort ?? "max"}
+                  model={
+                    selectedModel
+                      ? selectedModel.provider.prefix + selectedModel.id
+                      : "选择模型"
+                  }
+                  onChooseModel={() => setModelMenu(true)}
+                  onChange={(effort) =>
+                    run(async () => {
+                      if (!chat) {
+                        await ensureComposerChat();
                         await api("/chats/" + idRef.current, "PATCH", {
-                          effort: e.target.value,
+                          effort,
                         });
                         await refresh();
-                      })
-                    }
-                  >
-                    {Object.entries(effortLabels).map(([v, label]) => (
-                      <option key={v} value={v}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={12} aria-hidden="true" />
-                </div>
+                      } else await patch({ effort });
+                    })
+                  }
+                />
               </div>
               {job ? (
                 <IconButton
@@ -1526,12 +1535,9 @@ function App() {
               )}
             </div>
           </div>
-          <p className="composer-caption">
-            {estimate > capacity
-              ? "超出所设上下文预算，仍可发送。"
-              : "AI 的回答可能有误，请核实重要信息。"}
-            <span>{estimate.toLocaleString()} Token · 本地估算</span>
-          </p>
+          {estimate > capacity && (
+            <p className="context-warning">超出所设上下文预算，仍可发送。</p>
+          )}
         </div>
       </main>
       {panel && chat && (
@@ -1707,15 +1713,125 @@ function App() {
             </select>
             <button onClick={() => setModal("preview")}>预览下次请求</button>
             <button onClick={() => setModal("tree")}>分支总览</button>
+            <h3>聊天管理</h3>
+            <div className="chat-management">
+              <button
+                onClick={() => {
+                  const title = prompt("重命名聊天", chat.title);
+                  if (title) void run(() => patch({ title }));
+                }}
+              >
+                <Pencil size={16} />
+                重命名聊天
+              </button>
+              <button
+                disabled={
+                  !!job ||
+                  ["pending", "running"].includes(titleJob?.status ?? "")
+                }
+                onClick={() => void run(() => action("title"))}
+              >
+                <RotateCcw size={16} />
+                重新生成标题
+              </button>
+              {titleJob?.status === "error" && (
+                <p className="danger-text">标题生成失败：{titleJob.error}</p>
+              )}
+
+              <button
+                onClick={() => void run(() => patch({ pinned: !chat.pinned }))}
+              >
+                <Pin size={16} />
+                {chat.pinned ? "取消置顶" : "置顶聊天"}
+              </button>
+              <button
+                onClick={() =>
+                  void run(() => patch({ archived: !chat.archived }))
+                }
+              >
+                <Archive size={16} />
+                {chat.archived ? "取消归档" : "归档聊天"}
+              </button>
+              <select
+                aria-label="移动聊天"
+                value={chat.groupId ?? ""}
+                onChange={(e) =>
+                  void run(() => patch({ groupId: e.target.value || null }))
+                }
+              >
+                <option value="">主列表</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <button onClick={() => void downloadChats([chat.id])}>
+                <Download size={16} />
+                导出完整树 JSON
+              </button>
+              <button
+                onClick={() =>
+                  download(
+                    chat.title + ".md",
+                    markdownExport(chat),
+                    "text/markdown",
+                  )
+                }
+              >
+                <FileText size={16} />
+                导出当前路线 Markdown
+              </button>
+              <button
+                onClick={() =>
+                  void downloadChats(
+                    chats.filter((c) => !c.deleted).map((c) => c.id),
+                  )
+                }
+              >
+                <Download size={16} />
+                导出全部聊天（含归档）
+              </button>
+              <button onClick={() => fileRef.current?.click()}>
+                <Upload size={16} />
+                导入 OpenWebUI JSON
+              </button>
+              <button
+                className="danger-text"
+                onClick={() =>
+                  void run(async () => {
+                    await patch({ deleted: !chat.deleted });
+                    setModal("");
+                  })
+                }
+              >
+                <Trash2 size={16} />
+                {chat.deleted ? "从回收站恢复" : "移入回收站"}
+              </button>
+              {chat.deleted && (
+                <button
+                  className="danger-text"
+                  onClick={() => {
+                    if (confirm("永久删除这个聊天？无法恢复。"))
+                      void run(async () => {
+                        await api(
+                          "/chats/" + chat.id + "/permanent",
+                          "DELETE",
+                          {},
+                        );
+                        idRef.current = null;
+                        setChat(null);
+                        setModal("");
+                        await loadNavigation();
+                      });
+                  }}
+                >
+                  永久删除聊天
+                </button>
+              )}
+            </div>
           </div>
         </aside>
-      )}
-      {menu && (
-        <button
-          className="message-menu-backdrop"
-          aria-label="关闭消息菜单"
-          onClick={() => setMenu(null)}
-        />
       )}
       {modal && (
         <div className="modal-backdrop" onClick={() => setModal("")}>
@@ -1739,7 +1855,7 @@ function App() {
                       ? "分支总览"
                       : modal === "preview"
                         ? "请求预览"
-                        : "聊天管理"}
+                        : "消息详情"}
               </h2>
               <IconButton label="关闭" onClick={() => setModal("")}>
                 <X size={20} />
@@ -1747,6 +1863,7 @@ function App() {
             </div>
             {modal === "settings" ? (
               <SettingsPanel
+                initialTab={settingsTab}
                 providers={providers}
                 settings={settings}
                 appearance={appearance}
@@ -1808,109 +1925,25 @@ function App() {
               </div>
             ) : modal === "preview" && chat ? (
               <RequestPreview chat={chat} draft={draft} run={run} />
-            ) : chat ? (
-              <div className="chat-management">
-                <button
-                  disabled={
-                    !!job ||
-                    ["pending", "running"].includes(titleJob?.status ?? "")
-                  }
-                  onClick={() => void run(() => action("title"))}
-                >
-                  重新生成标题
-                </button>
-                {titleJob?.status === "error" && (
-                  <p className="danger-text">标题生成失败：{titleJob.error}</p>
-                )}
-
-                <button
-                  onClick={() =>
-                    void run(() => patch({ pinned: !chat.pinned }))
-                  }
-                >
-                  {chat.pinned ? "取消置顶" : "置顶聊天"}
-                </button>
-                <button
-                  onClick={() =>
-                    void run(() => patch({ archived: !chat.archived }))
-                  }
-                >
-                  {chat.archived ? "取消归档" : "归档聊天"}
-                </button>
-                <select
-                  aria-label="移动聊天"
-                  value={chat.groupId ?? ""}
-                  onChange={(e) =>
-                    void run(() => patch({ groupId: e.target.value || null }))
-                  }
-                >
-                  <option value="">主列表</option>
-                  {groups.map((g) => (
-                    <option key={g.id} value={g.id}>
-                      {g.name}
-                    </option>
-                  ))}
-                </select>
-                <button onClick={() => void downloadChats([chat.id])}>
-                  <Download size={16} />
-                  导出完整树 JSON
-                </button>
-                <button
-                  onClick={() =>
-                    download(
-                      chat.title + ".md",
-                      markdownExport(chat),
-                      "text/markdown",
-                    )
-                  }
-                >
-                  导出当前路线 Markdown
-                </button>
-                <button
-                  onClick={() =>
-                    void downloadChats(
-                      chats.filter((c) => !c.deleted).map((c) => c.id),
-                    )
-                  }
-                >
-                  导出全部聊天（含归档）
-                </button>
-                <button onClick={() => fileRef.current?.click()}>
-                  <Upload size={16} />
-                  导入 OpenWebUI JSON
-                </button>
-                <button
-                  className="danger-text"
-                  onClick={() =>
-                    void run(async () => {
-                      await patch({ deleted: !chat.deleted });
-                      setModal("");
-                    })
-                  }
-                >
-                  {chat.deleted ? "从回收站恢复" : "移入回收站"}
-                </button>
-                {chat.deleted && (
-                  <button
-                    className="danger-text"
-                    onClick={() => {
-                      if (confirm("永久删除这个聊天？无法恢复。"))
-                        void run(async () => {
-                          await api(
-                            "/chats/" + chat.id + "/permanent",
-                            "DELETE",
-                            {},
-                          );
-                          idRef.current = null;
-                          setChat(null);
-                          setModal("");
-                          await loadNavigation();
-                        });
-                    }}
-                  >
-                    永久删除聊天
-                  </button>
-                )}
+            ) : modal.startsWith("request:") &&
+              chat?.messages[modal.slice(8)] ? (
+              <div className="message-details">
+                <p className="muted">
+                  {new Date(
+                    chat.messages[modal.slice(8)]!.createdAt,
+                  ).toLocaleString()}
+                </p>
+                <pre className="request-meta">
+                  {JSON.stringify(
+                    {
+                      model: chat.messages[modal.slice(8)]!.model,
+                      request: chat.messages[modal.slice(8)]!.request,
+                      usage: chat.messages[modal.slice(8)]!.usage,
+                    },
+                    null,
+                    2,
+                  )}
+                </pre>
               </div>
             ) : null}
           </section>
@@ -2035,6 +2068,8 @@ function Login({
                 setMessage("密码已重置。请使用新密码登录；原恢复码已失效。");
               } else onLogin();
             } finally {
+              setPassword("");
+              setNext("");
               setLoading(false);
             }
           });
@@ -2173,6 +2208,7 @@ function readAppearance(): Appearance {
   }
 }
 function SettingsPanel({
+  initialTab,
   providers,
   settings,
   appearance,
@@ -2181,6 +2217,7 @@ function SettingsPanel({
   refresh,
   onLogout,
 }: {
+  initialTab: string;
   providers: ProviderView[];
   settings: Settings;
   appearance: Appearance;
@@ -2189,7 +2226,7 @@ function SettingsPanel({
   refresh: () => Promise<void>;
   onLogout: () => void;
 }) {
-  const [tab, setTab] = useState("providers"),
+  const [tab, setTab] = useState(initialTab),
     [form, setForm] = useState({
       name: "",
       baseUrl: "https://",

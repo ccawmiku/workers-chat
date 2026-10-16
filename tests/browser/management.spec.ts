@@ -62,6 +62,7 @@ test("settings restore, model identity, template copies, groups and mobile long 
       ],
     })),
   };
+  await page.getByRole("button", { name: "账户菜单", exact: true }).click();
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "设置备份", exact: true }).click();
   await expect(
@@ -210,6 +211,7 @@ test("settings restore, model identity, template copies, groups and mobile long 
       groupedId,
     ),
   ).toBeNull();
+  await page.getByRole("button", { name: "账户菜单", exact: true }).click();
   await page.getByRole("button", { name: "多选聊天", exact: true }).click();
   await expect(page.getByText("已选 0 项", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "全选当前列表", exact: true }).click();
@@ -255,21 +257,32 @@ test("settings restore, model identity, template copies, groups and mobile long 
   const assistant = page.locator("article.assistant").last();
   await expect(assistant).toContainText("长按消息查看操作");
   await page.evaluate(async (id) => {
-    await fetch("/api/chats/" + id, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ unread: true }) });
+    await fetch("/api/chats/" + id, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unread: true }),
+    });
     document.dispatchEvent(new Event("visibilitychange"));
   }, mobileId);
-  await expect.poll(() => page.evaluate(async (id) => (await (await fetch("/api/chats/" + id)).json() as { chat: Chat }).chat.unread, mobileId)).toBe(false);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        async (id) =>
+          ((await (await fetch("/api/chats/" + id)).json()) as { chat: Chat })
+            .chat.unread,
+        mobileId,
+      ),
+    )
+    .toBe(false);
   await assistant.dispatchEvent("pointerdown", {
     pointerType: "touch",
     clientX: 100,
     clientY: 180,
   });
-  await expect(
-    page.getByRole("button", { name: "关闭菜单", exact: true }),
-  ).toBeVisible();
+  await expect(assistant.locator(".message-actions.visible")).toBeVisible();
   await assistant.dispatchEvent("pointerup", { pointerType: "touch" });
   await page.screenshot({ path: "docs/screenshots/mobile-actions.png" });
-  await page.getByRole("button", { name: "关闭菜单", exact: true }).click();
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "选择消息版本", exact: true }).click();
   await page
     .getByRole("dialog")

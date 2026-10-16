@@ -333,6 +333,82 @@ describe("workerd HTTP + D1 + Workflows", () => {
     const sessions = await value<{ id: string }[]>("/auth/sessions");
     expect(sessions[0]!.id).not.toBe(cookie.replace("session=", ""));
   });
+  it("excludes complete user-answer turns through either message and removes the subtree-delete endpoint", async () => {
+    const imported = await value<{ ids: string[] }>("/import", "POST", {
+      data: [
+        {
+          chat: {
+            title: "context turn fixture",
+            history: {
+              currentId: "a2",
+              messages: {
+                u1: {
+                  id: "u1",
+                  parentId: null,
+                  role: "user",
+                  content: "first question",
+                },
+                a1: {
+                  id: "a1",
+                  parentId: "u1",
+                  role: "assistant",
+                  content: "first answer",
+                },
+                av: {
+                  id: "av",
+                  parentId: "u1",
+                  role: "assistant",
+                  content: "answer version",
+                },
+                u2: {
+                  id: "u2",
+                  parentId: "a1",
+                  role: "user",
+                  content: "second question",
+                },
+                a2: {
+                  id: "a2",
+                  parentId: "u2",
+                  role: "assistant",
+                  content: "second answer",
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+    const id = imported.ids[0]!;
+    const first = await value<Chat>("/chats/" + id + "/exclude", "POST", {
+      messageId: "a1",
+    });
+    expect(
+      ["u1", "a1", "av"].every((key) => first.messages[key]?.excluded),
+    ).toBe(true);
+    expect(first.messages.u2?.excluded).not.toBe(true);
+    const preview = await value<{ messages: { content: string }[] }>(
+      "/chats/" + id + "/preview",
+      "POST",
+      {},
+    );
+    expect(preview.messages.map((m) => m.content)).toEqual([
+      "second question",
+      "second answer",
+    ]);
+    const restored = await value<Chat>("/chats/" + id + "/exclude", "POST", {
+      messageId: "u1",
+    });
+    expect(
+      ["u1", "a1", "av"].some((key) => restored.messages[key]?.excluded),
+    ).toBe(false);
+    expect(
+      (
+        await request("/chats/" + id + "/delete-message", "POST", {
+          messageId: "u1",
+        })
+      ).status,
+    ).toBe(404);
+  });
   it("finishes a single background call, retains request identity, branches retries and extends continuation versions", async () => {
     const chat = await value<Chat>("/chats", "POST", {}),
       count = upstreamCalls.length;

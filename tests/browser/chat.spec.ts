@@ -100,6 +100,7 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
   await page
     .getByLabel("消息", { exact: true })
     .fill("把这个方法应用到我的下一个项目。");
+  await page.getByRole("button", { name: "账户菜单", exact: true }).click();
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "外观", exact: true }).click();
   await page.getByLabel("主题", { exact: true }).selectOption("dark");
@@ -119,6 +120,7 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
     page.getByText("从目标开始，逐步分解。", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "返回聊天", exact: true }).click();
+  await page.getByRole("button", { name: "账户菜单", exact: true }).click();
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "外观", exact: true }).click();
   await page.getByLabel("主题", { exact: true }).selectOption("light");

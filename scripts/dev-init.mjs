@@ -3,6 +3,7 @@ import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { randomBytes, pbkdf2Sync } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { database } from "../database.config.ts";
 const localDirectory = join(homedir(), ".config", "workers-chat");
 await mkdir(localDirectory, { recursive: true, mode: 0o700 });
 const localSecretsPath = join(localDirectory, "local-login.json");
@@ -48,7 +49,7 @@ const mf = new Miniflare({
             },
           },
         },
-        env: { DB: { type: "d1", name: "workers-chat" } },
+        env: { DB: { type: "d1", ...database } },
       },
     },
   ],

@@ -15,6 +15,8 @@ export function validatedPlugins(value: unknown): PluginDefinition[] {
     if (!["analysis", "clarify", "suggest", "rewrite"].includes(String(kind)))
       throw new HttpError(400, "插件类型无效");
     const id = str(v.id, 128);
+    if (id.startsWith("builtin-") && id !== "builtin-" + kind)
+      throw new HttpError(400, "内置插件类型不能修改");
     if (!id || ids.has(id)) throw new HttpError(400, "插件 ID 为空或重复");
     ids.add(id);
     const p = { ...pluginDefaults(kind as PluginDefinition["kind"], id), ...v };

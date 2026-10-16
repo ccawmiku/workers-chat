@@ -3,6 +3,7 @@ import { defaultSettings } from "../shared/chat";
 import { HttpError } from "./store";
 import { upstreamUrl } from "./security";
 import { validatedPlugins } from "./plugin-validation";
+import { withBuiltinPlugins } from "../shared/plugins";
 export type Obj = Record<string, unknown>;
 export function obj(v: unknown): Obj {
   if (!v || typeof v !== "object" || Array.isArray(v))
@@ -40,12 +41,13 @@ export function modelRef(v: unknown): ModelRef | null {
 }
 export function validatedSettings(v: unknown): Settings {
   const input = { ...defaultSettings(), ...obj(v) };
+  const plugins = withBuiltinPlugins(validatedPlugins(input.plugins ?? []));
+  if (plugins.length > 32)
+    throw new HttpError(400, "插件最多 32 个，包含 4 个内置插件");
   if (!Array.isArray(input.templates) || input.templates.length > 100)
     throw new HttpError(400, "模板格式无效");
   return {
-    ...(input.plugins !== undefined
-      ? { plugins: validatedPlugins(input.plugins) }
-      : {}),
+    plugins,
     defaultModel: modelRef(input.defaultModel),
     parameters: parameters(input.parameters),
     templates: input.templates.map((v) => {

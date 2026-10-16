@@ -238,6 +238,23 @@ export function deleteSubtree(chat: Chat, id: string) {
   ids.forEach((key) => delete chat.messages[key]);
   return ids.length;
 }
+/** OpenWebUI-style removal: splice out the selected message and direct children. */
+export function deleteMessage(chat: Chat, id: string): string[] {
+  const message = findMessage(chat, id);
+  if (!message) throw new Error("消息不存在");
+  const byParent = indexChildren(chat),
+    removed = [id, ...(byParent.get(id) ?? []).map((m) => m.id)],
+    deleted = new Set(removed);
+  for (const child of byParent.get(id) ?? [])
+    for (const grandchild of byParent.get(child.id) ?? [])
+      grandchild.parentId = message.parentId;
+  for (const key of deleted) delete chat.messages[key];
+  const next = indexChildren(chat).get(message.parentId)?.at(-1);
+  if (next) selectBranch(chat, next.id);
+  else chat.currentId = message.parentId;
+  chat.updatedAt = Date.now();
+  return removed;
+}
 export function forkChat(chat: Chat, id: string, titles: string[]): Chat {
   const copy = structuredClone({ ...chat, messages: {} }),
     base = chat.title.replace(/ · 分支[A-Z]+$/u, "");
@@ -395,14 +412,16 @@ export function cacheHitRate(value: unknown): string | undefined {
     const rate = value.trim();
     if (/^\d+(?:\.\d+)?%$/.test(rate) && Number(rate.slice(0, -1)) <= 100)
       return rate;
+    if (!/^\d+(?:\.\d+)?$/.test(rate)) return undefined;
+    value = Number(rate);
   }
   if (
     typeof value === "number" &&
     Number.isFinite(value) &&
     value >= 0 &&
-    value <= 1
+    value <= 100
   )
-    return `${Number((value * 100).toFixed(2))}%`;
+    return `${Number((value <= 1 ? value * 100 : value).toFixed(2))}%`;
   return undefined;
 }
 export function sanitizeUsage(

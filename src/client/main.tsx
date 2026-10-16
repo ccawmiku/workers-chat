@@ -110,6 +110,7 @@ import {
   RewriteReview,
   DraftReplacement,
   GroupPicker,
+  MessageDeleteDialog,
 } from "./plugins-ui";
 import {
   emptyPluginState,
@@ -144,6 +145,11 @@ function App() {
     readLoginNotice,
   );
   const [pluginEntry, setPluginEntry] = useState<HTMLDivElement | null>(null);
+  const [startingRewrite, setStartingRewrite] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{
+    chatId: string;
+    messageId: string;
+  } | null>(null);
   const pluginPreviewState = useRef<PluginState>(emptyPluginState());
   const [pluginState, setPluginState] = useState<PluginState>(emptyPluginState),
     [pluginJob, setPluginJob] = useState<PluginJobView | null>(null),
@@ -1003,14 +1009,18 @@ function App() {
   const rewriteResult = pluginState.runs.findLast(
     (r) =>
       r.plugin.kind === "rewrite" &&
-      r.anchorId === chat?.currentId &&
+      (r.rewriteMessageId
+        ? r.rewriteMessageId === editing?.id
+        : !editing && r.anchorId === chat?.currentId) &&
       r.status === "complete" &&
       !r.dismissed,
   );
   const rewriteError = pluginState.runs.findLast(
     (r) =>
       r.plugin.kind === "rewrite" &&
-      r.anchorId === chat?.currentId &&
+      (r.rewriteMessageId
+        ? r.rewriteMessageId === editing?.id
+        : !editing && r.anchorId === chat?.currentId) &&
       r.status === "error" &&
       !r.dismissed,
   );
@@ -1033,6 +1043,52 @@ function App() {
   async function configurePlugins(plugins: PluginBinding[]) {
     await ensureComposerChat();
     await pluginCommand("configure", { plugins });
+  }
+  function rewriteButtons(content: string, messageId?: string) {
+    if (!chat) return null;
+    return enabledPlugins(chat, settings)
+      .filter((p) => p.kind === "rewrite")
+      .map((p) => (
+        <button
+          key={p.id}
+          className="du-btn du-btn-ghost du-btn-sm"
+          aria-label={p.name}
+          disabled={
+            !!job ||
+            !!pluginJob ||
+            busy ||
+            startingRewrite !== null ||
+            !content.trim()
+          }
+          onClick={() => {
+            setStartingRewrite(p.id);
+            void run(async () => {
+              try {
+                await pluginCommand("rewrite", {
+                  pluginId: p.id,
+                  content,
+                  ...(messageId ? { messageId } : {}),
+                });
+              } finally {
+                setStartingRewrite(null);
+              }
+            });
+          }}
+        >
+          {startingRewrite === p.id ||
+          pluginState.runs.some(
+            (r) =>
+              r.plugin.id === p.id &&
+              r.status === "running" &&
+              r.rewriteMessageId === messageId,
+          ) ? (
+            <Loading small />
+          ) : (
+            <WandSparkles size={16} />
+          )}
+          {p.name}
+        </button>
+      ));
   }
   async function stopGeneration() {
     if (pluginJob) {
@@ -1561,8 +1617,10 @@ function App() {
                         value={editing.content}
                         expanded={editing.expanded}
                         saving={editSaving}
+                        busy={busy || !!job || !!pluginJob}
                         error={error}
                         user={m.role === "user"}
+                        rewriteActions={rewriteButtons(editing.content, m.id)}
                         onChange={(content) =>
                           setEditing({ ...editing, content })
                         }
@@ -1736,6 +1794,19 @@ function App() {
                             onClick={() => setModal("request:" + m.id)}
                           >
                             <Info size={15} />
+                          </IconButton>
+                          <IconButton
+                            label="删除消息"
+                            disabled={!!job || !!pluginJob || busy}
+                            onClick={() =>
+                              chat &&
+                              setDeleteTarget({
+                                chatId: chat.id,
+                                messageId: m.id,
+                              })
+                            }
+                          >
+                            <Trash2 size={15} />
                           </IconButton>
                           {siblings.length > 1 && (
                             <div className="versions">
@@ -1935,27 +2006,6 @@ function App() {
               <div className="composer-plugin-entry" ref={setPluginEntry} />
               <div className="composer-spacer" />
               <div className="composer-model-settings">
-                {chat &&
-                  enabledPlugins(chat, settings).some(
-                    (p) => p.kind === "rewrite",
-                  ) && (
-                    <IconButton
-                      label="重新生成 user 提示"
-                      disabled={!!job || !!pluginJob || busy || !draft.trim()}
-                      onClick={() =>
-                        void run(() =>
-                          pluginCommand("rewrite", {
-                            pluginId: enabledPlugins(chat, settings).find(
-                              (p) => p.kind === "rewrite",
-                            )!.id,
-                            content: draftRef.current,
-                          }),
-                        )
-                      }
-                    >
-                      <WandSparkles size={17} />
-                    </IconButton>
-                  )}
                 <ContextUsage used={estimate} capacity={capacity} />
                 <div className="model-control">
                   <button
@@ -2119,6 +2169,9 @@ function App() {
                     await pluginCommand("rewrite", {
                       pluginId: rewriteError.plugin.id,
                       content: rewriteError.input,
+                      ...(rewriteError.rewriteMessageId
+                        ? { messageId: rewriteError.rewriteMessageId }
+                        : {}),
                     });
                   })
                 }
@@ -2141,6 +2194,14 @@ function App() {
           {estimate > capacity && (
             <p className="context-warning">超出所设上下文预算，仍可发送。</p>
           )}
+          {chat &&
+            enabledPlugins(chat, settings).some(
+              (p) => p.kind === "rewrite",
+            ) && (
+              <div className="rewrite-actions" aria-label="user 提示工具">
+                {rewriteButtons(draft)}
+              </div>
+            )}
         </div>
         {chat && (
           <ConversationTimeline
@@ -2457,11 +2518,49 @@ function App() {
         <RewriteReview
           key={rewriteResult.id}
           run={rewriteResult}
-          current={draft}
-          apply={updateDraft}
+          current={
+            rewriteResult.rewriteMessageId
+              ? (editing?.content ?? rewriteResult.input)
+              : draft
+          }
+          apply={
+            rewriteResult.rewriteMessageId
+              ? (value) =>
+                  setEditing((previous) =>
+                    previous && previous.id === rewriteResult.rewriteMessageId
+                      ? { ...previous, content: value }
+                      : previous,
+                  )
+              : updateDraft
+          }
           command={pluginCommand}
+          busy={busy || !!job || !!pluginJob}
+          regenerating={
+            !!pluginJob &&
+            pluginState.runs.some(
+              (r) => r.id === pluginJob.runId && r.plugin.kind === "rewrite",
+            )
+          }
+          failure={
+            rewriteError?.createdAt &&
+            rewriteError.createdAt >= rewriteResult.createdAt
+              ? rewriteError.error
+              : undefined
+          }
         />
       )}
+      {deleteTarget &&
+        chat?.id === deleteTarget.chatId &&
+        chat.messages[deleteTarget.messageId] && (
+          <MessageDeleteDialog
+            message={chat.messages[deleteTarget.messageId]!}
+            childCount={byParent.get(deleteTarget.messageId)?.length ?? 0}
+            close={() => setDeleteTarget(null)}
+            remove={() =>
+              action("delete-message", { messageId: deleteTarget.messageId })
+            }
+          />
+        )}
       {suggestionDraft !== null && (
         <DraftReplacement
           current={draft}

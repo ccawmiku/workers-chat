@@ -176,7 +176,7 @@ for (const mobile of [false, true]) {
     ).toContainText("缓存率 82.0%");
     await expect(
       page.locator("article.assistant").last().locator(".message-meta"),
-    ).toContainText("缓存 4,908");
+    ).not.toContainText("缓存 4,908");
     await expect(
       page.locator("article.assistant").first().locator(".message-meta"),
     ).not.toContainText("缓存率");

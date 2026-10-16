@@ -8,6 +8,8 @@ import {
   selectBranch,
   forkChat,
   deleteSubtree,
+  deleteMessage,
+  validateMessageTree,
   requestPreview,
   defaultSettings,
   contextMessages,
@@ -30,6 +32,49 @@ const provider = (id: string): Provider => ({
   ],
 });
 describe("message tree", () => {
+  it("splices a message and all direct children while preserving grandchildren and sibling branches", () => {
+    const chat = newChat(),
+      u1 = addMessage(chat, "user", "u1"),
+      a1 = addMessage(chat, "assistant", "a1"),
+      u2 = addMessage(chat, "user", "u2"),
+      a2 = addMessage(chat, "assistant", "a2"),
+      alternate = addMessage(chat, "assistant", "alternate", u1.id),
+      u3 = addMessage(chat, "user", "u3"),
+      a3 = addMessage(chat, "assistant", "a3");
+    expect(new Set(deleteMessage(chat, u1.id))).toEqual(
+      new Set([u1.id, a1.id, alternate.id]),
+    );
+    expect(chat.messages[u2.id]!.parentId).toBeNull();
+    expect(chat.messages[u3.id]!.parentId).toBeNull();
+    expect(chat.messages[a2.id]!.parentId).toBe(u2.id);
+    expect(chat.currentId).toBe(a3.id);
+    validateMessageTree(chat);
+    expect(deleteMessage(chat, a3.id)).toEqual([a3.id]);
+    expect(chat.currentId).toBe(u3.id);
+    expect(deleteMessage(chat, u3.id)).toEqual([u3.id]);
+    expect(chat.currentId).toBe(a2.id);
+    expect(deleteMessage(chat, u2.id)).toEqual([u2.id, a2.id]);
+    expect(chat.currentId).toBeNull();
+    expect(chat.messages).toEqual({});
+    expect(() => deleteMessage(chat, "constructor")).toThrow("消息不存在");
+  });
+  it("removes an assistant and the next user, then reconnects the later reply", () => {
+    const chat = newChat(),
+      u = addMessage(chat, "user", "first"),
+      a = addMessage(chat, "assistant", "answer"),
+      next = addMessage(chat, "user", "next"),
+      reply = addMessage(chat, "assistant", "later"),
+      tail = addMessage(chat, "user", "tail");
+    expect(deleteMessage(chat, a.id)).toEqual([a.id, next.id]);
+    expect(chat.messages[reply.id]!.parentId).toBe(u.id);
+    expect(chat.currentId).toBe(tail.id);
+    validateMessageTree(chat);
+    expect(route(chat).map((m) => m.content)).toEqual([
+      "first",
+      "later",
+      "tail",
+    ]);
+  });
   it("includes selected history and stopped partial replies despite legacy exclusion options", () => {
     const chat = newChat();
     addMessage(chat, "user", "question").excluded = true;
@@ -332,6 +377,10 @@ it("keeps explicit cache hit rates and top-level cache counts without inventing 
   expect(sanitizeUsage({ cache_hit_rate: 0.82 })).toEqual({
     cache_hit_rate: "82%",
   });
+  for (const rate of [22, "22", "22%", 0.22, "0.22"])
+    expect(sanitizeUsage({ cache_hit_rate: rate })).toEqual({
+      cache_hit_rate: "22%",
+    });
   for (const rate of [null, "", "unknown", "101%", "-1%", {}, Infinity])
     expect(sanitizeUsage({ cache_hit_rate: rate })).toBeUndefined();
   expect(sanitizeUsage({ input_tokens: 10, cached_tokens: 8 })).toEqual({

@@ -89,7 +89,7 @@ for (const mobile of [false, true])
           });
         } else if (last.includes("提出一批具体、必要的澄清问题")) {
           kind = "clarify";
-          content = "1. 请问希望采用哪种风格？";
+          content = "1. **请问**希望采用哪种风格？\n\n- 轻松\n- 正式";
         } else if (all.includes('"suggestions"')) {
           kind = "suggest";
           content = JSON.stringify({
@@ -97,7 +97,11 @@ for (const mobile of [false, true])
           });
         } else if (all.includes("这不是润色")) {
           kind = "rewrite";
-          content = "请围绕既定目标重新设计情节，加入明确的场景与人物动机。";
+          content = JSON.stringify({
+            prompt: ledger.some((l) => l.kind === "rewrite")
+              ? "保留旧草稿"
+              : "请保留旧草稿",
+          });
         }
         ledger.push({ kind, messages });
         return new Response(
@@ -113,28 +117,36 @@ for (const mobile of [false, true])
                     "\n\n",
                 ),
               );
-              setTimeout(() => {
-                c.enqueue(
-                  e.encode(
-                    "data: " +
-                      JSON.stringify({
-                        choices: [
-                          {
-                            delta: { content: content.slice(3) },
-                            finish_reason: "stop",
+              setTimeout(
+                () => {
+                  c.enqueue(
+                    e.encode(
+                      "data: " +
+                        JSON.stringify({
+                          choices: [
+                            {
+                              delta: { content: content.slice(3) },
+                              finish_reason: "stop",
+                            },
+                          ],
+                          usage: {
+                            input_tokens: 100,
+                            cached_tokens: 80,
+                            cache_hit_rate:
+                              kind === "suggest"
+                                ? 22
+                                : kind === "rewrite"
+                                  ? "22"
+                                  : "80.0%",
                           },
-                        ],
-                        usage: {
-                          input_tokens: 100,
-                          cached_tokens: 80,
-                          cache_hit_rate: "80.0%",
-                        },
-                      }) +
-                      "\n\ndata: [DONE]\n\n",
-                  ),
-                );
-                c.close();
-              }, 200);
+                        }) +
+                        "\n\ndata: [DONE]\n\n",
+                    ),
+                  );
+                  c.close();
+                },
+                kind === "rewrite" ? 1200 : 200,
+              );
             },
           }),
           { headers: { "Content-Type": "text/event-stream" } },
@@ -197,6 +209,33 @@ for (const mobile of [false, true])
     await expect(
       page.getByText("总输入／模型容量", { exact: true }),
     ).toBeVisible();
+    const progress = page.getByLabel("插件上下文用量", { exact: true });
+    expect(
+      await progress.evaluate((el) => getComputedStyle(el).appearance),
+    ).toBe("none");
+    expect(
+      await progress.evaluate(
+        (el) =>
+          el.getBoundingClientRect().width /
+          el.parentElement!.getBoundingClientRect().width,
+      ),
+    ).toBeGreaterThan(0.85);
+    await page.screenshot({
+      path: `test-results/plugin-context-${mobile ? "phone" : "desktop"}-${test.info().project.name}.png`,
+    });
+    await page
+      .getByRole("button", { name: "选择插件上下文消息", exact: true })
+      .click();
+    const messageMenu = page.getByRole("list", {
+      name: "上下文消息类型",
+      exact: true,
+    });
+    await expect(messageMenu.locator(".plugin-role")).toHaveCount(1);
+    await expect(messageMenu.locator(".plugin-role-user")).toHaveText("user");
+    await messageMenu.getByRole("button").first().click();
+    await expect(page.locator(".plugin-context-text")).toContainText(
+      "写一个短故事",
+    );
     await page
       .getByRole("button", { name: "关闭插件窗口", exact: true })
       .click();
@@ -207,6 +246,12 @@ for (const mobile of [false, true])
     await expect(page.locator(".plugin-question[open]")).toContainText(
       "哪种风格",
     );
+    await expect(
+      page.locator(".plugin-question[open] .markdown strong"),
+    ).toHaveText("请问");
+    await expect(
+      page.locator(".plugin-question[open] .plugin-usage"),
+    ).toContainText("缓存率 80.0%");
     expect(
       await page.evaluate(() =>
         (window as any).pluginLedger.map((x: any) => x.kind),
@@ -222,7 +267,7 @@ for (const mobile of [false, true])
         [],
       );
     }
-    await page.getByLabel("消息", { exact: true }).fill("轻松幽默");
+    await page.getByLabel("消息", { exact: true }).fill("**轻松幽默**");
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await expect(page.locator(".message.assistant .markdown")).toContainText(
       "主回答已结合",
@@ -230,7 +275,43 @@ for (const mobile of [false, true])
     await expect(
       page.getByRole("button", { name: "再给我一个例子", exact: false }),
     ).toBeVisible();
+    await expect(
+      page.locator(".plugin-suggestions .plugin-usage"),
+    ).toContainText("缓存率 22%");
+    await expect(page.locator(".plugin-answer .markdown strong")).toHaveText(
+      "轻松幽默",
+    );
     await expect(page.locator(".plugin-question[open]")).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "追问建议上下文", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "选择插件上下文消息", exact: true })
+      .click();
+    const typedMenu = page.getByRole("list", {
+      name: "上下文消息类型",
+      exact: true,
+    });
+    for (const role of ["system", "user", "assistant"])
+      await expect(
+        typedMenu.locator(".plugin-role-" + role).first(),
+      ).toBeVisible();
+    const colors = await typedMenu
+      .locator(".plugin-role")
+      .evaluateAll((badges) => [
+        ...new Set(badges.map((b) => getComputedStyle(b).color)),
+      ]);
+    expect(colors).toHaveLength(3);
+    await page.screenshot({
+      path: `test-results/plugin-message-types-${mobile ? "phone" : "desktop"}-${test.info().project.name}.png`,
+    });
+    await typedMenu.getByRole("button").last().click();
+    await expect(page.locator(".plugin-context-text")).toContainText(
+      "主回答已结合",
+    );
+    await page
+      .getByRole("button", { name: "关闭插件窗口", exact: true })
+      .click();
     expect(
       await page.evaluate(() =>
         (window as any).pluginLedger.map((x: any) => x.kind),
@@ -249,15 +330,36 @@ for (const mobile of [false, true])
     await expect(page.getByLabel("消息", { exact: true })).toHaveValue(
       "保留的旧草稿",
     );
-    await page
-      .getByRole("button", { name: "重新生成 user 提示", exact: true })
-      .click();
+    const rewriteButton = page
+      .locator(".rewrite-actions")
+      .getByRole("button", { name: "重新生成 user 提示", exact: true });
+    await rewriteButton.click();
+    await expect(rewriteButton.locator(".du-loading")).toBeVisible();
     await expect(
       page.getByRole("dialog", {
         name: "重新生成 user 提示 · 对比",
         exact: true,
       }),
     ).toBeVisible();
+    let comparison = page.getByRole("dialog", {
+      name: "重新生成 user 提示 · 对比",
+      exact: true,
+    });
+    await expect(comparison.locator(".plugin-usage")).toContainText(
+      "缓存率 22%",
+    );
+    await expect(page.getByLabel("新用户请求", { exact: true })).toHaveValue(
+      "请保留旧草稿",
+    );
+    const regenerate = comparison.getByRole("button", {
+      name: "重新生成结果",
+      exact: true,
+    });
+    await regenerate.click();
+    await expect(regenerate.locator(".du-loading")).toBeVisible();
+    await expect(page.getByLabel("新用户请求", { exact: true })).toHaveValue(
+      "保留旧草稿",
+    );
     await page
       .getByLabel("新用户请求", { exact: true })
       .fill("我手动确认的新要求");
@@ -274,6 +376,71 @@ for (const mobile of [false, true])
       result.pluginState.runs.filter((r: any) => r.status === "answered"),
     ).toHaveLength(1);
     expect(JSON.stringify(result.chat.messages)).not.toContain("轻松幽默");
+    const originalUser = page.locator(".message.user").first();
+    await originalUser
+      .getByRole("button", { name: "编辑消息", exact: true })
+      .click();
+    await page.getByLabel("编辑消息正文", { exact: true }).fill("请保留旧草稿");
+    await page.getByRole("button", { name: "全屏编辑", exact: true }).click();
+    const messageEditor = page.getByRole("dialog", {
+      name: "全屏编辑消息",
+      exact: true,
+    });
+    await messageEditor
+      .getByRole("button", { name: "重新生成 user 提示", exact: true })
+      .click();
+    await expect(messageEditor.locator(".du-loading")).toBeVisible();
+    await expect(comparison).toBeVisible();
+    await expect(
+      comparison.getByLabel("原用户请求", { exact: true }),
+    ).toHaveValue("请保留旧草稿");
+    await expect(
+      comparison.getByLabel("新用户请求", { exact: true }),
+    ).toHaveValue("保留旧草稿");
+    const editedCall = await page.evaluate(() =>
+      (window as any).pluginLedger.at(-1),
+    );
+    expect(editedCall.messages.map((m: any) => m.role)).toEqual([
+      "system",
+      "user",
+    ]);
+    expect(editedCall.messages.at(-1).content).toBe("请保留旧草稿");
+    expect(JSON.stringify(editedCall.messages)).not.toContain("主回答已结合");
+    await comparison
+      .getByRole("button", { name: "确认替换", exact: true })
+      .click();
+    await expect(
+      messageEditor.getByLabel("编辑消息正文", { exact: true }),
+    ).toHaveValue("保留旧草稿");
+    await expect(page.getByLabel("消息", { exact: true })).toHaveValue(
+      "我手动确认的新要求",
+    );
+    await messageEditor
+      .getByRole("button", { name: "取消", exact: true })
+      .click();
+    await expect(
+      originalUser.locator(".message-body > .markdown"),
+    ).toContainText("写一个短故事");
+    await page
+      .locator(".message.assistant")
+      .getByRole("button", { name: "删除消息", exact: true })
+      .click();
+    let deletion = page.getByRole("dialog", { name: "删除消息", exact: true });
+    await deletion.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(page.locator(".message.assistant")).toHaveCount(1);
+    await originalUser
+      .getByRole("button", { name: "删除消息", exact: true })
+      .click();
+    await expect(deletion).toContainText("下一层的 1 条消息");
+    await deletion.getByRole("button", { name: "删除", exact: true }).click();
+    await expect(page.locator(".message")).toHaveCount(0);
+    const afterDelete = await page.evaluate(
+      async (id) =>
+        (await (await fetch("/api/chats/" + id)).json()) as Promise<any>,
+      id,
+    );
+    expect(afterDelete.pluginState.runs).toHaveLength(0);
+    expect(afterDelete.chat.draft).toBe("我手动确认的新要求");
     if (mobile)
       await page.getByRole("button", { name: "打开导航", exact: true }).click();
     await page.getByRole("button", { name: "新建分组", exact: true }).click();

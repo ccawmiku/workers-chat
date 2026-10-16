@@ -7,7 +7,8 @@
   prefix: "du-";
   include:
     button, input, select, textarea, toggle, checkbox, range, card, badge,
-    avatar, menu, tabs, collapse, alert, loading, table, fieldset, modal;
+    avatar, menu, tabs, collapse, alert, loading, table, fieldset, modal,
+    progress, stat, list, dropdown;
   logs: false;
 }
 
@@ -583,6 +584,16 @@ summary {
   margin: 0 0 8px;
   font-size: 13px;
   color: var(--muted);
+}
+.edit-actions {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.edit-actions .edit-rewrite-actions {
+  margin-right: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 .edit-fullscreen-backdrop {
   position: fixed;
@@ -1742,6 +1753,9 @@ summary {
   --color-neutral: var(--muted);
   --color-neutral-content: var(--text);
   --color-error: var(--danger);
+  --color-info: #80addb;
+  --color-warning: #d9b36c;
+  --color-success: #82b89c;
   --radius-selector: 999px;
   --radius-field: 10px;
   --radius-box: 14px;
@@ -1753,7 +1767,23 @@ summary {
 }
 /* Existing graph CSS uses --border as a color; daisyUI uses it as a width.
    Scope the library's width to its components and retain the legacy color alias. */
-:is(.du-input, .du-select, .du-textarea, .du-btn, .du-toggle, .du-checkbox) {
+:is(
+  .du-input,
+  .du-select,
+  .du-textarea,
+  .du-btn,
+  .du-toggle,
+  .du-checkbox,
+  .du-card,
+  .du-list,
+  .du-stats,
+  .du-collapse,
+  .du-fieldset,
+  .du-table,
+  .du-progress,
+  .du-badge,
+  .du-modal-box
+) {
   --border: 1px;
 }
 .du-input,
@@ -2691,7 +2721,11 @@ main {
 }
 .plugin-chip {
   flex: 0 0 auto;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  height: auto;
+  gap: 4px;
   min-width: 108px;
   max-width: 180px;
   padding: 6px 9px;
@@ -2714,21 +2748,8 @@ main {
   font-weight: 400;
   color: var(--muted);
 }
-.plugin-chip progress {
-  display: block;
-  width: 100%;
-  height: 3px;
-  margin-top: 5px;
-  accent-color: var(--accent);
-  border: 0;
-  border-radius: 5px;
-  overflow: hidden;
-}
-.plugin-chip progress::-webkit-progress-bar {
-  background: var(--hover);
-}
-.plugin-chip progress::-webkit-progress-value {
-  background: var(--accent);
+.plugin-chip .du-progress {
+  height: 4px;
 }
 .plugin-chip small {
   display: block;
@@ -2754,8 +2775,7 @@ main {
   overflow-y: auto;
 }
 .plugin-picker-heading,
-.plugin-picker-row,
-.plugin-definition-row {
+.plugin-picker-row {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2848,6 +2868,7 @@ main {
 }
 .plugin-dialog .code-input,
 .plugin-context-text {
+  white-space: pre-wrap;
   font-family: ui-monospace, monospace;
   font-size: 12px;
 }
@@ -2857,6 +2878,53 @@ main {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 18px;
+}
+.plugin-editor-section {
+  min-width: 0;
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+.plugin-editor-section .du-fieldset-legend {
+  font-size: 14px;
+  padding-bottom: 4px;
+}
+.plugin-metric-grid.du-stats {
+  width: 100%;
+  grid-auto-flow: row;
+  background: var(--bg);
+  border: 1px solid var(--line-color);
+  margin-bottom: 14px;
+}
+.plugin-metric-grid .du-stat {
+  gap: 8px;
+  min-width: 0;
+  padding: 18px;
+}
+.plugin-metric-grid .du-stat-value {
+  font-size: 20px;
+  white-space: normal;
+}
+.plugin-metric-grid .du-stat-title,
+.plugin-metric-grid .du-stat-desc {
+  white-space: normal;
+}
+.plugin-metric-grid .du-progress {
+  margin-top: 4px;
+}
+.plugin-usage {
+  margin: 8px 0 12px;
+  text-align: left;
+}
+.rewrite-actions {
+  display: flex;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 8px;
+}
+.rewrite-actions .du-btn {
+  color: var(--accent);
 }
 .plugin-dialog pre {
   white-space: pre-wrap;
@@ -2879,17 +2947,110 @@ main {
   gap: 8px;
 }
 .plugin-global-list {
-  display: grid;
-  gap: 10px;
-}
-.plugin-definition-row {
+  margin: 0;
+  padding: 0;
+  list-style: none;
   border: 1px solid var(--line-color);
-  padding: 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-box);
 }
-.plugin-definition-row > div {
-  flex: 1;
+.plugin-message-picker {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+}
+.plugin-message-choice {
+  width: 100%;
+  justify-content: space-between;
+  font-weight: 400;
+}
+.plugin-message-choice > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   min-width: 0;
+}
+.plugin-message-choice[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+.plugin-message-choice::marker {
+  content: "";
+}
+.plugin-message-choice::-webkit-details-marker {
+  display: none;
+}
+.plugin-message-menu {
+  width: 100%;
+  max-height: min(40dvh, 360px);
+  overflow-y: auto;
+  z-index: 10;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line-color);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px #0003;
+  padding: 6px;
+}
+.plugin-message-menu li > button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  gap: 9px;
+}
+.plugin-message-menu li > button > span:first-child {
+  min-width: 22px;
+  text-align: right;
+}
+.plugin-role {
+  border: 0;
+  font-weight: 600;
+}
+.plugin-role-system {
+  color: #d7baff;
+  background: #a855f72b;
+}
+.plugin-role-user {
+  color: #9acfff;
+  background: #3b82f62b;
+}
+.plugin-role-assistant {
+  color: #88e0b0;
+  background: #22c55e26;
+}
+.plugin-role-tool {
+  color: #ffcf84;
+  background: #f59e0b2b;
+}
+:root[data-theme="light"] .plugin-role-system {
+  color: #7e22ce;
+}
+:root[data-theme="light"] .plugin-role-user {
+  color: #1d4ed8;
+}
+:root[data-theme="light"] .plugin-role-assistant {
+  color: #15803d;
+}
+:root[data-theme="light"] .plugin-role-tool {
+  color: #a16207;
+}
+.plugin-global-list .plugin-definition-row {
+  align-items: center;
+  min-height: 76px;
+  padding: 14px 16px;
+}
+.plugin-definition-info {
+  min-width: 0;
+  text-align: left;
+}
+.plugin-definition-info strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.plugin-definition-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 .plugin-add-types {
   display: flex;
@@ -2919,7 +3080,7 @@ main {
   justify-content: space-between;
   gap: 8px;
   cursor: pointer;
-  padding: 11px 14px;
+  padding: 11px 38px 11px 14px;
   font-size: 13px;
   list-style: none;
 }
@@ -2937,6 +3098,19 @@ main {
 }
 .plugin-result-body {
   padding: 0 14px 12px;
+}
+.plugin-result .plugin-markdown {
+  font-size: 14px;
+  line-height: 1.5;
+  max-height: 50dvh;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.plugin-result .plugin-markdown > :first-child {
+  margin-top: 0;
+}
+.plugin-result .plugin-markdown > :last-child {
+  margin-bottom: 10px;
 }
 .plugin-output {
   white-space: pre-wrap;
@@ -2956,9 +3130,6 @@ main {
   border-top: 1px solid var(--line-color);
   padding-top: 10px;
   font-size: 14px;
-}
-.plugin-answer p {
-  white-space: pre-wrap;
 }
 .plugin-card-actions {
   display: flex;

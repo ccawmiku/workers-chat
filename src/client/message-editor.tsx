@@ -7,8 +7,10 @@ export function MessageEditor({
   value,
   expanded,
   saving,
+  busy = false,
   user,
   error,
+  rewriteActions,
   onChange,
   onExpand,
   onCancel,
@@ -17,8 +19,10 @@ export function MessageEditor({
   value: string;
   expanded: boolean;
   saving: boolean;
+  busy?: boolean;
   user: boolean;
   error?: string;
+  rewriteActions?: React.ReactNode;
   onChange: (value: string) => void;
   onExpand: (value: boolean) => void;
   onCancel: () => void;
@@ -56,10 +60,13 @@ export function MessageEditor({
         </p>
       )}
       <div className="edit-actions">
+        {user && rewriteActions && (
+          <div className="edit-rewrite-actions">{rewriteActions}</div>
+        )}
         <button disabled={saving} onClick={onCancel}>
           取消
         </button>
-        <button className="primary" disabled={saving} onClick={onSave}>
+        <button className="primary" disabled={saving || busy} onClick={onSave}>
           {saving ? "保存中…" : user ? "保存为新分支" : "保存"}
         </button>
       </div>

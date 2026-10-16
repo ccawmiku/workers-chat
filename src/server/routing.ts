@@ -27,7 +27,7 @@ const routes: [RegExp, string[]][] = [
   [/^\/api\/chats\/[^/]+\/draft$/, ["PUT"]],
   [/^\/api\/chats\/[^/]+\/permanent$/, ["DELETE"]],
   [
-    /^\/api\/chats\/[^/]+\/(send|seen|stop|title|regenerate|retry|continue|edit|select|fork|duplicate)$/,
+    /^\/api\/chats\/[^/]+\/(send|seen|stop|title|regenerate|retry|continue|edit|select|fork|duplicate|delete-message)$/,
     ["POST"],
   ],
   [/^\/api\/import(?:\/preview)?$/, ["POST"]],

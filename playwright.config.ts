@@ -26,6 +26,7 @@ export default defineConfig({
         "provider-settings.spec.ts",
         "request-budget.spec.ts",
         "plugins.spec.ts",
+        "plugin-settings.spec.ts",
         "auth-security.spec.ts",
       ],
       use: { browserName: "webkit" },

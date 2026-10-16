@@ -16,6 +16,8 @@ import {
   upgradeLegacyPlugin,
   REWRITE_PROMPT,
   SUGGEST_PROMPT,
+  extractRewritePrompt,
+  definitions,
   type PluginRun,
 } from "../src/shared/plugins";
 const provider: Provider = {
@@ -67,6 +69,46 @@ const run = (
   },
 });
 describe("plugin context assembly", () => {
+  it("retains all built-ins while custom instances remain removable", () => {
+    const s = defaultSettings();
+    s.plugins = [];
+    expect(definitions(s).map((p) => p.id)).toEqual([
+      "builtin-analysis",
+      "builtin-clarify",
+      "builtin-suggest",
+      "builtin-rewrite",
+    ]);
+  });
+  it("extracts rewrite JSON and rejects malformed, expanded and meta instruction results", () => {
+    const p = pluginDefaults("rewrite");
+    expect(extractRewritePrompt('```json\n{"prompt":"继续。"}\n```')).toBe(
+      "继续。",
+    );
+    expect(
+      JSON.parse(normalizePluginOutput(p, '{"prompt":"继续。"}', "继续")),
+    ).toEqual({ prompt: "继续。" });
+    for (const text of [
+      '{"title":"继续"}',
+      '{"prompt":" "}',
+      "继续",
+      '{"prompt":"继续", "extra":true}',
+    ])
+      expect(() => normalizePluginOutput(p, text, "继续")).toThrow();
+    expect(() =>
+      normalizePluginOutput(
+        p,
+        JSON.stringify({ prompt: "请继续并新增视角与节奏限制" }),
+        "继续",
+      ),
+    ).toThrow("长度");
+    expect(() =>
+      normalizePluginOutput(
+        p,
+        JSON.stringify({ prompt: "核心要求：继续" }),
+        "x".repeat(30),
+      ),
+    ).toThrow("任务说明");
+  });
   it("updates the built-in rewrite defaults and old labels while preserving customized settings and prompts", () => {
     const legacy = {
       ...pluginDefaults("rewrite"),
@@ -128,11 +170,18 @@ describe("plugin context assembly", () => {
       state,
       "新草稿",
     );
+    const reference = JSON.parse(
+      actual.request.messages[1]!.content!,
+    ).reference_history;
     expect(
-      actual.request.messages.filter((m) => m.role === "assistant"),
+      reference.recent_pairs.filter(
+        (m: { role: string }) => m.role === "assistant",
+      ),
     ).toHaveLength(2);
     expect(
-      actual.request.messages.filter((m) => m.content === "未完成的历史问题"),
+      reference.user_archive.filter(
+        (m: { content: string }) => m.content === "未完成的历史问题",
+      ),
     ).toHaveLength(1);
     expect(actual.request.messages.at(-1)?.content).toBe("新草稿");
   });
@@ -260,17 +309,25 @@ describe("plugin context assembly", () => {
       content: draft,
     });
     expect(result.metrics.shortened).toBe(1);
+    const history = JSON.parse(
+      result.request.messages[1]!.content!,
+    ).reference_history;
+    const messages = [...history.user_archive, ...history.recent_pairs] as {
+      role: string;
+      content: string;
+    }[];
     for (let i = 0; i < 8; i++)
-      expect(
-        result.request.messages.filter((m) => m.content === "U" + i),
-      ).toHaveLength(1);
+      expect(messages.filter((m) => m.content === "U" + i)).toHaveLength(1);
+    expect(messages.filter((m) => m.role === "assistant")).toHaveLength(5);
     expect(
-      result.request.messages.filter((m) => m.role === "assistant"),
-    ).toHaveLength(5);
-    expect(
-      result.request.messages.find((m) => m.content?.includes("中间删减了"))
-        ?.content?.length,
+      messages.find((m) => m.content?.includes("中间删减了"))?.content?.length,
     ).toBeLessThan(1100);
+    expect(result.request.messages.map((m) => m.role)).toEqual([
+      "system",
+      "user",
+      "user",
+    ]);
+    expect(result.request.messages[0]?.content).not.toContain("Stable system");
   });
   it("trims only the old user archive to the low watermark", () => {
     const { chat, settings, state } = fixture();

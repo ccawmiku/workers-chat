@@ -179,7 +179,7 @@ beforeAll(async () => {
                       : pluginMarker.startsWith("[PLUGIN_TEST_suggest]")
                         ? '{"suggestions":["用户下一句一","用户下一句二","用户下一句三"]}'
                         : pluginMarker.startsWith("[PLUGIN_TEST_rewrite]")
-                          ? "重生后的用户要求"
+                          ? '{"prompt":"重生后的用户要求"}'
                           : "1. 请问你希望采用什么风格？";
                 if (controls.mode === "plugin-slow") {
                   const delay = controls.delay,
@@ -528,7 +528,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     ]);
     expect(
       (
-        await request("/chats/" + id + "/delete-message", "POST", {
+        await request("/chats/" + id + "/delete-subtree", "POST", {
           messageId: "u1",
         })
       ).status,
@@ -1564,7 +1564,9 @@ describe("workerd HTTP + D1 + Workflows", () => {
         ),
     );
     expect(Object.values(s.chat.messages)).toHaveLength(2);
-    expect(s.pluginState.runs.at(-1)?.output).toBe("重生后的用户要求");
+    expect(JSON.parse(s.pluginState.runs.at(-1)!.output)).toEqual({
+      prompt: "重生后的用户要求",
+    });
     const duplicate = await value<Chat>(
         "/chats/" + chat.id + "/duplicate",
         "POST",
@@ -1661,6 +1663,126 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(upstreamCalls.length - before).toBe(3);
     await value("/settings", "PUT", settings);
   }, 15000);
+  it("rewrites an earlier user in isolation and splices deleted messages with their plugin records atomically", async () => {
+    controls.mode = "normal";
+    controls.delay = 0;
+    await value("/settings", "PUT", { ...settings, plugins: defaultPlugins() });
+    const chat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + chat.id, "PATCH", {
+      title: "Historical rewrite fixture",
+    });
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "configure",
+      plugins: [{ id: "builtin-rewrite", enabled: true }],
+    });
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "first question",
+    });
+    const first = await finished(chat.id),
+      firstUser = Object.values(first.messages).find((m) => m.role === "user")!,
+      firstReply = first.currentId!;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "later unrelated question",
+    });
+    const before = await finished(chat.id),
+      lastReply = before.currentId!;
+    await value("/chats/" + chat.id + "/draft", "PUT", {
+      draft: "composer untouched",
+    });
+    for (const messageId of [firstReply, "constructor", "missing"]) {
+      expect(
+        (
+          await request("/chats/" + chat.id + "/plugins", "POST", {
+            action: "rewrite",
+            pluginId: "builtin-rewrite",
+            messageId,
+            content: "first request",
+          })
+        ).status,
+      ).toBe(400);
+    }
+    const start = await request(
+      "/chats/" + chat.id + "/plugins",
+      "POST",
+      {
+        action: "rewrite",
+        pluginId: "builtin-rewrite",
+        messageId: firstUser.id,
+        content: "first request",
+      },
+      true,
+      "https://chat.test",
+      true,
+    );
+    expect(start.status).toBe(200);
+    type Snapshot = {
+      chat: Chat;
+      pluginState: PluginState;
+      pluginJob: PluginJobView | null;
+    };
+    let snapshot = await value<Snapshot>("/chats/" + chat.id);
+    expect(
+      snapshot.pluginJob!.direct!.request.messages.map((m) => m.role),
+    ).toEqual(["system", "user"]);
+    expect(snapshot.pluginJob!.direct!.request.messages.at(-1)?.content).toBe(
+      "first request",
+    );
+    expect(
+      JSON.stringify(snapshot.pluginJob!.direct!.request.messages),
+    ).not.toContain("later unrelated");
+    expect(
+      (
+        await request("/chats/" + chat.id + "/delete-message", "POST", {
+          messageId: firstUser.id,
+        })
+      ).status,
+    ).toBe(409);
+    await request(
+      "/plugins/jobs/" + snapshot.pluginJob!.id + "/finish",
+      "POST",
+      { sequence: 1, status: "complete", content: '{"prompt":"new request"}' },
+      true,
+      "https://chat.test",
+      true,
+    );
+    snapshot = await value<Snapshot>("/chats/" + chat.id);
+    expect(snapshot.chat.currentId).toBe(lastReply);
+    expect(snapshot.chat.messages).toEqual(before.messages);
+    expect(snapshot.chat.draft).toBe("composer untouched");
+    expect(snapshot.pluginState.runs.at(-1)).toMatchObject({
+      rewriteMessageId: firstUser.id,
+      anchorId: firstUser.id,
+      contextAnchorId: null,
+      status: "complete",
+    });
+    const deleted = await value<Chat>(
+      "/chats/" + chat.id + "/delete-message",
+      "POST",
+      { messageId: firstUser.id },
+    );
+    expect(Object.values(deleted.messages)).toHaveLength(2);
+    expect(
+      deleted.messages[deleted.messages[lastReply]!.parentId!]!.parentId,
+    ).toBeNull();
+    expect(deleted.currentId).toBe(lastReply);
+    expect(deleted.draft).toBe("composer untouched");
+    snapshot = await value<Snapshot>("/chats/" + chat.id);
+    expect(snapshot.pluginState.runs).toHaveLength(0);
+    const leaf = await value<Chat>(
+      "/chats/" + chat.id + "/delete-message",
+      "POST",
+      { messageId: lastReply },
+    );
+    expect(leaf.currentId).toBe(deleted.messages[lastReply]!.parentId);
+    const empty = await value<Chat>(
+      "/chats/" + chat.id + "/delete-message",
+      "POST",
+      { messageId: leaf.currentId },
+    );
+    expect(empty.currentId).toBeNull();
+    expect(Object.keys(empty.messages)).toHaveLength(0);
+    await value("/settings", "PUT", settings);
+  }, 20000);
   it("delivers each device plugin and chained main task only once", async () => {
     const chat = await value<Chat>("/chats", "POST", {});
     await value("/chats/" + chat.id, "PATCH", {
@@ -1900,6 +2022,28 @@ describe("workerd HTTP + D1 + Workflows", () => {
     controls.delay = 0;
     await value("/settings", "PUT", settings);
   }, 45000);
+  it("retains built-ins when settings omit them and prevents changing their kinds", async () => {
+    const before = await value<Settings>("/settings");
+    const next = await value<Settings>("/settings", "PUT", {
+      ...before,
+      plugins: [],
+    });
+    expect(next.plugins?.map((p) => p.id)).toEqual([
+      "builtin-analysis",
+      "builtin-clarify",
+      "builtin-suggest",
+      "builtin-rewrite",
+    ]);
+    expect(
+      (
+        await request("/settings", "PUT", {
+          ...next,
+          plugins: [{ ...next.plugins![0], kind: "rewrite" }],
+        })
+      ).status,
+    ).toBe(400);
+    await value("/settings", "PUT", before);
+  });
   it("bans five consecutive login failures per IP, reports timestamps only after login and expires the ban", async () => {
     const db = await mf.getD1Database("DB");
     await db.batch([

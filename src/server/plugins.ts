@@ -163,6 +163,9 @@ export async function clonePlugins(
       contextAnchorId: r.contextAnchorId
         ? (messages.get(r.contextAnchorId) ?? null)
         : null,
+      rewriteMessageId: r.rewriteMessageId
+        ? messages.get(r.rewriteMessageId)
+        : undefined,
       replaces: r.replaces ? runIds.get(r.replaces) : undefined,
       status: r.status === "running" ? "cancelled" : r.status,
     })),
@@ -190,6 +193,52 @@ export async function clonePlugins(
     id: stateId(copy.id),
     chatId: copy.id,
   });
+}
+export async function planPruneMessagePlugins(
+  env: Env,
+  chat: Chat,
+  removed: string[],
+) {
+  if (!chat.plugins?.length) return [];
+  const store = new Store(env.DB),
+    state = await pluginState(env, chat.id),
+    ids = new Set(removed);
+  const dropped = state.value.runs.filter(
+      (r) =>
+        (r.anchorId && ids.has(r.anchorId)) ||
+        (r.rewriteMessageId && ids.has(r.rewriteMessageId)),
+    ),
+    runIds = new Set(dropped.map((r) => r.id));
+  state.value.runs = state.value.runs.filter((r) => !runIds.has(r.id));
+  state.value.flows = state.value.flows.filter(
+    (f) => !ids.has(f.userId) && !(f.mainMessageId && ids.has(f.mainMessageId)),
+  );
+  for (const f of state.value.flows)
+    f.results = f.results.filter((id) => !runIds.has(id));
+  const currentIds = new Set(route(chat).map((m) => m.id)),
+    flow = state.value.flows.findLast(
+      (f) =>
+        currentIds.has(f.userId) &&
+        ["waiting", "running", "error", "debug"].includes(f.status),
+    );
+  state.value.activeFlowId = flow?.id;
+  chat.pluginPending = flow?.status as Chat["pluginPending"];
+  return [
+    ...store.planSave(
+      stateId(chat.id),
+      "plugin-state",
+      state.value,
+      state.revision,
+      { id: stateId(chat.id), chatId: chat.id },
+    ),
+    ...dropped.flatMap((r) => [
+      env.DB.prepare("DELETE FROM documents WHERE id=?").bind(taskId(r.id)),
+      env.DB.prepare("DELETE FROM jobs WHERE id=? AND chat_id=?").bind(
+        r.id,
+        chat.id,
+      ),
+    ]),
+  ];
 }
 export async function removePlugins(env: Env, chatId: string) {
   await env.DB.prepare(
@@ -220,6 +269,7 @@ async function enqueue(
   transport?: "device",
   flow?: PluginFlow,
   replaces?: string,
+  rewriteMessageId?: string,
 ) {
   const { settings, providers } = await config(env),
     prepared = preparePlugin(
@@ -236,8 +286,9 @@ async function enqueue(
       id,
       plugin: p,
       flowId: flow?.id,
-      anchorId: flow?.userId ?? anchorId,
+      anchorId: rewriteMessageId ?? flow?.userId ?? anchorId,
       contextAnchorId: anchorId,
+      ...(rewriteMessageId ? { rewriteMessageId } : {}),
       input,
       output: "",
       status: "running",
@@ -480,7 +531,7 @@ export async function finishPlugin(
   let text = output.content;
   if (status === "complete")
     try {
-      text = normalizePluginOutput(run.plugin, text);
+      text = normalizePluginOutput(run.plugin, text, run.input);
     } catch (e) {
       status = "error";
       failure = e instanceof Error ? e.message : "插件结果格式错误";
@@ -500,6 +551,16 @@ export async function finishPlugin(
         ? "cancelled"
         : "error";
   run.error = failure;
+  if (run.plugin.kind === "rewrite" && status === "complete")
+    for (const old of state.value.runs)
+      if (
+        old.id !== run.id &&
+        old.plugin.id === run.plugin.id &&
+        old.anchorId === run.anchorId &&
+        old.rewriteMessageId === run.rewriteMessageId &&
+        old.createdAt <= run.createdAt
+      )
+        old.dismissed = true;
   const flow = state.value.flows.find((f) => f.id === run.flowId);
   if (flow && !run.replaces) {
     if (status !== "complete")
@@ -719,6 +780,18 @@ export async function pluginEndpoint(
     const input = action === "rewrite" ? str(body.content) : "";
     if (action === "rewrite" && !input.trim())
       throw new HttpError(400, "请先在输入框填写本轮要求");
+    const target =
+      body.messageId === undefined
+        ? undefined
+        : typeof body.messageId === "string" &&
+            Object.hasOwn(chat.messages, body.messageId)
+          ? chat.messages[body.messageId]
+          : null;
+    if (
+      body.messageId !== undefined &&
+      (action !== "rewrite" || !target || target.role !== "user")
+    )
+      throw new HttpError(400, "请选择要编辑的 user 消息");
     return {
       jobId: await enqueue(
         env,
@@ -726,8 +799,11 @@ export async function pluginEndpoint(
         state,
         p,
         input,
-        chat.currentId,
+        target ? target.parentId : chat.currentId,
         transport,
+        undefined,
+        undefined,
+        target?.id,
       ),
     };
   }

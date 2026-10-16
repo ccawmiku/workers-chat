@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Blocks,
   SlidersHorizontal,
@@ -19,6 +21,7 @@ import {
   WandSparkles,
   MessageCircleQuestion,
   ChevronRight,
+  ChevronDown,
   Info,
   Folder,
 } from "lucide-react";
@@ -37,6 +40,8 @@ import {
   preparePlugin,
   upgradeLegacyPlugin,
   normalizePluginOutput,
+  extractRewritePrompt,
+  isBuiltinPlugin,
 } from "../shared/plugins";
 import {
   IconButton,
@@ -52,9 +57,34 @@ type Command = (
 ) => Promise<void>;
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 const k = (n: number) =>
-  n >= 1000
-    ? (n / 1000).toFixed(n >= 100000 ? 0 : 1) + "k"
-    : n.toLocaleString();
+  (n / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 }) + "k";
+function PluginUsage({ run }: { run: PluginRun }) {
+  return (
+    <div className="plugin-usage">
+      <MessageUsage
+        message={{
+          id: run.id,
+          parentId: null,
+          role: "assistant",
+          content: "",
+          createdAt: run.createdAt,
+          model: run.model ?? run.plugin.model ?? undefined,
+          usage: run.usage,
+          elapsedMs: run.elapsedMs,
+        }}
+      />
+    </div>
+  );
+}
+function PluginMarkdown({ children }: { children: string }) {
+  return (
+    <div className="markdown plugin-markdown">
+      <Markdown remarkPlugins={[remarkGfm]} skipHtml>
+        {children}
+      </Markdown>
+    </div>
+  );
+}
 function Dialog({
   title,
   close,
@@ -127,9 +157,19 @@ export function PluginEditor({
         className="du-input du-input-sm"
         aria-label={label}
         type="number"
-        min={min}
-        value={p[key]}
-        onChange={(e) => update({ [key]: Number(e.target.value) })}
+        min={key === "highWater" || key === "lowWater" ? min / 1000 : min}
+        value={
+          key === "highWater" || key === "lowWater" ? p[key] / 1000 : p[key]
+        }
+        step={key === "highWater" || key === "lowWater" ? 0.001 : 1}
+        onChange={(e) =>
+          update({
+            [key]:
+              key === "highWater" || key === "lowWater"
+                ? Math.round(Number(e.target.value) * 1000)
+                : Number(e.target.value),
+          })
+        }
       />
     </label>
   );
@@ -155,181 +195,203 @@ export function PluginEditor({
             ? "只覆盖当前聊天。已经运行的结果保留当时配置。"
             : "新聊天默认关闭插件；在发送框左下角启用。"}
         </p>
-        <div className="plugin-fields">
-          <label>
-            名称
-            <input
-              className="du-input"
-              aria-label="插件名称"
-              value={p.name}
-              onChange={(e) => update({ name: e.target.value })}
-            />
-          </label>
-          <label>
-            卡片标题
-            <input
-              className="du-input"
-              aria-label="插件卡片标题"
-              value={p.cardTitle}
-              onChange={(e) => update({ cardTitle: e.target.value })}
-            />
-          </label>
-          <label>
-            模型
-            <select
-              className="du-select"
-              aria-label="插件模型"
-              value={p.model ? JSON.stringify(p.model) : ""}
-              onChange={(e) =>
-                update({
-                  model: e.target.value ? JSON.parse(e.target.value) : null,
-                })
-              }
-            >
-              <option value="">跟随主聊天模型</option>
-              {providers.flatMap((provider) =>
-                provider.models.map((model) => (
-                  <option
-                    key={provider.id + model.id}
-                    value={JSON.stringify({
-                      providerId: provider.id,
-                      modelId: model.id,
-                    })}
-                  >
-                    {provider.prefix + model.id} · {provider.name}
+        <fieldset className="du-fieldset plugin-editor-section">
+          <legend className="du-fieldset-legend">基本设置</legend>
+          <div className="plugin-fields">
+            <label>
+              名称
+              <input
+                className="du-input"
+                aria-label="插件名称"
+                value={p.name}
+                onChange={(e) => update({ name: e.target.value })}
+              />
+            </label>
+            <label>
+              卡片标题
+              <input
+                className="du-input"
+                aria-label="插件卡片标题"
+                value={p.cardTitle}
+                onChange={(e) => update({ cardTitle: e.target.value })}
+              />
+            </label>
+            <label>
+              模型
+              <select
+                className="du-select"
+                aria-label="插件模型"
+                value={p.model ? JSON.stringify(p.model) : ""}
+                onChange={(e) =>
+                  update({
+                    model: e.target.value ? JSON.parse(e.target.value) : null,
+                  })
+                }
+              >
+                <option value="">跟随主聊天模型</option>
+                {providers.flatMap((provider) =>
+                  provider.models.map((model) => (
+                    <option
+                      key={provider.id + model.id}
+                      value={JSON.stringify({
+                        providerId: provider.id,
+                        modelId: model.id,
+                      })}
+                    >
+                      {provider.prefix + model.id} · {provider.name}
+                    </option>
+                  )),
+                )}
+              </select>
+            </label>
+            <label>
+              思考强度
+              <select
+                className="du-select"
+                aria-label="插件思考强度"
+                value={p.effort}
+                onChange={(e) =>
+                  update({
+                    effort: e.target.value as PluginDefinition["effort"],
+                  })
+                }
+              >
+                {[
+                  ["inherit", "跟随接口"],
+                  ["none", "无"],
+                  ["low", "低"],
+                  ["medium", "中"],
+                  ["high", "高"],
+                  ["max", "最高"],
+                ].map(([v, label]) => (
+                  <option value={v} key={v}>
+                    {label}
                   </option>
-                )),
-              )}
-            </select>
-          </label>
+                ))}
+              </select>
+            </label>
+          </div>
+        </fieldset>
+        <fieldset className="du-fieldset plugin-editor-section">
+          <legend className="du-fieldset-legend">任务指令</legend>
           <label>
-            思考强度
-            <select
-              className="du-select"
-              aria-label="插件思考强度"
-              value={p.effort}
-              onChange={(e) =>
-                update({ effort: e.target.value as PluginDefinition["effort"] })
-              }
-            >
-              {[
-                ["inherit", "跟随接口"],
-                ["none", "无"],
-                ["low", "低"],
-                ["medium", "中"],
-                ["high", "高"],
-                ["max", "最高"],
-              ].map(([v, label]) => (
-                <option value={v} key={v}>
-                  {label}
-                </option>
-              ))}
-            </select>
+            任务提示词
+            <textarea
+              className="du-textarea"
+              aria-label="插件任务提示词"
+              rows={7}
+              value={p.prompt}
+              onChange={(e) => update({ prompt: e.target.value })}
+            />
           </label>
-        </div>
-        <label>
-          任务提示词
-          <textarea
-            className="du-textarea"
-            aria-label="插件任务提示词"
-            rows={7}
-            value={p.prompt}
-            onChange={(e) => update({ prompt: e.target.value })}
-          />
-        </label>
-        <small>
-          {
-            "支持 {{USER_INPUT}} 和 {{COUNT}}。当前请求、示例与参考由上下文组装器分别追加。"
-          }
-        </small>
-        {(p.kind === "analysis" || p.kind === "clarify") && (
-          <>
-            <div className="plugin-fields">
-              <label>
-                历史范围
-                <select
-                  className="du-select"
-                  aria-label="插件历史范围"
-                  value={p.contextMode}
-                  onChange={(e) =>
-                    update({ contextMode: e.target.value as "sync" | "rounds" })
-                  }
-                >
-                  <option value="sync">完全同步主聊天上下文</option>
-                  <option value="rounds">最近 N 轮完整问答</option>
-                </select>
-              </label>
-              {number("historyRounds", "历史问答轮数", 1)}
-              <label>
-                注入方式
-                <select
-                  className="du-select"
-                  aria-label="插件注入方式"
-                  value={p.injection}
-                  onChange={(e) =>
-                    update({ injection: e.target.value as "tool" | "user" })
-                  }
-                >
-                  <option value="tool">Tool Call 结果</option>
-                  <option value="user">附加到当前 user</option>
-                </select>
-              </label>
+          <small>
+            {
+              "支持 {{USER_INPUT}} 和 {{COUNT}}。当前请求、示例与参考由上下文组装器分别追加。"
+            }
+          </small>
+          {p.kind === "rewrite" && (
+            <div className="du-alert" role="note">
+              输出格式固定为 {`{"prompt":"新的 user 请求"}`}
+              。只忠实改述原请求，不新增内容；原文长度校验按提取后的 prompt
+              计算。
             </div>
-            <label>
-              注入模板
-              <textarea
-                className="du-textarea"
-                aria-label="插件注入模板"
-                rows={3}
-                value={p.injectionTemplate}
-                onChange={(e) => update({ injectionTemplate: e.target.value })}
-              />
-            </label>
-            <small>
-              {
-                "支持 {{RESULT}}、{{PLUGIN_NAME}}、{{USER_INPUT}}。不改变保存的正文。"
-              }
-            </small>
-            <label>
-              固定示例（可选）
-              <textarea
-                className="du-textarea"
-                aria-label="插件固定示例"
-                rows={4}
-                value={p.example}
-                onChange={(e) => update({ example: e.target.value })}
-              />
-            </label>
-          </>
-        )}
-        {p.kind === "analysis" && (
-          <>
-            <label>
-              JSON Schema
-              <textarea
-                className="du-textarea code-input"
-                aria-label="插件 JSON Schema"
-                rows={8}
-                value={p.schema}
-                onChange={(e) => update({ schema: e.target.value })}
-              />
-            </label>
-            {number("referenceCount", "保留完整参考配对数")}
-          </>
-        )}
-        {(p.kind === "suggest" || p.kind === "rewrite") && (
-          <div className="plugin-fields">
-            {number("userHistoryCount", "历史 user 条数（0 为全部）")}
-            {number("historyRounds", "最近完整问答对数", 1)}
-            {p.kind === "suggest" && number("suggestions", "候选条数", 1)}
-          </div>
-        )}
-        {p.kind !== "analysis" && (
-          <div className="plugin-fields">
-            {number("highWater", "高水位 Token", 1)}
-            {number("lowWater", "裁后目标 Token")}
-          </div>
-        )}
+          )}
+        </fieldset>
+        <fieldset className="du-fieldset plugin-editor-section">
+          <legend className="du-fieldset-legend">上下文与输出</legend>
+          {(p.kind === "analysis" || p.kind === "clarify") && (
+            <>
+              <div className="plugin-fields">
+                <label>
+                  历史范围
+                  <select
+                    className="du-select"
+                    aria-label="插件历史范围"
+                    value={p.contextMode}
+                    onChange={(e) =>
+                      update({
+                        contextMode: e.target.value as "sync" | "rounds",
+                      })
+                    }
+                  >
+                    <option value="sync">完全同步主聊天上下文</option>
+                    <option value="rounds">最近 N 轮完整问答</option>
+                  </select>
+                </label>
+                {number("historyRounds", "历史问答轮数", 1)}
+                <label>
+                  注入方式
+                  <select
+                    className="du-select"
+                    aria-label="插件注入方式"
+                    value={p.injection}
+                    onChange={(e) =>
+                      update({ injection: e.target.value as "tool" | "user" })
+                    }
+                  >
+                    <option value="tool">Tool Call 结果</option>
+                    <option value="user">附加到当前 user</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                注入模板
+                <textarea
+                  className="du-textarea"
+                  aria-label="插件注入模板"
+                  rows={3}
+                  value={p.injectionTemplate}
+                  onChange={(e) =>
+                    update({ injectionTemplate: e.target.value })
+                  }
+                />
+              </label>
+              <small>
+                {
+                  "支持 {{RESULT}}、{{PLUGIN_NAME}}、{{USER_INPUT}}。不改变保存的正文。"
+                }
+              </small>
+              <label>
+                固定示例（可选）
+                <textarea
+                  className="du-textarea"
+                  aria-label="插件固定示例"
+                  rows={4}
+                  value={p.example}
+                  onChange={(e) => update({ example: e.target.value })}
+                />
+              </label>
+            </>
+          )}
+          {p.kind === "analysis" && (
+            <>
+              <label>
+                JSON Schema
+                <textarea
+                  className="du-textarea code-input"
+                  aria-label="插件 JSON Schema"
+                  rows={8}
+                  value={p.schema}
+                  onChange={(e) => update({ schema: e.target.value })}
+                />
+              </label>
+              {number("referenceCount", "保留完整参考配对数")}
+            </>
+          )}
+          {(p.kind === "suggest" || p.kind === "rewrite") && (
+            <div className="plugin-fields">
+              {number("userHistoryCount", "历史 user 条数（0 为全部）")}
+              {number("historyRounds", "最近完整问答对数", 1)}
+              {p.kind === "suggest" && number("suggestions", "候选条数", 1)}
+            </div>
+          )}
+          {p.kind !== "analysis" && (
+            <div className="plugin-fields">
+              {number("highWater", "高水位（k Token）", 1)}
+              {number("lowWater", "裁后目标（k Token）")}
+            </div>
+          )}
+        </fieldset>
         <details className="du-collapse du-collapse-arrow">
           <summary className="du-collapse-title">生成参数</summary>
           <div className="du-collapse-content">
@@ -416,48 +478,60 @@ export function GlobalPlugins({
     <>
       <h3>插件默认配置</h3>
       <p className="muted">
-        四种内置能力支持多个配置实例。聊天内开关、顺序和覆盖设置在输入区下方；这里的修改不会覆盖已有结果。
+        四种内置能力支持多个配置实例。聊天内开关、顺序和覆盖设置在发送框左下角；这里的修改不会覆盖已有结果。
       </p>
-      <div className="plugin-global-list">
+      <ul className="plugin-global-list du-list" aria-label="插件默认配置">
         {list.map((p) => (
-          <div className="plugin-definition-row du-card" key={p.id}>
-            <div>
+          <li className="plugin-definition-row du-list-row" key={p.id}>
+            <div className="du-list-col-grow plugin-definition-info">
               <strong>{p.name}</strong>
               <small>
                 {pluginName(p.kind)} · {p.model?.modelId ?? "跟随主聊天"}
               </small>
             </div>
-            <IconButton
-              label={"编辑插件 " + p.name}
-              onClick={() => setEditing(p)}
-            >
-              <SlidersHorizontal size={17} />
-            </IconButton>
-            <IconButton
-              label={"复制插件 " + p.name}
-              onClick={() =>
-                setEditing({
-                  ...structuredClone(p),
-                  id: crypto.randomUUID(),
-                  name: p.name + " 副本",
-                })
-              }
-            >
-              <Copy size={17} />
-            </IconButton>
-            <IconButton
-              label={"删除插件 " + p.name}
-              onClick={() =>
-                void persist(list.filter((item) => item.id !== p.id)).catch(
-                  () => {},
-                )
-              }
-            >
-              <Trash2 size={17} />
-            </IconButton>
-          </div>
+            <div className="plugin-definition-actions">
+              <IconButton
+                className="du-btn du-btn-ghost du-btn-square du-btn-sm"
+                label={"编辑插件 " + p.name}
+                onClick={() => setEditing(p)}
+              >
+                <SlidersHorizontal size={17} />
+              </IconButton>
+              <IconButton
+                className="du-btn du-btn-ghost du-btn-square du-btn-sm"
+                label={"复制插件 " + p.name}
+                onClick={() =>
+                  setEditing({
+                    ...structuredClone(p),
+                    id: crypto.randomUUID(),
+                    name: p.name + " 副本",
+                  })
+                }
+              >
+                <Copy size={17} />
+              </IconButton>
+              {!isBuiltinPlugin(p) && (
+                <IconButton
+                  className="du-btn du-btn-ghost du-btn-square du-btn-sm"
+                  label={"删除插件 " + p.name}
+                  onClick={() =>
+                    void persist(list.filter((item) => item.id !== p.id)).catch(
+                      () => {},
+                    )
+                  }
+                >
+                  <Trash2 size={17} />
+                </IconButton>
+              )}
+              {isBuiltinPlugin(p) && (
+                <span className="du-badge du-badge-ghost du-badge-sm">
+                  内置
+                </span>
+              )}
+            </div>
+          </li>
         ))}
-      </div>
+      </ul>
       <div className="plugin-add-types">
         {(["analysis", "clarify", "suggest", "rewrite"] as const).map(
           (kind) => (
@@ -494,6 +568,7 @@ function ContextDetails({
   prepared,
   close,
   run,
+  usageRun,
   onCommand,
 }: {
   chatId: string;
@@ -501,9 +576,11 @@ function ContextDetails({
   prepared: ReturnType<typeof preparePlugin> | null;
   close: () => void;
   run?: PluginRun;
+  usageRun?: PluginRun;
   onCommand: Command;
 }) {
   const [snapshot, setSnapshot] = useState<APIMessage[] | null>(null),
+    [loading, setLoading] = useState(false),
     [error, setError] = useState(""),
     [selected, setSelected] = useState<number | null>(null);
   const m = run?.metrics ?? prepared?.metrics,
@@ -512,13 +589,13 @@ function ContextDetails({
     <Dialog title={plugin.name + " · 上下文"} close={close} wide>
       {m && (
         <>
-          <div className="plugin-metric-grid">
-            <div>
-              <small>总输入／模型容量</small>
-              <small>输入 Token 为预计值；上游用量单独展示。</small>
-              <strong>
+          <div className="plugin-metric-grid du-stats">
+            <div className="du-stat">
+              <div className="du-stat-title">总输入／模型容量</div>
+              <div className="du-stat-value">
                 {k(m.total)}／{k(m.capacity)}
-              </strong>
+              </div>
+              <div className="du-stat-desc">输入为预计值；上游用量单独展示</div>
               <progress
                 className={
                   "du-progress " +
@@ -528,21 +605,23 @@ function ContextDetails({
                 }
                 max={m.capacity}
                 value={Math.min(m.total, m.capacity)}
+                aria-label="插件上下文用量"
               />
             </div>
-            <div>
-              <small>历史档案</small>
-              <strong>
-                {k(m.archive)}{" "}
+            <div className="du-stat">
+              <div className="du-stat-title">历史档案</div>
+              <div className="du-stat-value">{k(m.archive)}</div>
+              <div className="du-stat-desc">
                 {m.highWater > 0
-                  ? `· ${k(m.highWater)} 时裁到 ${k(m.lowWater)}`
+                  ? `${k(m.highWater)} 时裁到 ${k(m.lowWater)}`
                   : "· 按完整配对数保留"}
-              </strong>
+              </div>
               {m.highWater > 0 && (
                 <progress
                   className="du-progress du-progress-info"
                   max={m.highWater}
                   value={m.archive}
+                  aria-label="插件历史水位"
                 />
               )}
             </div>
@@ -563,10 +642,13 @@ function ContextDetails({
           </table>
         </>
       )}
+      {(run ?? usageRun) && <PluginUsage run={(run ?? usageRun)!} />}
       {run && (
         <button
           className="du-btn du-btn-sm"
-          onClick={() =>
+          disabled={loading}
+          onClick={() => {
+            setLoading(true);
             void api<{ messages: APIMessage[] } | null>(
               "/chats/" + chatId + "/plugins",
               "POST",
@@ -578,9 +660,10 @@ function ContextDetails({
                 setSelected(null);
               })
               .catch((e) => setError(e.message))
-          }
+              .finally(() => setLoading(false));
+          }}
         >
-          <FileSearch size={15} />
+          {loading ? <Loading small /> : <FileSearch size={15} />}
           查看本次请求快照
         </button>
       )}
@@ -603,34 +686,144 @@ function ContextDetails({
             重置后续参考
           </button>
         )}
-        <label>
-          消息列表
-          <select
-            className="du-select"
-            aria-label="选择插件上下文消息"
-            value={selected ?? ""}
-            onChange={(e) =>
-              setSelected(e.target.value === "" ? null : Number(e.target.value))
-            }
-          >
-            <option value="">
-              选择一条查看完整内容（共 {messages.length} 条）
-            </option>
-            {messages.map((msg, i) => (
-              <option value={i} key={i}>
-                {i + 1}. {msg.role} · {estimateTokens(msg.content ?? "")} Token
-              </option>
-            ))}
-          </select>
-        </label>
+        <div>
+          <span>消息列表</span>
+          <ContextMessagePicker
+            messages={messages}
+            selected={selected}
+            select={setSelected}
+            disabled={loading || (!prepared && snapshot === null)}
+          />
+        </div>
         {selected !== null && messages[selected] && (
           <pre className="plugin-context-text">
             {messages[selected]!.content}
           </pre>
         )}
       </div>
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <p className="du-alert du-alert-error" role="alert">
+          {error}
+        </p>
+      )}
     </Dialog>
+  );
+}
+function ContextMessagePicker({
+  messages,
+  selected,
+  select,
+  disabled,
+}: {
+  messages: APIMessage[];
+  selected: number | null;
+  select: (n: number) => void;
+  disabled: boolean;
+}) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const outside = (e: PointerEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node))
+        ref.current.open = false;
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, []);
+  const badge = (role: APIMessage["role"]) => (
+    <span className={"du-badge du-badge-sm plugin-role plugin-role-" + role}>
+      {role}
+    </span>
+  );
+  return (
+    <details
+      ref={ref}
+      className="du-dropdown du-dropdown-top plugin-message-picker"
+    >
+      <summary
+        className="du-btn plugin-message-choice"
+        role="button"
+        aria-label="选择插件上下文消息"
+        aria-disabled={disabled}
+        onClick={(e) => {
+          if (disabled) e.preventDefault();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" && !disabled) {
+            e.preventDefault();
+            ref.current!.open = true;
+            requestAnimationFrame(() =>
+              ref.current
+                ?.querySelector<HTMLButtonElement>("li button")
+                ?.focus(),
+            );
+          }
+        }}
+      >
+        <span>
+          {disabled ? (
+            "先加载本次请求快照"
+          ) : selected !== null && messages[selected] ? (
+            <>
+              {selected + 1}. {badge(messages[selected]!.role)} ·{" "}
+              {estimateTokens(
+                messages[selected]!.content ?? "",
+              ).toLocaleString()}{" "}
+              Token
+            </>
+          ) : (
+            `选择一条查看完整内容（共 ${messages.length} 条）`
+          )}
+        </span>
+        <ChevronDown size={16} />
+      </summary>
+      <ul
+        className="du-dropdown-content du-menu plugin-message-menu"
+        aria-label="上下文消息类型"
+        onKeyDown={(e) => {
+          const items = Array.from(
+              ref.current!.querySelectorAll<HTMLButtonElement>("li button"),
+            ),
+            index = items.indexOf(document.activeElement as HTMLButtonElement);
+          if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+            e.preventDefault();
+            const next =
+              e.key === "Home"
+                ? 0
+                : e.key === "End"
+                  ? items.length - 1
+                  : (index + (e.key === "ArrowDown" ? 1 : -1) + items.length) %
+                    items.length;
+            items[next]?.focus();
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            ref.current!.open = false;
+            ref.current?.querySelector<HTMLElement>("summary")?.focus();
+          }
+        }}
+      >
+        {messages.map((msg, i) => (
+          <li key={i}>
+            <button
+              className={selected === i ? "du-menu-active" : ""}
+              type="button"
+              onClick={() => {
+                select(i);
+                ref.current!.open = false;
+                ref.current?.querySelector<HTMLElement>("summary")?.focus();
+              }}
+            >
+              <span>{i + 1}.</span>
+              {badge(msg.role)}
+              <span className="muted">
+                {estimateTokens(msg.content ?? "").toLocaleString()} Token
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 export function PluginBar({
@@ -789,7 +982,7 @@ export function PluginBar({
               <button
                 key={p.id}
                 className={
-                  "plugin-chip " +
+                  "du-btn du-btn-ghost du-btn-sm plugin-chip " +
                   (metrics && metrics.total > metrics.capacity
                     ? "over-budget"
                     : "")
@@ -802,6 +995,12 @@ export function PluginBar({
                   <b>{metrics ? "预计 " + k(metrics.total) : "未选模型"}</b>
                 </span>
                 <progress
+                  className={
+                    "du-progress " +
+                    (metrics && metrics.total > metrics.capacity
+                      ? "du-progress-error"
+                      : "du-progress-primary")
+                  }
                   max={metrics?.capacity ?? 1}
                   value={Math.min(metrics?.total ?? 0, metrics?.capacity ?? 1)}
                 />
@@ -868,24 +1067,21 @@ export function PluginBar({
                         {merged.name}
                         <small>{pluginName(p.kind)}</small>
                       </span>
-                      {(p.kind === "rewrite" || p.kind === "suggest") &&
-                        binding?.enabled && (
-                          <IconButton
-                            label={"运行 " + p.name}
-                            disabled={
-                              busy || (p.kind === "rewrite" && !draft.trim())
-                            }
-                            onClick={() => {
-                              setOpen(false);
-                              void command(
-                                p.kind === "rewrite" ? "rewrite" : "suggest",
-                                { pluginId: p.id, content: draft },
-                              ).catch((e) => setError(e.message));
-                            }}
-                          >
-                            <Play size={14} />
-                          </IconButton>
-                        )}
+                      {p.kind === "suggest" && binding?.enabled && (
+                        <IconButton
+                          label={"运行 " + p.name}
+                          disabled={busy}
+                          onClick={() => {
+                            setOpen(false);
+                            void command("suggest", {
+                              pluginId: p.id,
+                              content: draft,
+                            }).catch((e) => setError(e.message));
+                          }}
+                        >
+                          <Play size={14} />
+                        </IconButton>
+                      )}
                       {canSort && (
                         <IconButton
                           label={"上移 " + p.name}
@@ -976,6 +1172,13 @@ export function PluginBar({
           plugin={selected.find((p) => p.id === context)!}
           prepared={previews.get(context) ?? null}
           run={activeRun(context)}
+          usageRun={state.runs.findLast(
+            (r) =>
+              r.plugin.id === context &&
+              (r.anchorId === chat?.currentId ||
+                (!!r.anchorId &&
+                  route(chat!).some((m) => m.id === r.anchorId))),
+          )}
           close={() => setContext(null)}
           onCommand={command}
         />
@@ -1019,10 +1222,13 @@ function ResultCard({
       ["running", "waiting", "error", "candidate"].includes(run.status);
   return (
     <details
-      className={"plugin-result du-card " + (question ? "plugin-question" : "")}
+      className={
+        "plugin-result du-collapse du-collapse-arrow " +
+        (question ? "plugin-question" : "")
+      }
       open={open}
     >
-      <summary>
+      <summary className="du-collapse-title">
         <span>
           {question ? (
             <MessageCircleQuestion size={16} />
@@ -1049,12 +1255,16 @@ function ResultCard({
           )}
         </small>
       </summary>
-      <div className="plugin-result-body">
-        <pre className="plugin-output">{run.output || "正在生成…"}</pre>
+      <div className="plugin-result-body du-collapse-content">
+        {question ? (
+          <PluginMarkdown>{run.output || "正在生成…"}</PluginMarkdown>
+        ) : (
+          <pre className="plugin-output">{run.output || "正在生成…"}</pre>
+        )}
         {run.answer !== undefined && (
           <div className="plugin-answer">
             <strong>你的回答</strong>
-            <p>{run.answer}</p>
+            <PluginMarkdown>{run.answer}</PluginMarkdown>
           </div>
         )}
         {run.error && (
@@ -1062,18 +1272,7 @@ function ResultCard({
             {run.error}
           </p>
         )}
-        <MessageUsage
-          message={{
-            id: run.id,
-            parentId: null,
-            role: "assistant",
-            content: "",
-            createdAt: run.createdAt,
-            model: run.model ?? run.plugin.model ?? undefined,
-            usage: run.usage,
-            elapsedMs: run.elapsedMs,
-          }}
-        />
+        <PluginUsage run={run} />
         <div className="plugin-card-actions">
           <button className="du-btn du-btn-sm" onClick={() => setContext(true)}>
             <FileSearch size={14} />
@@ -1351,7 +1550,12 @@ function SuggestionSet({
           </button>
         ))
       )}
-      {run.error && <p role="alert">{run.error}</p>}
+      <PluginUsage run={run} />
+      {run.error && (
+        <p className="du-alert du-alert-error" role="alert">
+          {run.error}
+        </p>
+      )}
       {run.status !== "running" && (
         <button
           className="du-btn du-btn-ghost du-btn-xs"
@@ -1372,20 +1576,39 @@ export function RewriteReview({
   current,
   apply,
   command,
+  busy,
+  regenerating,
+  failure,
 }: {
   run: PluginRun;
   current: string;
   apply: (value: string) => void;
   command: Command;
+  busy: boolean;
+  regenerating: boolean;
+  failure?: string;
 }) {
-  const [candidate, setCandidate] = useState(run.output),
-    [error, setError] = useState("");
+  const [candidate, setCandidate] = useState(() => {
+      try {
+        return extractRewritePrompt(run.output);
+      } catch {
+        return run.output;
+      }
+    }),
+    [error, setError] = useState(""),
+    [starting, setStarting] = useState(false);
   return (
     <Dialog
       title="重新生成 user 提示 · 对比"
       close={() => void command("dismiss", { runId: run.id }).catch(() => {})}
       wide
     >
+      <PluginUsage run={run} />
+      {failure && (
+        <div className="du-alert du-alert-error" role="alert">
+          {failure}
+        </div>
+      )}
       <div className="rewrite-compare">
         <label>
           原内容
@@ -1414,7 +1637,33 @@ export function RewriteReview({
       {error && <p role="alert">{error}</p>}
       <footer>
         <button
+          className="du-btn du-btn-ghost"
+          disabled={busy || starting || regenerating || !current.trim()}
+          aria-label="重新生成结果"
+          onClick={() => {
+            setStarting(true);
+            setError("");
+            void command("rewrite", {
+              pluginId: run.plugin.id,
+              content: current,
+              ...(run.rewriteMessageId
+                ? { messageId: run.rewriteMessageId }
+                : {}),
+            })
+              .catch((e) => setError(e.message))
+              .finally(() => setStarting(false));
+          }}
+        >
+          {starting || regenerating ? (
+            <Loading small />
+          ) : (
+            <RotateCcw size={15} />
+          )}
+          重新生成结果
+        </button>
+        <button
           className="du-btn"
+          disabled={busy || starting || regenerating}
           onClick={() =>
             void command("dismiss", { runId: run.id }).catch((e) =>
               setError(e.message),
@@ -1425,7 +1674,7 @@ export function RewriteReview({
         </button>
         <button
           className="du-btn du-btn-primary"
-          disabled={!candidate.trim()}
+          disabled={!candidate.trim() || busy || starting || regenerating}
           onClick={() =>
             void command("dismiss", { runId: run.id })
               .then(() => apply(candidate))
@@ -1434,6 +1683,58 @@ export function RewriteReview({
         >
           <Check size={15} />
           确认替换
+        </button>
+      </footer>
+    </Dialog>
+  );
+}
+export function MessageDeleteDialog({
+  message,
+  childCount,
+  close,
+  remove,
+}: {
+  message: Message;
+  childCount: number;
+  close: () => void;
+  remove: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  return (
+    <Dialog
+      title="删除消息"
+      close={() => {
+        if (!busy) close();
+      }}
+    >
+      <p>
+        删除这条{message.role === "user" ? " user 消息" : "回答"}
+        {childCount ? `及其直接下一层的 ${childCount} 条消息` : ""}
+        ？更后面的内容会接回前一个节点。
+      </p>
+      <p className="muted">删除后无法恢复。</p>
+      {error && (
+        <div className="du-alert du-alert-error" role="alert">
+          {error}
+        </div>
+      )}
+      <footer>
+        <button className="du-btn" disabled={busy} onClick={close}>
+          取消
+        </button>
+        <button
+          className="du-btn du-btn-error"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void remove()
+              .then(close)
+              .catch((e) => setError(e.message))
+              .finally(() => setBusy(false));
+          }}
+        >
+          {busy ? <Loading small /> : <Trash2 size={16} />}删除
         </button>
       </footer>
     </Dialog>

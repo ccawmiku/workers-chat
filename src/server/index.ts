@@ -7,6 +7,7 @@ import {
   newChat,
   addMessage,
   editMessage,
+  deleteMessage,
   selectBranch,
   route,
   forkChat,
@@ -69,6 +70,7 @@ import {
   clonePlugins,
   removePlugins,
   selectPluginFlow,
+  planPruneMessagePlugins,
 } from "./plugins";
 import { enabledPlugins, flowInjections } from "../shared/plugins";
 const publicProvider = (p: Provider) => {
@@ -941,6 +943,21 @@ async function api(request: Request, env: Env) {
           : undefined,
       );
       return Response.json(await generationStart(env, jobId), { status: 202 });
+    }
+    if (action === "delete-message") {
+      if (!message) throw new HttpError(404, "消息不存在");
+      const removed = deleteMessage(chat, message.id),
+        pluginChanges = await planPruneMessagePlugins(env, chat, removed);
+      await store.commit([
+        ...store.planSave(id, "chat", chat, doc.revision, summary(chat)),
+        ...pluginChanges,
+        ...removed.map((messageId) =>
+          env.DB.prepare(
+            "DELETE FROM jobs WHERE chat_id=? AND message_id=?",
+          ).bind(id, messageId),
+        ),
+      ]);
+      return Response.json(chat);
     }
     if (action === "edit") {
       if (!message) throw new HttpError(404, "消息不存在");

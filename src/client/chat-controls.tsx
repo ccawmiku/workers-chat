@@ -368,16 +368,12 @@ export function MessageUsage({
   historical?: boolean;
 }) {
   const usage = message.usage ?? {},
-    inputDetails = object(
-      usage.prompt_tokens_details ?? usage.input_tokens_details,
-    ),
     outputDetails = object(
       usage.completion_tokens_details ?? usage.output_tokens_details,
     );
   const rows: [string, number | undefined][] = [
     ["输入", count(usage.prompt_tokens ?? usage.input_tokens)],
     ["输出", count(usage.completion_tokens ?? usage.output_tokens)],
-    ["缓存", count(inputDetails.cached_tokens ?? usage.cached_tokens)],
     ["思考", count(outputDetails.reasoning_tokens)],
     ["总计", count(usage.total_tokens)],
   ];

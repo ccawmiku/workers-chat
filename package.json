@@ -1,0 +1,54 @@
+{
+  "name": "workers-chat",
+  "version": "1.0.0",
+  "description": "面向 Cloudflare Workers 免费套餐的单用户、纯文字 AI 聊天网页。视觉参考 Codex，消息树与聊天 JSON 交换行为参考最新版稳定 OpenWebUI。",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "dev": "cf dev",
+    "build": "cf build",
+    "typecheck": "cf workers types && tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build",
+    "deploy": "cf deploy",
+    "deploy:dry": "cf deploy --dry-run",
+    "auth:prepare": "node scripts/prepare-auth.mjs",
+    "dev:init": "node scripts/dev-init.mjs",
+    "test:browser": "playwright test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ccawmiku/workers-chat.git"
+  },
+  "keywords": [],
+  "author": "",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/ccawmiku/workers-chat/issues"
+  },
+  "homepage": "https://github.com/ccawmiku/workers-chat#readme",
+  "dependencies": {
+    "lucide-react": "^1.57.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^2.0.0-beta.v.0",
+    "@cloudflare/workers-types": "^5.20261015.1",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "cf": "^1.0.0-beta.17",
+    "esbuild": "^0.28.2",
+    "miniflare": "^5.20261012.0-beta",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
+  },
+  "private": true
+}

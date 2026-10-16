@@ -1,0 +1,5 @@
+CREATE TABLE title_jobs(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,message_id TEXT NOT NULL,manual INTEGER NOT NULL,status TEXT NOT NULL,attempted INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,error TEXT,config TEXT NOT NULL,FOREIGN KEY(chat_id) REFERENCES documents(id) ON DELETE CASCADE);
+CREATE UNIQUE INDEX title_auto_once ON title_jobs(chat_id) WHERE manual=0;
+CREATE UNIQUE INDEX title_one_active ON title_jobs(chat_id) WHERE status IN ('pending','running');
+CREATE TRIGGER chat_group_insert BEFORE INSERT ON documents WHEN NEW.kind='chat' AND json_extract(NEW.summary,'$.groupId') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM documents WHERE kind='group' AND id=json_extract(NEW.summary,'$.groupId')) BEGIN SELECT RAISE(ABORT,'group missing'); END;
+CREATE TRIGGER chat_group_update BEFORE UPDATE ON documents WHEN NEW.kind='chat' AND json_extract(NEW.summary,'$.groupId') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM documents WHERE kind='group' AND id=json_extract(NEW.summary,'$.groupId')) BEGIN SELECT RAISE(ABORT,'group missing'); END;

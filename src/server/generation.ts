@@ -372,6 +372,7 @@ export async function runGeneration(
         content += choice?.delta?.content ?? "";
         reasoning +=
           choice?.delta?.reasoning_content ?? choice?.delta?.reasoning ?? "";
+        progress.publish(content, reasoning);
         if (event.usage) usage = sanitizeUsage(event.usage);
         if (choice?.finish_reason) finished = true;
       };
@@ -451,6 +452,7 @@ export async function runGeneration(
   } finally {
     controller.abort();
   }
+  progress.publish(content, reasoning, true);
   if (complete)
     await finalize(
       env,

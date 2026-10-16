@@ -23,9 +23,11 @@ test("large imports and delayed send preserve newer cloud drafts", async ({
   const configGate = new Promise<void>((resolve) => {
     releaseConfig = resolve;
   });
-  await page.route("**/api/settings", async (route) => {
-    if (route.request().method() === "GET") await configGate;
-    await route.continue();
+  await page.route("**/api/bootstrap**", async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    if (data.authenticated) await configGate;
+    await route.fulfill({ response, json: data });
   });
   await page.goto("/");
   await page.getByLabel("访问密码", { exact: true }).fill(credential.password);

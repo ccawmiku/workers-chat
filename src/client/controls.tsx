@@ -40,6 +40,9 @@ export function ParameterControl({
 }) {
   const [current, setCurrent] = useState(value);
   useEffect(() => setCurrent(value), [value]);
+  const commit = (next: number | undefined) => {
+    if (next !== value) onChange(next);
+  };
   return (
     <div className="parameter" role="group" aria-label={name + "参数"}>
       <span className="parameter-name">{name}</span>
@@ -55,7 +58,7 @@ export function ParameterControl({
         step={step}
         value={current ?? max / 2}
         onChange={(e) => setCurrent(Number(e.target.value))}
-        onPointerUp={(e) => onChange(Number(e.currentTarget.value))}
+        onPointerUp={(e) => commit(Number(e.currentTarget.value))}
         onKeyUp={(e) => {
           if (
             [
@@ -69,7 +72,7 @@ export function ParameterControl({
               "PageDown",
             ].includes(e.key)
           )
-            onChange(Number(e.currentTarget.value));
+            commit(Number(e.currentTarget.value));
         }}
       />
       <input
@@ -84,14 +87,14 @@ export function ParameterControl({
         onChange={(e) =>
           setCurrent(e.target.value === "" ? undefined : Number(e.target.value))
         }
-        onBlur={() => onChange(current)}
+        onBlur={() => commit(current)}
       />
       <IconButton
         label={name + "恢复默认"}
         disabled={value === undefined}
         onClick={() => {
           setCurrent(undefined);
-          onChange(undefined);
+          commit(undefined);
         }}
       >
         <RotateCcw size={13} />

@@ -72,6 +72,91 @@ async function readBody(request: Request) {
     throw new HttpError(400, "JSON 格式无效");
   }
 }
+async function chatState(env: Env, id: string) {
+  const store = new Store(env.DB),
+    { doc, job } = await readChat(env, id);
+  if (!doc || !doc.value.messages) throw new HttpError(404, "聊天不存在");
+  const chat = doc.value;
+
+  if (job) {
+    const output = await jobOutput(env, job.id);
+    if (
+      job.transport === "device" &&
+      Date.now() - (output.updatedAt || job.created_at) > 90000
+    ) {
+      await env.PROGRESS.getByName(job.id).cancel();
+      await finalize(
+        env,
+        job,
+        "error",
+        output.content,
+        output.reasoning,
+        "设备直连已断开，已保留收到的部分；不会自动重复模型请求。",
+      );
+      const latest = await store.get<Chat>(id);
+      return {
+        chat: latest!.value,
+        revision: latest!.revision,
+        job: null,
+      };
+    }
+    if (
+      job.transport !== "device" &&
+      Date.now() - (output.updatedAt || job.created_at) > 15000
+    ) {
+      try {
+        const state = await (await env.GENERATION.get(job.id)).status();
+        if (
+          ["errored", "terminated", "complete", "unknown"].includes(
+            state.status,
+          )
+        ) {
+          await finalize(
+            env,
+            job,
+            "error",
+            output.hasData
+              ? output.content
+              : (chat.messages[job.message_id]?.content ?? ""),
+            output.reasoning,
+            "后台任务中断，已保留收到的部分。请手动重试为新版本。服务器不会自动重复模型请求。",
+          );
+          const fresh = await store.get<Chat>(id);
+          return {
+            chat: fresh!.value,
+            revision: fresh!.revision,
+            job: null,
+          };
+        }
+      } catch {
+        // A transient status lookup must not create another generation.
+      }
+    }
+    const target = chat.messages[job.message_id];
+    if (target && output.hasData)
+      Object.assign(
+        target,
+        { content: output.content, reasoning: output.reasoning },
+        { status: "running" },
+      );
+  }
+  if (!job && !chat.titleManual) {
+    try {
+      await queueTitle(env, id);
+    } catch {
+      /* No retry of an existing title request. */
+    }
+  }
+  return {
+    chat,
+    revision: doc.revision,
+    titleJob: await titleStatus(env, id),
+    job: job
+      ? { id: job.id, status: job.status, transport: job.transport }
+      : null,
+  };
+}
+
 async function api(request: Request, env: Env) {
   secureOrigin(request);
   const url = new URL(request.url),
@@ -137,10 +222,32 @@ async function api(request: Request, env: Env) {
       { headers: { "Set-Cookie": sessionCookie(request, token) } },
     );
   }
-  if (path === "/api/auth/status") {
+  if (path === "/api/auth/status" || path === "/api/bootstrap") {
     try {
       await authenticate(request, env);
-      return Response.json({ authenticated: true });
+      if (path === "/api/auth/status")
+        return Response.json({ authenticated: true });
+      const id = url.searchParams.get("chatId");
+      const [chats, groups, providers, config, current] = await Promise.all([
+        store.list("chat"),
+        store.list("group"),
+        providerList(store),
+        settings(store),
+        id
+          ? chatState(env, id).catch((e) => {
+              if (e instanceof HttpError && e.status === 404) return null;
+              throw e;
+            })
+          : null,
+      ]);
+      return Response.json({
+        authenticated: true,
+        chats,
+        groups,
+        providers: providers.map(publicProvider),
+        settings: config,
+        current,
+      });
     } catch (e) {
       if (e instanceof HttpError && e.status === 401)
         return Response.json({ authenticated: false });
@@ -148,6 +255,41 @@ async function api(request: Request, env: Env) {
     }
   }
   const session = await authenticate(request, env);
+  if (path === "/api/navigation") {
+    const [chats, groups] = await Promise.all([
+      store.list("chat"),
+      store.list("group"),
+    ]);
+    return Response.json({ chats, groups });
+  }
+  if (path === "/api/config") {
+    const [providers, config] = await Promise.all([
+      providerList(store),
+      settings(store),
+    ]);
+    return Response.json({
+      providers: providers.map(publicProvider),
+      settings: config,
+    });
+  }
+  const watch = path.match(/^\/api\/jobs\/([^/]+)\/events$/);
+  if (watch) {
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
+      throw new HttpError(426, "需要 WebSocket");
+    if (request.headers.get("Origin") !== url.origin)
+      throw new HttpError(403, "请求来源无效");
+    const title = url.searchParams.get("kind") === "title",
+      id = watch[1]!;
+    const exists = await env.DB.prepare(
+      title
+        ? "SELECT id FROM title_jobs WHERE id=?"
+        : "SELECT id FROM jobs WHERE id=?",
+    )
+      .bind(id)
+      .first();
+    if (!exists) throw new HttpError(404, "任务不存在");
+    return env.PROGRESS.getByName((title ? "title-" : "") + id).fetch(request);
+  }
   const deviceMatch = path.match(
     /^\/api\/device\/jobs\/([^/]+)\/(checkpoint|finish)$/,
   );
@@ -511,88 +653,11 @@ async function api(request: Request, env: Env) {
       await store.setDraft(id, str(body.draft));
       return Response.json({ ok: true });
     }
+    if (action === "" && method === "GET")
+      return Response.json(await chatState(env, id));
     const { doc, job } = await readChat(env, id);
     if (!doc || !doc.value.messages) throw new HttpError(404, "聊天不存在");
     const chat = doc.value;
-    if (action === "" && method === "GET") {
-      if (job) {
-        const output = await jobOutput(env, job.id);
-        if (
-          job.transport === "device" &&
-          Date.now() - (output.updatedAt || job.created_at) > 90000
-        ) {
-          await env.PROGRESS.getByName(job.id).cancel();
-          await finalize(
-            env,
-            job,
-            "error",
-            output.content,
-            output.reasoning,
-            "设备直连已断开，已保留收到的部分；不会自动重复模型请求。",
-          );
-          const latest = await store.get<Chat>(id);
-          return Response.json({
-            chat: latest!.value,
-            revision: latest!.revision,
-            job: null,
-          });
-        }
-        if (
-          job.transport !== "device" &&
-          Date.now() - (output.updatedAt || job.created_at) > 15000
-        ) {
-          try {
-            const state = await (await env.GENERATION.get(job.id)).status();
-            if (
-              ["errored", "terminated", "complete", "unknown"].includes(
-                state.status,
-              )
-            ) {
-              await finalize(
-                env,
-                job,
-                "error",
-                output.hasData
-                  ? output.content
-                  : (chat.messages[job.message_id]?.content ?? ""),
-                output.reasoning,
-                "后台任务中断，已保留收到的部分。请手动重试为新版本。服务器不会自动重复模型请求。",
-              );
-              const fresh = await store.get<Chat>(id);
-              return Response.json({
-                chat: fresh!.value,
-                revision: fresh!.revision,
-                job: null,
-              });
-            }
-          } catch {
-            // A transient status lookup must not create another generation.
-          }
-        }
-        const target = chat.messages[job.message_id];
-        if (target && output.hasData)
-          Object.assign(
-            target,
-            { content: output.content, reasoning: output.reasoning },
-            { status: "running" },
-          );
-      }
-      if (!job && !chat.titleManual) {
-        try {
-          await queueTitle(env, id);
-        } catch {
-          /* No retry of an existing title request. */
-        }
-      }
-      return Response.json({
-        chat,
-        revision: doc.revision,
-        titleJob: await titleStatus(env, id),
-        job: job
-          ? { id: job.id, status: job.status, transport: job.transport }
-          : null,
-      });
-    }
     if (action === "title" && method === "POST") {
       if (job) throw new HttpError(409, "请等待当前回答完成");
       return Response.json(
@@ -814,13 +879,14 @@ export default {
         { status: e instanceof HttpError ? e.status : 500 },
       );
     }
+    if (response.status === 101) return response;
     const headers = new Headers(response.headers);
     headers.set("Cache-Control", "no-store");
     headers.set("X-Content-Type-Options", "nosniff");
     headers.set("Referrer-Policy", "no-referrer");
     headers.set(
       "Content-Security-Policy",
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     );
     if (new URL(request.url).protocol === "https:")
       headers.set("Strict-Transport-Security", "max-age=31536000");

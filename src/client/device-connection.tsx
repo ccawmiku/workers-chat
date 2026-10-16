@@ -236,7 +236,7 @@ export function DeviceConnectionProvider({
         void checkpoint().catch((error) => {
           if (/任务已(结束|停止)/.test(error.message)) entry.controller.abort();
         });
-      }, 2000);
+      }, 10000);
       try {
         apiKey = await key(task);
         entry.controller.signal.throwIfAborted();
@@ -322,7 +322,7 @@ export function DeviceConnectionProvider({
           void api("/device/titles/" + id + "/finish", "POST", {
             heartbeat: true,
           }).catch(() => {});
-        }, 10000);
+        }, 30000);
         let result = "",
           error = "没有可用的标题模型";
         for (const candidate of task.candidates) {

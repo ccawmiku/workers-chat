@@ -1,6 +1,8 @@
 import { HttpError } from "./store";
 
 const routes: [RegExp, string[]][] = [
+  [/^\/api\/(bootstrap|navigation|config)$/, ["GET"]],
+  [/^\/api\/jobs\/[^/]+\/events$/, ["GET"]],
   [/^\/api\/device\/titles\/[^/]+\/(claim|finish)$/, ["POST"]],
   [/^\/api\/device\/jobs\/[^/]+\/(checkpoint|finish)$/, ["POST"]],
   [

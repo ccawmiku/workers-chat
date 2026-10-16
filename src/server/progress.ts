@@ -6,6 +6,88 @@ import { runTitle, queueTitle } from "./titles";
 /** One SQLite-backed coordinator per generation, never a global singleton. */
 export class Progress extends DurableObject<Env> {
   private activeController?: AbortController;
+  private liveContent = "";
+  private liveReasoning = "";
+  private lastPublish = 0;
+  private send(socket: WebSocket, value: unknown) {
+    try {
+      socket.send(JSON.stringify(value));
+    } catch {
+      socket.close(1011, "Disconnected");
+    }
+  }
+  private broadcast(value: unknown) {
+    for (const socket of this.ctx.getWebSockets()) this.send(socket, value);
+  }
+  publish(content: string, reasoning: string, force = false) {
+    if (!force && Date.now() - this.lastPublish < 80) return;
+    this.lastPublish = Date.now();
+    const contentDelta = content.slice(this.liveContent.length),
+      reasoningDelta = reasoning.slice(this.liveReasoning.length);
+    this.liveContent = content;
+    this.liveReasoning = reasoning;
+    if (!this.ctx.getWebSockets().length) return;
+    const c = chunks(contentDelta, 8192),
+      r = chunks(reasoningDelta, 8192);
+    for (let i = 0; i < Math.max(c.length, r.length); i++)
+      this.broadcast({
+        type: "delta",
+        content: c[i] ?? "",
+        reasoning: r[i] ?? "",
+      });
+  }
+  async fetch(request: Request) {
+    const url = new URL(request.url),
+      id = url.pathname.split("/")[3]!,
+      title = url.searchParams.get("kind") === "title";
+    const pair = new WebSocketPair(),
+      client = pair[0],
+      server = pair[1];
+    this.ctx.acceptWebSocket(server);
+    // Register before awaiting state so completion cannot be missed during attach.
+    if (!title) {
+      const output = this.output();
+      this.send(server, { type: "reset" });
+      const content = this.activeController ? this.liveContent : output.content;
+      const reasoning = this.activeController
+        ? this.liveReasoning
+        : output.reasoning;
+      const c = chunks(content, 8192),
+        r = chunks(reasoning, 8192);
+      for (let i = 0; i < Math.max(c.length, r.length); i++)
+        this.send(server, {
+          type: "delta",
+          content: c[i] ?? "",
+          reasoning: r[i] ?? "",
+        });
+    }
+    const row = await this.env.DB.prepare(
+      title
+        ? "SELECT status FROM title_jobs WHERE id=?"
+        : "SELECT status FROM jobs WHERE id=?",
+    )
+      .bind(id)
+      .first<{ status: string }>();
+    if (!row || !["pending", "running"].includes(row.status)) {
+      this.send(server, { type: "done" });
+      server.close(1000, "Complete");
+    }
+    return new Response(null, { status: 101, webSocket: client });
+  }
+  webSocketMessage(socket: WebSocket) {
+    socket.close(1008, "Read only");
+  }
+  webSocketClose(socket: WebSocket) {
+    socket.close(1000, "Closed");
+  }
+  webSocketError(socket: WebSocket) {
+    socket.close(1011, "Disconnected");
+  }
+  private complete() {
+    this.broadcast({ type: "done" });
+    for (const socket of this.ctx.getWebSockets())
+      socket.close(1000, "Complete");
+  }
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(
@@ -38,6 +120,7 @@ export class Progress extends DurableObject<Env> {
       for (const [kind, value] of Object.entries({ content, reasoning })) {
         const previous = this.state(kind + "Length");
         if (value.length < previous) throw new Error("生成进度不能回退");
+        if (value.length === previous) continue;
         for (const chunk of chunks(value.slice(previous)))
           this.ctx.storage.sql.exec(
             "INSERT INTO pieces(kind,value) VALUES(?,?)",
@@ -51,6 +134,7 @@ export class Progress extends DurableObject<Env> {
         );
       }
     });
+    this.publish(content, reasoning, true);
     return true;
   }
   async deviceCheckpoint(sequence: number, content: string, reasoning: string) {
@@ -102,6 +186,7 @@ export class Progress extends DurableObject<Env> {
       );
     } finally {
       this.activeController = undefined;
+      this.complete();
       await this.ctx.storage.setAlarm(Date.now() + 86400000);
     }
   }
@@ -122,6 +207,7 @@ export class Progress extends DurableObject<Env> {
     try {
       return await runTitle(this.env, jobId);
     } finally {
+      this.complete();
       await this.ctx.storage.setAlarm(Date.now() + 86400000);
     }
   }

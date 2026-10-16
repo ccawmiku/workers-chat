@@ -70,6 +70,7 @@ import {
   defaultSettings,
 } from "../shared/chat";
 import { api, download } from "./api";
+import { observeJob } from "./job-events";
 import "./style.css";
 import {
   IconButton,
@@ -231,11 +232,23 @@ function App() {
     },
     [],
   );
+  const navigationRequest = useRef<Promise<{
+    chats: Brief[];
+    groups: Group[];
+  }> | null>(null);
   const loadNavigation = useCallback(async () => {
-    const [c, g] = await Promise.all([
-      api<Brief[]>("/chats"),
-      api<Group[]>("/groups"),
-    ]);
+    const pending = (navigationRequest.current ??= api<{
+      chats: Brief[];
+      groups: Group[];
+    }>("/navigation"));
+    let data;
+    try {
+      data = await pending;
+    } finally {
+      if (navigationRequest.current === pending)
+        navigationRequest.current = null;
+    }
+    const { chats: c, groups: g } = data;
     setChats(c);
     setChat((previous) => {
       const current = c.find((item) => item.id === previous?.id);
@@ -246,20 +259,26 @@ function App() {
     setGroups(g);
   }, []);
   const loadConfig = useCallback(async () => {
-    const [p, s] = await Promise.all([
-      api<ProviderView[]>("/providers"),
-      api<Settings>("/settings"),
-    ]);
+    const { providers: p, settings: s } = await api<{
+      providers: ProviderView[];
+      settings: Settings;
+    }>("/config");
     setProviders(p);
     setSettings(s);
   }, []);
+  const snapshotRequests = useRef(new Map<string, Promise<ChatSnapshot>>());
   const refresh = useCallback(async (id = idRef.current) => {
     if (!id) return;
-    const result = await api<{
-      chat: Chat;
-      job: typeof job;
-      titleJob: typeof titleJob;
-    }>("/chats/" + id);
+    const pending =
+      snapshotRequests.current.get(id) ?? api<ChatSnapshot>("/chats/" + id);
+    snapshotRequests.current.set(id, pending);
+    let result;
+    try {
+      result = await pending;
+    } finally {
+      if (snapshotRequests.current.get(id) === pending)
+        snapshotRequests.current.delete(id);
+    }
     if (idRef.current !== id) return;
     setChat(connection.overlay(result.chat));
     setJob(result.job);
@@ -272,6 +291,11 @@ function App() {
       await api("/chats/" + id + "/seen", "POST", {});
       setChat((previous) =>
         previous?.id === id ? { ...previous, unread: false } : previous,
+      );
+      setChats((previous) =>
+        previous.map((item) =>
+          item.id === id ? { ...item, unread: false } : item,
+        ),
       );
     }
   }, []);
@@ -297,7 +321,7 @@ function App() {
         dirty.current = false;
     }
   }
-  async function open(id: string) {
+  async function open(id: string, snapshot?: ChatSnapshot) {
     const sequence = ++navigationSeq.current;
     setOpening(true);
     try {
@@ -305,11 +329,7 @@ function App() {
       await creating.current?.catch(() => {});
       if (sequence !== navigationSeq.current) return;
       await flushDraft();
-      const result = await api<{
-        chat: Chat;
-        job: typeof job;
-        titleJob: typeof titleJob;
-      }>("/chats/" + id);
+      const result = snapshot ?? (await api<ChatSnapshot>("/chats/" + id));
       if (sequence !== navigationSeq.current) return;
       idRef.current = id;
       scrollIntent.current = {};
@@ -328,7 +348,14 @@ function App() {
       stick.current = true;
       if (result.chat.unread && document.visibilityState === "visible") {
         await api("/chats/" + id + "/seen", "POST", {});
-        await loadNavigation();
+        setChat((previous) =>
+          previous?.id === id ? { ...previous, unread: false } : previous,
+        );
+        setChats((previous) =>
+          previous.map((item) =>
+            item.id === id ? { ...item, unread: false } : item,
+          ),
+        );
       }
       if (innerWidth <= 760) setSidebar(false);
     } finally {
@@ -374,10 +401,38 @@ function App() {
       if (creating.current === task) creating.current = null;
     }
   }
+  type ChatSnapshot = {
+    chat: Chat;
+    job: typeof job;
+    titleJob: typeof titleJob;
+  };
+  type Bootstrap = {
+    authenticated: boolean;
+    chats: Brief[];
+    groups: Group[];
+    providers: ProviderView[];
+    settings: Settings;
+    current: ChatSnapshot | null;
+  };
+  const boot = useRef<Bootstrap | null>(null);
+  const bootRequest = useRef<Promise<Bootstrap> | null>(null);
+  const bootstrap = () => {
+    if (!bootRequest.current)
+      bootRequest.current = api<Bootstrap>(
+        "/bootstrap" +
+          (localStorage.getItem("lastChat")
+            ? "?chatId=" + encodeURIComponent(localStorage.getItem("lastChat")!)
+            : ""),
+      ).finally(() => {
+        bootRequest.current = null;
+      });
+    return bootRequest.current;
+  };
   useEffect(() => {
     void run(async () => {
-      const s = await api<{ authenticated: boolean }>("/auth/status");
-      setAuth(s.authenticated);
+      const data = await bootstrap();
+      boot.current = data.authenticated ? data : null;
+      setAuth(data.authenticated);
     });
   }, [run]);
   useEffect(() => {
@@ -385,14 +440,18 @@ function App() {
     setInitializing(true);
     void run(async () => {
       try {
-        await Promise.all([loadNavigation(), loadConfig()]);
-        const id = localStorage.getItem("lastChat");
-        if (id)
-          try {
-            await open(id);
-          } catch {
-            localStorage.removeItem("lastChat");
-          }
+        const data = boot.current ?? (await bootstrap());
+        boot.current = null;
+        if (!data.authenticated) {
+          setAuth(false);
+          return;
+        }
+        setChats(data.chats);
+        setGroups(data.groups);
+        setProviders(data.providers);
+        setSettings(data.settings);
+        if (data.current) await open(data.current.chat.id, data.current);
+        else localStorage.removeItem("lastChat");
       } finally {
         setInitializing(false);
       }
@@ -434,41 +493,132 @@ function App() {
     const timeout = setTimeout(() => void run(flushDraft), 700);
     return () => clearTimeout(timeout);
   }, [draft]);
+  const [visible, setVisible] = useState(
+    document.visibilityState === "visible",
+  );
+  const [pushUnavailable, setPushUnavailable] = useState(false);
+  const [manualTitle, setManualTitle] = useState<{
+    id: string;
+    chatId: string;
+  } | null>(null);
+  const latestSync = useRef({ refresh, loadNavigation, run });
+  latestSync.current = { refresh, loadNavigation, run };
   useEffect(() => {
-    if (!auth) return;
-    const timer = setInterval(
-      () =>
-        void run(async () => {
-          if (job || ["pending", "running"].includes(titleJob?.status ?? ""))
-            await refresh();
-          await loadNavigation();
-        }, false),
-      job || ["pending", "running"].includes(titleJob?.status ?? "")
-        ? 1500
-        : 6000,
+    if (!auth || !visible) return;
+    const running =
+      !!job || ["pending", "running"].includes(titleJob?.status ?? "");
+    let cancelled = false,
+      timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      if (cancelled || document.visibilityState !== "visible") return;
+      const latest = latestSync.current;
+      await latest.run(async () => {
+        if (running) await latest.refresh();
+        await latest.loadNavigation();
+      }, false);
+      if (!cancelled)
+        timer = setTimeout(tick, running && pushUnavailable ? 5000 : 60000);
+    };
+    timer = setTimeout(tick, running && pushUnavailable ? 5000 : 60000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [auth, visible, job?.id, titleJob?.id, titleJob?.status, pushUnavailable]);
+  useEffect(() => {
+    setPushUnavailable(false);
+    if (!auth || !visible || !job || job.transport === "device") return;
+    const id = chat?.id,
+      messageId = Object.values(chat?.messages ?? {}).find(
+        (m) => m.status === "running",
+      )?.id;
+    return observeJob(
+      job.id,
+      false,
+      (content, reasoning) => {
+        if (!messageId) return;
+        setChat((previous) =>
+          !previous || previous.id !== id || !previous.messages[messageId]
+            ? previous
+            : {
+                ...previous,
+                messages: {
+                  ...previous.messages,
+                  [messageId]: {
+                    ...previous.messages[messageId]!,
+                    content,
+                    reasoning,
+                    status: "running",
+                  },
+                },
+              },
+        );
+      },
+      () => {
+        const latest = latestSync.current;
+        void latest.run(async () => {
+          await latest.refresh();
+          await latest.loadNavigation();
+        }, false);
+      },
+      () => setPushUnavailable(true),
     );
-    return () => clearInterval(timer);
-  }, [
-    auth,
-    job?.id,
-    titleJob?.id,
-    titleJob?.status,
-    run,
-    refresh,
-    loadNavigation,
-  ]);
+  }, [auth, visible, job?.id]);
+  useEffect(() => {
+    if (
+      !auth ||
+      !visible ||
+      !titleJob ||
+      titleJob.transport === "device" ||
+      !["pending", "running"].includes(titleJob.status)
+    )
+      return;
+    return observeJob(
+      titleJob.id,
+      true,
+      () => {},
+      () => {
+        const latest = latestSync.current;
+        void latest.run(async () => {
+          await latest.refresh();
+          await latest.loadNavigation();
+        }, false);
+      },
+      () => setPushUnavailable(true),
+    );
+  }, [auth, visible, titleJob?.id, titleJob?.status]);
+  useEffect(() => {
+    if (!auth || !visible || !manualTitle || manualTitle.id === titleJob?.id)
+      return;
+    return observeJob(
+      manualTitle.id,
+      true,
+      () => {},
+      () => {
+        setManualTitle(null);
+        const latest = latestSync.current;
+        void latest.run(latest.loadNavigation, false);
+      },
+      () => setManualTitle(null),
+    );
+  }, [auth, visible, manualTitle?.id, titleJob?.id]);
   useEffect(() => {
     if (!auth) return;
+    let last = 0;
     const activate = () => {
-      if (document.visibilityState !== "visible") return;
-      void run(async () => {
-        await refresh();
-        await loadNavigation();
+      const active = document.visibilityState === "visible";
+      setVisible(active);
+      if (!active || Date.now() - last < 5000) return;
+      last = Date.now();
+      const latest = latestSync.current;
+      void latest.run(async () => {
+        await latest.refresh();
+        await latest.loadNavigation();
       }, false);
     };
     document.addEventListener("visibilitychange", activate);
     return () => document.removeEventListener("visibilitychange", activate);
-  }, [auth, run, refresh, loadNavigation]);
+  }, [auth]);
   const scrollIntent = useRef<{ id?: string; offset?: number } | null>(null);
   function messageElement(id: string) {
     return scrollRef.current?.querySelector<HTMLElement>(
@@ -524,9 +674,18 @@ function App() {
   ) {
     if (!chat) return;
     await flushDraft();
-    await api("/chats/" + chat.id, "PATCH", value);
-    await refresh();
-    await loadNavigation();
+    const updated = await api<Chat>("/chats/" + chat.id, "PATCH", value);
+    setChat((previous) =>
+      previous?.id === updated.id
+        ? { ...updated, messages: previous.messages }
+        : previous,
+    );
+    if (
+      ["title", "pinned", "archived", "deleted", "groupId"].some(
+        (key) => key in value,
+      )
+    )
+      await loadNavigation();
   }
   function acceptGeneration(result: GenerationStart) {
     if (!result.direct) return;
@@ -736,6 +895,8 @@ function App() {
         if (error) setError(error);
         void run(loadNavigation, false);
       });
+      if (!connection.enabled)
+        setManualTitle({ id: result.jobId, chatId: c.id });
     } else if (name === "duplicate") {
       const copy = await api<Chat>("/chats/" + c.id + "/duplicate", "POST", {});
       await loadNavigation();

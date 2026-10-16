@@ -1282,6 +1282,108 @@ describe("workerd HTTP + D1 + Workflows", () => {
       reasoning_effort: "low",
     });
   });
+  it("batches bootstrap/config/navigation without exposing keys or unauthenticated data", async () => {
+    expect(
+      await (await request("/bootstrap", "GET", undefined, false)).json(),
+    ).toEqual({ authenticated: false });
+    const chat = await value<Chat>("/chats", "POST", {});
+    const boot = await value<{
+      authenticated: boolean;
+      providers: Record<string, unknown>[];
+      current: { chat: Chat };
+      chats: Chat[];
+      groups: unknown[];
+    }>("/bootstrap?chatId=" + chat.id);
+    expect(boot.authenticated).toBe(true);
+    expect(boot.current.chat.id).toBe(chat.id);
+    expect(boot.chats.some((c) => c.id === chat.id)).toBe(true);
+    expect(boot.providers.every((p) => !("encryptedKey" in p))).toBe(true);
+    const nav = await value("/navigation");
+    expect(nav).toEqual({
+      chats: await value("/chats"),
+      groups: await value("/groups"),
+    });
+    expect(await value("/config")).toEqual({
+      providers: await value("/providers"),
+      settings: await value("/settings"),
+    });
+    expect((await request("/navigation", "GET", undefined, false)).status).toBe(
+      401,
+    );
+  });
+  it("pushes incremental generation, reconnects and completes without replaying upstream", async () => {
+    controls.delay = 1500;
+    controls.mode = "normal";
+    const chat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + chat.id, "PATCH", {
+      title: "Synthetic websocket test",
+    });
+    const count = upstreamCalls.length;
+    const { jobId } = await value<{ jobId: string }>(
+      "/chats/" + chat.id + "/send",
+      "POST",
+      { content: "push fixture" },
+    );
+    const connect = async () => {
+      const response = await mf.dispatchFetch(
+        "https://chat.test/api/jobs/" + jobId + "/events",
+        {
+          headers: {
+            Cookie: cookie,
+            Origin: "https://chat.test",
+            Upgrade: "websocket",
+          },
+        },
+      );
+      expect(response.status).toBe(101);
+      const socket = response.webSocket!;
+      socket.accept();
+      return socket;
+    };
+    const first = await connect();
+    first.close(1000, "Reconnect fixture");
+    const socket = await connect();
+    const result = await new Promise<{ content: string; deltas: number }>(
+      (resolve, reject) => {
+        let content = "",
+          deltas = 0;
+        const timer = setTimeout(() => reject(Error("push timeout")), 8000);
+        socket.addEventListener("message", (event) => {
+          const data = JSON.parse(String(event.data));
+          if (data.type === "reset") content = "";
+          if (data.type === "delta") {
+            content += data.content;
+            deltas++;
+          }
+          if (data.type === "done") {
+            clearTimeout(timer);
+            resolve({ content, deltas });
+          }
+        });
+      },
+    );
+    const done = await finished(chat.id);
+    expect(result.content).toBe("第一部分，完成");
+    expect(result.deltas).toBeGreaterThan(0);
+    expect(done.messages[done.currentId!]?.content).toBe(result.content);
+    expect(upstreamCalls.length).toBe(count + 1);
+    expect((await request("/jobs/" + jobId + "/events")).status).toBe(426);
+    expect(
+      (
+        await mf.dispatchFetch(
+          "https://chat.test/api/jobs/" + jobId + "/events",
+          {
+            headers: {
+              Cookie: cookie,
+              Origin: "https://evil.test",
+              Upgrade: "websocket",
+            },
+          },
+        )
+      ).status,
+    ).toBe(403);
+    controls.delay = 0;
+  });
   it("changes password and revokes every prior session", async () => {
     const response = await value<{ recoveryCode: string }>(
       "/auth/password",

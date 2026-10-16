@@ -271,7 +271,7 @@ async function api(request: Request, env: Env) {
         env.ENCRYPTION_KEY,
       );
     if (
-      doc &&
+      doc?.value.encryptedKey &&
       doc.value.baseUrl !== p.baseUrl &&
       (typeof body.apiKey !== "string" || !body.apiKey)
     )
@@ -279,6 +279,10 @@ async function api(request: Request, env: Env) {
         400,
         "修改地址时请重新输入密钥，避免将旧密钥发送到其他主机",
       );
+    if (body.refreshModels === false) {
+      await store.save(id, "provider", p, doc?.revision ?? 0, { id: p.id });
+      return Response.json(publicProvider(p));
+    }
     let list: { data?: { id: string }[] };
     if (transport === "device") {
       if (!Array.isArray(body.models))

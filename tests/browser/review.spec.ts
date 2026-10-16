@@ -89,6 +89,7 @@ test("large imports and delayed send preserve newer cloud drafts", async ({
             {
               id: providerId,
               name: "离线测试",
+              apiKey: "synthetic-display-key",
               baseUrl: "https://fixture.invalid/v1",
               prefix: "",
               models: [

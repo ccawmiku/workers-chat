@@ -7,7 +7,7 @@
   prefix: "du-";
   include:
     button, input, select, textarea, toggle, checkbox, range, card, badge,
-    avatar, menu, tabs, collapse, alert, loading, table;
+    avatar, menu, tabs, collapse, alert, loading, table, fieldset, modal;
   logs: false;
 }
 
@@ -393,7 +393,7 @@ header {
   margin-bottom: 30px;
   flex-direction: column;
   font-size: var(--font-size, 16px);
-  line-height: var(--line-height, 1.8);
+  line-height: var(--line-height, 1.6);
 }
 .message.user {
   align-items: flex-end;
@@ -2061,4 +2061,568 @@ input.du-toggle {
 .brand-mark,
 .welcome-symbol {
   flex-shrink: 0;
+}
+
+/* Cards have explicit direction; daisyUI Card defaults to a column. */
+.provider-card {
+  flex-direction: row;
+}
+.settings-page-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.settings-page-heading h3 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+.settings-page-heading p {
+  margin: 0;
+}
+.settings-page-heading > button {
+  flex-shrink: 0;
+}
+.provider-list {
+  display: grid;
+  gap: 12px;
+}
+.provider-item.du-card {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 20px;
+  border: 1px solid var(--line-color);
+  background: var(--panel);
+  border-radius: 14px;
+}
+.provider-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex: 1;
+}
+.provider-identity > div {
+  min-width: 0;
+}
+.provider-identity strong {
+  font-size: 14px;
+}
+.provider-symbol {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  background: var(--input);
+  border-radius: 12px;
+  color: var(--muted);
+}
+.provider-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  margin: 3px 0 7px;
+}
+.provider-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.provider-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.provider-actions .icon-button {
+  width: 32px;
+  height: 34px;
+}
+.provider-actions .modal-backdrop {
+  white-space: normal;
+}
+.provider-empty {
+  align-items: center;
+  text-align: center;
+  padding: 48px 20px;
+  border: 1px dashed var(--line-color);
+  color: var(--muted);
+  gap: 10px;
+}
+.provider-empty p {
+  margin: 0;
+}
+.provider-security-note {
+  margin-top: 22px;
+  font-size: 12px;
+}
+.provider-error {
+  margin-bottom: 18px;
+  grid-template-columns: auto 1fr;
+  font-size: 13px;
+}
+.provider-notice {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0 0 18px;
+}
+.provider-editor-backdrop {
+  z-index: 110;
+}
+.modal.provider-editor {
+  width: min(620px, 100%);
+  max-width: 620px;
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.provider-editor .modal-header {
+  flex-shrink: 0;
+  padding: 20px 24px 16px;
+  margin: 0;
+}
+.provider-editor .modal-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.provider-editor form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+}
+.provider-form-body {
+  overflow: auto;
+  padding: 0 24px 8px;
+}
+.provider-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.provider-editor label {
+  font-size: 13px;
+}
+.provider-editor .du-input {
+  min-height: 42px;
+}
+.provider-form-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  padding: 16px 24px;
+  border-top: 1px solid var(--line-color);
+  flex-shrink: 0;
+}
+.provider-form-footer > button:first-child {
+  margin-right: auto;
+}
+.models-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+.models-grid .model-entry {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line-color);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.model-card-heading {
+  padding: 18px 16px 12px;
+}
+.model-card-heading > label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+}
+.model-card-heading > label > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.models-grid .model-controls.du-collapse {
+  border: 0;
+  border-top: 1px solid var(--line-color);
+  border-radius: 0;
+  background: transparent;
+  margin: 0;
+}
+.models-grid .model-controls > .du-collapse-title {
+  padding: 12px 36px 12px 16px;
+}
+.models-grid .model-controls > .du-collapse-content {
+  padding-inline: 16px;
+}
+.model-budget {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  margin: 4px 0 20px;
+}
+.model-budget legend {
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.model-budget input {
+  width: 100%;
+}
+.model-budget small {
+  margin-top: 6px;
+}
+@media (max-width: 760px) {
+  .provider-item.du-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    padding: 16px;
+  }
+  .provider-actions {
+    justify-content: flex-end;
+    border-top: 1px solid var(--line-color);
+    padding-top: 10px;
+  }
+  .provider-form-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .provider-editor .modal-header {
+    padding: 18px 18px 14px;
+  }
+  .provider-form-body {
+    padding-inline: 18px;
+  }
+  .provider-form-footer {
+    padding: 14px 18px;
+  }
+  .models-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.name-dialog-backdrop {
+  background: #0006;
+  z-index: 115;
+  padding: 16px;
+}
+.name-dialog.du-modal-box {
+  width: min(440px, 100%);
+  background: var(--panel);
+  color: var(--text);
+  padding: 22px;
+  border: 1px solid var(--line-color);
+  border-radius: 18px;
+}
+.name-dialog .modal-header {
+  padding: 0;
+  margin-bottom: 20px;
+}
+.name-dialog .modal-header h2 {
+  font-size: 18px;
+  margin: 0;
+}
+.name-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+/* Compact parameters: labels, tracks, values and reset share a row. */
+.parameter {
+  display: grid;
+  grid-template-columns: 40px minmax(40px, 1fr) 72px 24px;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  margin-bottom: 10px;
+}
+.parameter-name {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.parameter input.du-input {
+  width: 72px;
+  height: 32px;
+  min-height: 32px;
+  font-size: 12px;
+  padding: 5px 7px;
+}
+.parameter .icon-button {
+  width: 24px;
+  height: 28px;
+  padding: 4px;
+}
+input.du-range {
+  height: 12px;
+  --du-range-thumb-size: 12px;
+  --du-range-p: 0px;
+}
+input.du-range::-webkit-slider-runnable-track {
+  height: 12px;
+}
+input.du-range::-moz-range-track {
+  height: 12px;
+}
+.group-menu > button {
+  justify-content: flex-start;
+  gap: 9px;
+}
+.group-menu > button svg {
+  flex-shrink: 0;
+}
+.settings-menu.du-menu > button {
+  gap: 10px;
+}
+.settings-menu.du-menu > button svg {
+  flex-shrink: 0;
+}
+.panel-tabs .du-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+main {
+  position: relative;
+}
+.conversation-timeline {
+  position: absolute;
+  z-index: 4;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  width: 28px;
+  height: min(48vh, var(--timeline-size));
+  gap: 0;
+}
+.timeline-tick {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 1;
+  min-height: 0;
+  max-height: 14px;
+  padding: 0 6px;
+  border-radius: 0;
+}
+.timeline-tick:hover {
+  background: transparent;
+}
+.timeline-tick > span {
+  display: block;
+  height: 2px;
+  width: 8px;
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+  transition:
+    width 0.15s,
+    background 0.15s;
+}
+.timeline-tick.current > span {
+  width: 22px;
+  background: var(--text);
+}
+.timeline-tick.previewed > span {
+  width: 18px;
+  background: var(--muted);
+}
+.timeline-tick:focus-visible {
+  outline-offset: 0;
+  border-radius: 3px;
+}
+.timeline-preview {
+  position: fixed;
+  z-index: 95;
+  background: var(--panel);
+  border: 1px solid var(--line-color);
+  border-radius: 14px;
+  box-shadow: 0 8px 24px #0002;
+  padding: 0;
+}
+.timeline-preview-jump {
+  display: block;
+  text-align: left;
+  width: 100%;
+  padding: 12px 30px 12px 14px;
+  border-radius: 14px;
+  position: relative;
+}
+.timeline-preview-jump strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.timeline-preview-jump p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.timeline-preview-jump > svg {
+  position: absolute;
+  right: 12px;
+  top: 38px;
+  color: var(--muted);
+}
+.timeline-preview-close {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  padding: 4px;
+  color: var(--muted);
+}
+@media (max-width: 760px) {
+  .conversation-timeline {
+    left: 0;
+    width: 18px;
+  }
+  .timeline-tick {
+    padding-left: 2px;
+  }
+  .timeline-tick.current > span {
+    width: 14px;
+  }
+}
+
+/* Shared scale follows the familiar ChatGPT web interface. */
+.app {
+  font-size: 14px;
+}
+.chat-row {
+  min-height: 36px;
+}
+.chat-open {
+  font-size: 14px;
+  padding: 8px 10px;
+}
+.new-chat {
+  min-height: 40px;
+  font-size: 14px;
+}
+.new-chat > svg:first-child {
+  width: 20px;
+  height: 20px;
+}
+.group-title {
+  font-size: 14px;
+}
+.section-label {
+  font-size: 12px;
+}
+.group-menu > button {
+  min-height: 38px;
+  font-size: 14px;
+}
+.account-name strong,
+.account-summary strong {
+  font-size: 14px;
+}
+.account-popover .du-menu li > button {
+  font-size: 14px;
+  min-height: 40px;
+}
+.settings-menu.du-menu > button {
+  min-height: 40px;
+  font-size: 14px;
+}
+.du-input,
+.du-select,
+.du-textarea {
+  font-size: 14px;
+}
+.provider-meta,
+.provider-card .muted {
+  font-size: 12px;
+}
+.model-card-heading > label {
+  font-size: 14px;
+}
+.composer {
+  padding: 12px 14px 8px;
+}
+.composer textarea {
+  font-size: 16px;
+  min-height: 56px;
+}
+.message {
+  line-height: var(--line-height, 1.6);
+}
+.message-meta {
+  font-size: 12px;
+}
+.message-actions .icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+.markdown p,
+.markdown li {
+  text-align: justify;
+  text-align-last: left;
+  text-justify: inter-ideograph;
+}
+.markdown pre,
+.markdown code,
+.markdown table {
+  text-align: left;
+  text-align-last: auto;
+}
+@media (min-width: 761px) {
+  main:has(.conversation-timeline) .messages {
+    padding-left: 40px;
+  }
+}
+
+.panel-tabs.du-tabs {
+  flex-wrap: nowrap;
+  flex-direction: row;
+}
+.panel-tabs .du-tab {
+  flex: 0 0 auto;
+}
+
+.markdown p {
+  margin-bottom: 12px;
+}
+.markdown ul,
+.markdown ol {
+  margin-top: 10px;
+  margin-bottom: 12px;
+}
+.markdown li > p {
+  margin-bottom: 8px;
+}
+.message {
+  margin-bottom: 24px;
+}
+.message.user {
+  margin-bottom: 28px;
 }

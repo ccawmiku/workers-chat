@@ -385,6 +385,22 @@ export function markdownExport(chat: Chat) {
   );
 }
 
+// Preserve explicit upstream percentages; never invent a rate from token counts.
+export function cacheHitRate(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const rate = value.trim();
+    if (/^\d+(?:\.\d+)?%$/.test(rate) && Number(rate.slice(0, -1)) <= 100)
+      return rate;
+  }
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= 1
+  )
+    return `${Number((value * 100).toFixed(2))}%`;
+  return undefined;
+}
 export function sanitizeUsage(
   value: unknown,
 ): Record<string, unknown> | undefined {
@@ -397,10 +413,13 @@ export function sanitizeUsage(
     "total_tokens",
     "input_tokens",
     "output_tokens",
+    "cached_tokens",
   ]) {
     const n = source[key];
     if (typeof n === "number" && Number.isFinite(n) && n >= 0) out[key] = n;
   }
+  const rate = cacheHitRate(source.cache_hit_rate);
+  if (rate !== undefined) out.cache_hit_rate = rate;
   for (const key of [
     "prompt_tokens_details",
     "completion_tokens_details",

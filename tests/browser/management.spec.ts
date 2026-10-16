@@ -106,7 +106,7 @@ test("settings restore, model identity, template copies, groups and mobile long 
   await page.getByRole("button", { name: "模型", exact: true }).click();
   await page.getByLabel("筛选设置模型", { exact: true }).fill("Two/");
   await expect(page.locator(".model-entry")).toHaveCount(1);
-  await page.getByText("模型生成默认值与连通性", { exact: true }).click();
+  await page.getByText("模型设置", { exact: true }).click();
   await page.getByLabel("Top K", { exact: true }).fill("12");
   await page.getByLabel("Top K", { exact: true }).blur();
   await expect
@@ -213,13 +213,39 @@ test("settings restore, model identity, template copies, groups and mobile long 
   const width = await separator.getAttribute("aria-valuenow");
   await page.reload();
   await expect(separator).toHaveAttribute("aria-valuenow", width!);
-  page.once("dialog", (dialog) => void dialog.accept("测试分组"));
   await page.getByRole("button", { name: "新建分组", exact: true }).click();
+  await expect(
+    page.getByRole("dialog", { name: "新建分组", exact: true }),
+  ).toHaveClass(/du-modal-box/);
+  await page.screenshot({ path: "docs/screenshots/new-group-dialog.png" });
+  await page
+    .getByRole("dialog", { name: "新建分组", exact: true })
+    .getByLabel("分组名称", { exact: true })
+    .fill("测试分组");
+  await page
+    .getByRole("dialog", { name: "新建分组", exact: true })
+    .getByRole("button", { name: "确认", exact: true })
+    .click();
+  await expect(
+    page.getByRole("dialog", { name: "新建分组", exact: true }),
+  ).toHaveCount(0);
   await page
     .getByRole("button", { name: "管理分组 测试分组", exact: true })
     .click();
-  page.once("dialog", (dialog) => void dialog.accept("计划"));
-  await page.getByRole("button", { name: "重命名分组", exact: true }).click();
+  for (const button of await page.locator(".group-menu button").all())
+    await expect(button.locator("svg.lucide")).toHaveCount(1);
+  await page.getByRole("button", { name: "重命名", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "重命名分组", exact: true })
+    .getByLabel("分组名称", { exact: true })
+    .fill("计划");
+  await page
+    .getByRole("dialog", { name: "重命名分组", exact: true })
+    .getByLabel("分组名称", { exact: true })
+    .press("Enter");
+  await expect(
+    page.getByRole("dialog", { name: "重命名分组", exact: true }),
+  ).toHaveCount(0);
   await page
     .getByRole("button", { name: "在 计划 新建聊天", exact: true })
     .click();
@@ -230,9 +256,7 @@ test("settings restore, model identity, template copies, groups and mobile long 
   await page
     .getByRole("button", { name: "管理分组 计划", exact: true })
     .click();
-  await page
-    .getByRole("button", { name: "移除分组，聊天回主列表", exact: true })
-    .click();
+  await page.getByRole("button", { name: "解散分组", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "管理分组 计划", exact: true }),
   ).toHaveCount(0);

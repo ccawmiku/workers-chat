@@ -20,7 +20,11 @@ export default defineConfig({
     },
     {
       name: "webkit-mobile",
-      testMatch: ["mobile.spec.ts", "navigation.spec.ts"],
+      testMatch: [
+        "mobile.spec.ts",
+        "navigation.spec.ts",
+        "provider-settings.spec.ts",
+      ],
       use: { browserName: "webkit" },
     },
   ],

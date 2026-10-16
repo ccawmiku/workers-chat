@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   newChat,
+  sanitizeUsage,
   addMessage,
   editMessage,
   route,
@@ -309,5 +310,32 @@ describe("OpenWebUI v0.12.2 exchange", () => {
       "9998",
     );
     expect(deleteSubtree(chat, "1")).toBe(9999);
+  });
+});
+
+it("keeps explicit cache hit rates and top-level cache counts without inventing rates", () => {
+  expect(
+    sanitizeUsage({
+      input_tokens: 5982,
+      cached_tokens: 4908,
+      cache_hit_rate: "82.0%",
+      _session_thinking_id: "private",
+    }),
+  ).toEqual({
+    input_tokens: 5982,
+    cached_tokens: 4908,
+    cache_hit_rate: "82.0%",
+  });
+  expect(sanitizeUsage({ cache_hit_rate: "0%" })).toEqual({
+    cache_hit_rate: "0%",
+  });
+  expect(sanitizeUsage({ cache_hit_rate: 0.82 })).toEqual({
+    cache_hit_rate: "82%",
+  });
+  for (const rate of [null, "", "unknown", "101%", "-1%", {}, Infinity])
+    expect(sanitizeUsage({ cache_hit_rate: rate })).toBeUndefined();
+  expect(sanitizeUsage({ input_tokens: 10, cached_tokens: 8 })).toEqual({
+    input_tokens: 10,
+    cached_tokens: 8,
   });
 });

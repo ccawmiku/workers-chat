@@ -1,5 +1,10 @@
 import React, { useState, useRef } from "react";
-import type { Chat, Message, Provider } from "../shared/chat";
+import {
+  type Chat,
+  type Message,
+  type Provider,
+  cacheHitRate,
+} from "../shared/chat";
 import { api } from "./api";
 import { IconButton, ParameterControl } from "./controls";
 import {
@@ -10,6 +15,7 @@ import {
   X,
   ChevronDown,
   Check,
+  PlugZap,
 } from "lucide-react";
 import { directFetch, useDeviceConnection } from "./device-connection";
 import { readCompletion, redactUpstreamError } from "../shared/completion";
@@ -32,8 +38,29 @@ export function ModelControls({
     [result, setResult] = useState("");
   return (
     <details className="model-controls du-collapse du-collapse-arrow">
-      <summary className="du-collapse-title">模型生成默认值与连通性</summary>
+      <summary className="du-collapse-title">模型设置</summary>
       <div className="du-collapse-content">
+        <fieldset className="du-fieldset model-budget">
+          <legend className="du-fieldset-legend">上下文预算</legend>
+          <input
+            className="du-input du-input-sm"
+            aria-label={model.id + "上下文预算"}
+            type="number"
+            min="1"
+            defaultValue={model.capacity}
+            onBlur={(e) => {
+              const capacity = Number(e.target.value);
+              if (capacity === model.capacity) return;
+              void run(async () => {
+                await api("/providers/" + provider.id + "/models", "PUT", {
+                  models: [{ id: model.id, capacity }],
+                });
+                await refresh();
+              });
+            }}
+          />
+          <small>用于上下文用量提示，不代表服务商实际支持的长度。</small>
+        </fieldset>
         {(["temperature", "top_p", "top_k"] as const).map((key) => (
           <ParameterControl
             key={key}
@@ -61,7 +88,7 @@ export function ModelControls({
           />
         ))}
         <label>
-          测试思考强度
+          测试强度
           <select
             className="du-select du-select-sm"
             aria-label={model.id + "测试思考强度"}
@@ -77,6 +104,7 @@ export function ModelControls({
           </select>
         </label>
         <button
+          className="du-btn du-btn-sm du-btn-ghost"
           disabled={busy}
           onClick={() => {
             setBusy(true);
@@ -142,7 +170,8 @@ export function ModelControls({
             });
           }}
         >
-          {busy ? "正在测试…" : "测试此模型连接"}
+          <PlugZap size={15} />
+          {busy ? "正在测试…" : "测试连接"}
         </button>
         {result && <p role="status">{result}</p>}
       </div>
@@ -348,7 +377,7 @@ export function MessageUsage({
   const rows: [string, number | undefined][] = [
     ["输入", count(usage.prompt_tokens ?? usage.input_tokens)],
     ["输出", count(usage.completion_tokens ?? usage.output_tokens)],
-    ["缓存", count(inputDetails.cached_tokens)],
+    ["缓存", count(inputDetails.cached_tokens ?? usage.cached_tokens)],
     ["思考", count(outputDetails.reasoning_tokens)],
     ["总计", count(usage.total_tokens)],
   ];
@@ -366,7 +395,10 @@ export function MessageUsage({
             · {label} {value.toLocaleString()}
           </span>
         ))}
-      {rows.some((r) => r[1] !== undefined) && <span> Token（实际）</span>}
+      {rows.some((r) => r[1] !== undefined) && <span> Token</span>}
+      {cacheHitRate(usage.cache_hit_rate) !== undefined && (
+        <span> · 缓存率 {cacheHitRate(usage.cache_hit_rate)}</span>
+      )}
     </div>
   );
 }

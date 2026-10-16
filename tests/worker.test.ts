@@ -338,6 +338,52 @@ describe("workerd HTTP + D1 + Workflows", () => {
     const sessions = await value<{ id: string }[]>("/auth/sessions");
     expect(sessions[0]!.id).not.toBe(cookie.replace("session=", ""));
   });
+  it("saves provider metadata offline, preserves models and keys, and keeps device save separate from fetching", async () => {
+    const models = provider.models;
+    const saved = await value<Provider>("/providers", "POST", {
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      prefix: provider.prefix,
+      refreshModels: false,
+    });
+    expect(saved.models).toEqual(models);
+    expect(
+      await value("/providers/" + provider.id + "/key", "POST", {
+        password: fixturePassword,
+      }),
+    ).toEqual({ apiKey: "synthetic-fixture-key" });
+    const changed = await request("/providers", "POST", {
+      id: provider.id,
+      name: provider.name,
+      baseUrl: "https://different.test/v1",
+      refreshModels: false,
+    });
+    expect(changed.status).toBe(400);
+    const offline = await request(
+      "/providers",
+      "POST",
+      {
+        name: "Offline",
+        baseUrl: "https://never-contact.invalid/v1",
+        refreshModels: false,
+      },
+      true,
+      "https://chat.test",
+      true,
+    );
+    expect(offline.status).toBe(200);
+    const p = (await offline.json()) as Provider;
+    expect(p.models).toEqual([]);
+    const moved = await value<Provider>("/providers", "POST", {
+      id: p.id,
+      name: "Offline",
+      baseUrl: "https://another-offline.invalid/v1",
+      refreshModels: false,
+    });
+    expect(moved.baseUrl).toBe("https://another-offline.invalid/v1");
+    await value("/providers/" + p.id, "DELETE", {});
+  });
   it("removes context-exclusion and subtree-delete endpoints without losing history", async () => {
     const imported = await value<{ ids: string[] }>("/import", "POST", {
       data: [

@@ -62,7 +62,7 @@ describe("direct transport and templates", () => {
   });
   it("parses fragmented UTF-8 and CRLF SSE with reasoning and trailing usage", async () => {
     const bytes = new TextEncoder().encode(
-      'data: {"choices":[{"delta":{"reasoning_content":"想"}}]}\r\n\r\ndata: {"choices":[{"delta":{"content":"你好"},"finish_reason":"stop"}]}\r\n\r\ndata: {"choices":[],"usage":{"total_tokens":12}}\r\n\r\ndata: [DONE]\r\n\r\n',
+      'data: {"choices":[{"delta":{"reasoning_content":"想"}}]}\r\n\r\ndata: {"choices":[{"delta":{"content":"你好"},"finish_reason":"stop"}]}\r\n\r\ndata: {"choices":[],"usage":{"total_tokens":12,"cached_tokens":8,"cache_hit_rate":"66.7%"}}\r\n\r\ndata: [DONE]\r\n\r\n',
     );
     const output: CompletionOutput = { content: "", reasoning: "" };
     const stream = new ReadableStream({
@@ -81,7 +81,7 @@ describe("direct transport and templates", () => {
     expect(output).toEqual({
       content: "你好",
       reasoning: "想",
-      usage: { total_tokens: 12 },
+      usage: { total_tokens: 12, cached_tokens: 8, cache_hit_rate: "66.7%" },
     });
   });
   it("preserves partial output but reports a missing stream terminator", async () => {
@@ -96,5 +96,30 @@ describe("direct transport and templates", () => {
       ),
     ).rejects.toThrow("提前结束");
     expect(output.content).toBe("partial");
+  });
+});
+
+it("retains non-streaming cache hit rates", async () => {
+  const output: CompletionOutput = { content: "", reasoning: "" };
+  await readCompletion(
+    new Response(
+      JSON.stringify({
+        choices: [{ message: { content: "OK" } }],
+        usage: {
+          input_tokens: 5982,
+          cached_tokens: 4908,
+          cache_hit_rate: "82.0%",
+        },
+      }),
+    ),
+    false,
+    new AbortController().signal,
+    output,
+    () => {},
+  );
+  expect(output.usage).toEqual({
+    input_tokens: 5982,
+    cached_tokens: 4908,
+    cache_hit_rate: "82.0%",
   });
 });

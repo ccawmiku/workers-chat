@@ -101,6 +101,13 @@ for (const mobile of [false, true]) {
                     parentId: "u2",
                     role: "assistant",
                     content: "第二轮回答",
+                    usage: {
+                      input_tokens: 5982,
+                      output_tokens: 245,
+                      total_tokens: 6227,
+                      cached_tokens: 4908,
+                      cache_hit_rate: "82.0%",
+                    },
                   },
                 },
               },
@@ -111,8 +118,68 @@ for (const mobile of [false, true]) {
       localStorage.setItem("lastChat", result.ids[0]);
       return result.ids[0] as string;
     });
+    await page.evaluate(
+      (line) =>
+        localStorage.setItem(
+          "appearance",
+          JSON.stringify({
+            theme: "system",
+            font: 16,
+            width: 800,
+            line,
+            collapse: true,
+            enter: true,
+          }),
+        ),
+      mobile ? 1.7 : 1.8,
+    );
     await page.reload();
     await expect(page.locator(".header-title")).toHaveText("界面组件验证");
+    expect(
+      await page
+        .locator("article.assistant .markdown p")
+        .first()
+        .evaluate(
+          (el) =>
+            parseFloat(getComputedStyle(el).lineHeight) /
+            parseFloat(getComputedStyle(el).fontSize),
+        ),
+    ).toBeCloseTo(mobile ? 1.7 : 1.6, 1);
+    expect(
+      await page.evaluate(
+        () => JSON.parse(localStorage.getItem("appearance")!).densityVersion,
+      ),
+    ).toBe(2);
+
+    await expect(
+      page
+        .locator("article.assistant")
+        .last()
+        .getByRole("button", { name: "继续回答", exact: true })
+        .locator("svg.lucide-circle-play"),
+    ).toHaveCount(1);
+    await expect(page.locator(".message-meta").last()).not.toContainText(
+      "（实际）",
+    );
+    expect(
+      await page
+        .locator("article.assistant .markdown p")
+        .first()
+        .evaluate((el) => getComputedStyle(el).textAlign),
+    ).toBe("justify");
+    await expect(page.locator('link[rel="icon"]')).toHaveAttribute(
+      "href",
+      "/favicon.svg",
+    );
+    await expect(
+      page.locator("article.assistant").last().locator(".message-meta"),
+    ).toContainText("缓存率 82.0%");
+    await expect(
+      page.locator("article.assistant").last().locator(".message-meta"),
+    ).toContainText("缓存 4,908");
+    await expect(
+      page.locator("article.assistant").first().locator(".message-meta"),
+    ).not.toContainText("缓存率");
     if (mobile)
       await page.getByRole("button", { name: "打开导航", exact: true }).click();
     await page.getByRole("button", { name: "账户菜单", exact: true }).click();
@@ -178,6 +245,7 @@ for (const mobile of [false, true]) {
       exact: true,
     });
     await expect(context).toContainText("背景信息窗口：");
+    await expect(context).not.toContainText("本地估算");
     await expect(context).toContainText("已用（剩余");
     await page.screenshot({
       path: `docs/screenshots/context-${mobile ? "mobile" : "desktop"}.png`,
@@ -283,6 +351,34 @@ for (const mobile of [false, true]) {
       .click();
     const panel = page.locator(".parameters");
     await expect(panel.locator("h3").first()).toHaveText("系统提示词");
+    const parameter = panel.locator(".parameter").first();
+    const nameBox = (await parameter.locator(".parameter-name").boundingBox())!,
+      rangeBox = (await parameter.getByRole("slider").boundingBox())!,
+      numberBox = (await parameter
+        .locator("input[type=number]")
+        .boundingBox())!;
+    expect(
+      Math.abs(
+        nameBox.y + nameBox.height / 2 - rangeBox.y - rangeBox.height / 2,
+      ),
+    ).toBeLessThan(2);
+    expect(
+      Math.abs(
+        numberBox.y + numberBox.height / 2 - rangeBox.y - rangeBox.height / 2,
+      ),
+    ).toBeLessThan(2);
+    expect(rangeBox.height).toBe(12);
+    expect(
+      await parameter
+        .getByRole("slider")
+        .evaluate((el) =>
+          getComputedStyle(el).getPropertyValue("--du-range-thumb-size").trim(),
+        ),
+    ).toBe("12px");
+    await page.screenshot({
+      path: `docs/screenshots/compact-parameters-${mobile ? "mobile" : "desktop"}.png`,
+    });
+
     for (const name of [
       "重命名聊天",
       "重新生成标题",

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { RotateCcw } from "lucide-react";
 export function IconButton({
   label,
   children,
@@ -40,60 +41,61 @@ export function ParameterControl({
   const [current, setCurrent] = useState(value);
   useEffect(() => setCurrent(value), [value]);
   return (
-    <div className="parameter">
-      <div>
-        <span>{name}</span>
-        <button className="text-button" onClick={() => onChange(undefined)}>
-          {value === undefined ? "默认" : "恢复默认"}
-        </button>
-      </div>
-      <div>
-        <input
-          className={
-            "du-range du-range-primary du-range-sm " +
-            (current === undefined ? "is-default" : "")
-          }
-          aria-label={name + "滑块"}
-          type="range"
-          min={0}
-          max={max}
-          step={step}
-          value={current ?? max / 2}
-          onChange={(e) => setCurrent(Number(e.target.value))}
-          onPointerUp={(e) => onChange(Number(e.currentTarget.value))}
-          onKeyUp={(e) => {
-            if (
-              [
-                "ArrowLeft",
-                "ArrowRight",
-                "ArrowUp",
-                "ArrowDown",
-                "Home",
-                "End",
-                "PageUp",
-                "PageDown",
-              ].includes(e.key)
-            )
-              onChange(Number(e.currentTarget.value));
-          }}
-        />
-        <input
-          className="du-input du-input-sm"
-          aria-label={name}
-          type="number"
-          min={0}
-          max={max}
-          step={step}
-          placeholder="默认"
-          value={current ?? ""}
-          onChange={(e) =>
-            setCurrent(
-              e.target.value === "" ? undefined : Number(e.target.value),
-            )
-          }
-          onBlur={() => onChange(current)}
-        />
-      </div>
+    <div className="parameter" role="group" aria-label={name + "参数"}>
+      <span className="parameter-name">{name}</span>
+      <input
+        className={
+          "du-range du-range-primary du-range-sm " +
+          (current === undefined ? "is-default" : "")
+        }
+        aria-label={name + "滑块"}
+        type="range"
+        min={0}
+        max={max}
+        step={step}
+        value={current ?? max / 2}
+        onChange={(e) => setCurrent(Number(e.target.value))}
+        onPointerUp={(e) => onChange(Number(e.currentTarget.value))}
+        onKeyUp={(e) => {
+          if (
+            [
+              "ArrowLeft",
+              "ArrowRight",
+              "ArrowUp",
+              "ArrowDown",
+              "Home",
+              "End",
+              "PageUp",
+              "PageDown",
+            ].includes(e.key)
+          )
+            onChange(Number(e.currentTarget.value));
+        }}
+      />
+      <input
+        className="du-input du-input-sm"
+        aria-label={name}
+        type="number"
+        min={0}
+        max={max}
+        step={step}
+        placeholder="默认"
+        value={current ?? ""}
+        onChange={(e) =>
+          setCurrent(e.target.value === "" ? undefined : Number(e.target.value))
+        }
+        onBlur={() => onChange(current)}
+      />
+      <IconButton
+        label={name + "恢复默认"}
+        disabled={value === undefined}
+        onClick={() => {
+          setCurrent(undefined);
+          onChange(undefined);
+        }}
+      >
+        <RotateCcw size={13} />
+      </IconButton>
     </div>
   );
 }

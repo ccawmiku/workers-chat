@@ -11,6 +11,16 @@ import React, {
 import { createRoot } from "react-dom/client";
 import {
   Plus,
+  Cable,
+  Server,
+  Boxes,
+  Database,
+  FolderMinus,
+  Shield,
+  HardDriveDownload,
+  ToggleLeft,
+  ToggleRight,
+  ListChecks,
   Sparkles,
   Pin,
   Settings2,
@@ -40,7 +50,7 @@ import {
   CircleAlert,
   FileText,
   Info,
-  ArrowRight,
+  CirclePlay,
   Palette,
   UserRound,
 } from "lucide-react";
@@ -68,13 +78,15 @@ import {
   Loading,
 } from "./controls";
 import { ModelControls, SystemPrompts, MessageUsage } from "./chat-controls";
-import { SettingsTools, KeyReveal } from "./settings-tools";
+import { SettingsTools } from "./settings-tools";
+import { ProvidersPanel } from "./providers-panel";
+import { NameDialog } from "./name-dialog";
+import { ConversationTimeline } from "./conversation-timeline";
 import { MessageEditor } from "./message-editor";
 import { ImportDialog } from "./import-dialog";
 import {
   DeviceConnectionProvider,
   useDeviceConnection,
-  directModels,
 } from "./device-connection";
 import type { GenerationStart } from "../shared/direct";
 import type { CompletionOutput } from "../shared/completion";
@@ -133,6 +145,10 @@ function App() {
     [search, setSearch] = useState(""),
     [view, setView] = useState("active");
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [groupNameDialog, setGroupNameDialog] = useState<{
+    id?: string;
+    initial: string;
+  } | null>(null);
   const [menu, setMenu] = useState<string | null>(null),
     [expanded, setExpanded] = useState(false),
     [editSaving, setEditSaving] = useState(false),
@@ -880,14 +896,7 @@ function App() {
             分组
             <IconButton
               label="新建分组"
-              onClick={() => {
-                const name = prompt("分组名称");
-                if (name)
-                  void run(async () => {
-                    await api("/groups", "POST", { name });
-                    await loadNavigation();
-                  });
-              }}
+              onClick={() => setGroupNameDialog({ initial: "" })}
             >
               <Plus size={15} />
             </IconButton>
@@ -938,20 +947,18 @@ function App() {
                   {groupMenu === g.id && (
                     <div className="group-menu">
                       <button
+                        title="重命名分组"
                         onClick={() => {
-                          const name = prompt("重命名分组", g.name);
-                          if (name)
-                            void run(async () => {
-                              await api("/groups/" + g.id, "PATCH", { name });
-                              setGroupMenu(null);
-                              await loadNavigation();
-                            });
+                          setGroupMenu(null);
+                          setGroupNameDialog({ id: g.id, initial: g.name });
                         }}
                       >
-                        重命名分组
+                        <Pencil size={16} />
+                        重命名
                       </button>
                       <button
                         className="danger-text"
+                        title="移除分组，聊天回到主列表"
                         onClick={() =>
                           void run(async () => {
                             await api("/groups/" + g.id, "DELETE", {});
@@ -961,7 +968,8 @@ function App() {
                           })
                         }
                       >
-                        移除分组，聊天回主列表
+                        <FolderMinus size={16} />
+                        解散分组
                       </button>
                     </div>
                   )}
@@ -1329,7 +1337,7 @@ function App() {
                                 )
                               }
                             >
-                              <ArrowRight size={15} />
+                              <CirclePlay size={15} />
                             </IconButton>
                           )}
                           {m.role === "assistant" && m.status === "error" && (
@@ -1468,14 +1476,6 @@ function App() {
               </IconButton>
             </div>
             <div className="composer-controls">
-              <button
-                className="icon-button composer-plus"
-                aria-label="更多功能（预留）"
-                title="预留入口"
-                disabled
-              >
-                <Plus size={24} strokeWidth={1.7} />
-              </button>
               <div className="composer-spacer" />
               <div className="composer-model-settings">
                 <ContextUsage used={estimate} capacity={capacity} />
@@ -1600,6 +1600,25 @@ function App() {
             <p className="context-warning">超出所设上下文预算，仍可发送。</p>
           )}
         </div>
+        {chat && (
+          <ConversationTimeline
+            key={chat.id}
+            messages={path}
+            scrollRef={scrollRef}
+            onJump={(id) => {
+              const container = scrollRef.current,
+                element = messageElement(id);
+              if (container && element) {
+                stick.current = false;
+                scrollIntent.current = null;
+                container.scrollTop +=
+                  element.getBoundingClientRect().top -
+                  container.getBoundingClientRect().top -
+                  20;
+              }
+            }}
+          />
+        )}
       </main>
       {panel && chat && (
         <aside className="parameters">
@@ -1618,6 +1637,7 @@ function App() {
                 }
                 onClick={() => setPanelTab("settings")}
               >
+                <SlidersHorizontal size={14} aria-hidden="true" />
                 当前聊天设置
               </button>
               <button
@@ -1630,6 +1650,7 @@ function App() {
                 }
                 onClick={() => setPanelTab("overview")}
               >
+                <GitBranch size={14} aria-hidden="true" />
                 概述
               </button>
             </div>
@@ -1877,6 +1898,19 @@ function App() {
           e.target.value = "";
         }}
       />
+      {groupNameDialog && (
+        <NameDialog
+          title={groupNameDialog.id ? "重命名分组" : "新建分组"}
+          initial={groupNameDialog.initial}
+          onClose={() => setGroupNameDialog(null)}
+          onSave={async (name) => {
+            if (groupNameDialog.id)
+              await api("/groups/" + groupNameDialog.id, "PATCH", { name });
+            else await api("/groups", "POST", { name });
+            await loadNavigation();
+          }}
+        />
+      )}
       {pendingImport && (
         <ImportDialog
           {...pendingImport}
@@ -2072,6 +2106,7 @@ function Login({
   );
 }
 type Appearance = {
+  densityVersion: number;
   theme: string;
   font: number;
   width: number;
@@ -2081,10 +2116,11 @@ type Appearance = {
 };
 function readAppearance(): Appearance {
   const defaults: Appearance = {
+    densityVersion: 2,
     theme: "system",
     font: 16,
     width: 800,
-    line: 1.8,
+    line: 1.6,
     collapse: true,
     enter: true,
   };
@@ -2094,7 +2130,10 @@ function readAppearance(): Appearance {
     );
     if (!raw || typeof raw !== "object") return defaults;
     const value = raw as Record<string, unknown>;
+    const legacyDefaultLine =
+      value.densityVersion !== 2 && (value.line === 1.8 || value.line === 1.75);
     return {
+      densityVersion: 2,
       theme:
         typeof value.theme === "string" &&
         ["system", "dark", "light"].includes(value.theme)
@@ -2110,8 +2149,11 @@ function readAppearance(): Appearance {
         value.width <= 1200
           ? value.width
           : defaults.width,
-      line:
-        typeof value.line === "number" && value.line >= 1.3 && value.line <= 2.4
+      line: legacyDefaultLine
+        ? defaults.line
+        : typeof value.line === "number" &&
+            value.line >= 1.3 &&
+            value.line <= 2.4
           ? value.line
           : defaults.line,
       collapse:
@@ -2151,15 +2193,7 @@ function SettingsPanel({
 }) {
   const connection = useDeviceConnection();
   const [tab, setTab] = useState(initialTab),
-    [form, setForm] = useState({
-      name: "",
-      baseUrl: "https://",
-      prefix: "",
-      apiKey: "",
-      id: "",
-    }),
     [filter, setFilter] = useState(""),
-    [saving, setSaving] = useState(false),
     [sessions, setSessions] = useState<
       { id: string; device: string; createdAt: number; current: boolean }[]
     >([]),
@@ -2171,39 +2205,6 @@ function SettingsPanel({
   async function saveSettings(next: Settings) {
     await api("/settings", "PUT", next);
     await refresh();
-  }
-  async function saveProvider(value: {
-    id?: string;
-    name: string;
-    baseUrl: string;
-    prefix: string;
-    apiKey?: string;
-  }) {
-    let models: { id: string }[] | undefined;
-    let key = value.apiKey;
-    if (connection.enabled) {
-      const existing = providers.find((p) => p.id === value.id);
-      if (
-        existing &&
-        existing.baseUrl !== value.baseUrl.replace(/\/$/, "") &&
-        !key
-      )
-        throw Error("修改地址时请重新输入密钥");
-      key ??= existing
-        ? await connection.key({
-            providerId: existing.id,
-            baseUrl: existing.baseUrl,
-            hasKey: existing.hasKey,
-          })
-        : "";
-      models = await directModels(value.baseUrl, key);
-    }
-    const saved = await api<ProviderView>("/providers", "POST", {
-      ...value,
-      models,
-    });
-    if (key !== undefined) connection.remember(saved.id, saved.baseUrl, key);
-    return saved;
   }
   useEffect(() => {
     if (tab === "security")
@@ -2219,18 +2220,32 @@ function SettingsPanel({
   return (
     <div className="settings-body">
       <nav className="du-menu settings-menu">
-        {[
-          ["connection", "连接"],
-          ["providers", "服务商"],
-          ["models", "模型"],
-          ["templates", "提示词模板"],
-          ["generation", "生成默认"],
-          ["data", "聊天数据"],
-          ["backup", "设置备份"],
-          ["appearance", "外观"],
-          ["security", "账号与设备"],
-          ["about", "关于"],
-        ].map(([key, title]) => (
+        {(
+          [
+            ["connection", "连接", <Cable size={17} aria-hidden="true" />],
+            ["providers", "服务商", <Server size={17} aria-hidden="true" />],
+            ["models", "模型", <Boxes size={17} aria-hidden="true" />],
+            [
+              "templates",
+              "提示词模板",
+              <FileText size={17} aria-hidden="true" />,
+            ],
+            [
+              "generation",
+              "生成默认",
+              <SlidersHorizontal size={17} aria-hidden="true" />,
+            ],
+            ["data", "聊天数据", <Database size={17} aria-hidden="true" />],
+            [
+              "backup",
+              "设置备份",
+              <HardDriveDownload size={17} aria-hidden="true" />,
+            ],
+            ["appearance", "外观", <Palette size={17} aria-hidden="true" />],
+            ["security", "账号与设备", <Shield size={17} aria-hidden="true" />],
+            ["about", "关于", <Info size={17} aria-hidden="true" />],
+          ] as const
+        ).map(([key, title, icon]) => (
           <button
             className={
               "du-btn du-btn-ghost du-btn-sm " + (tab === key ? "selected" : "")
@@ -2238,6 +2253,7 @@ function SettingsPanel({
             key={key}
             onClick={() => setTab(key!)}
           >
+            {icon}
             {title}
           </button>
         ))}
@@ -2263,7 +2279,10 @@ function SettingsPanel({
               请求服务商，流式内容即时显示。上游必须允许 CORS
               跨域；密钥经访问密码验证后只保留在页面内存。关闭页面会中断直连生成，后台持续生成请使用服务端模式。开关只在此设备保存。
             </p>
-            <button onClick={connection.lock}>清除临时密钥</button>
+            <button onClick={connection.lock}>
+              <LogOut size={16} />
+              清除临时密钥
+            </button>
           </>
         )}
         {tab === "about" && (
@@ -2329,143 +2348,15 @@ function SettingsPanel({
           refresh={refresh}
         />
         {tab === "providers" && (
-          <>
-            <h3>服务商</h3>
-            <p className="muted">
-              连接你自己的 OpenAI
-              兼容接口。密钥加密保存在服务端，设备直连时经验证临时解锁。
-            </p>
-            {providers.map((p) => (
-              <div className="provider-card du-card" key={p.id}>
-                <div>
-                  <strong>{p.name}</strong>
-                  <small>{p.baseUrl}</small>
-                  <span className="muted">
-                    {p.models.length} 个模型 ·{" "}
-                    {p.hasKey ? "已保存密钥" : "无密钥"}
-                  </span>
-                </div>
-                <KeyReveal provider={p} run={run} />
-                <IconButton
-                  label={"编辑 " + p.name}
-                  onClick={() =>
-                    setForm({
-                      id: p.id,
-                      name: p.name,
-                      baseUrl: p.baseUrl,
-                      prefix: p.prefix,
-                      apiKey: "",
-                    })
-                  }
-                >
-                  <Pencil size={15} />
-                </IconButton>
-                <IconButton
-                  label={"刷新 " + p.name + " 模型"}
-                  onClick={() =>
-                    void run(async () => {
-                      await saveProvider({
-                        id: p.id,
-                        name: p.name,
-                        baseUrl: p.baseUrl,
-                        prefix: p.prefix,
-                      });
-                      await refresh();
-                    })
-                  }
-                >
-                  <RotateCcw size={15} />
-                </IconButton>
-                <IconButton
-                  label={"删除 " + p.name}
-                  onClick={() => {
-                    if (confirm("删除此服务商？历史消息会保留。"))
-                      void run(async () => {
-                        await api("/providers/" + p.id, "DELETE", {});
-                        await refresh();
-                      });
-                  }}
-                >
-                  <Trash2 size={15} />
-                </IconButton>
-              </div>
-            ))}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                setSaving(true);
-                void run(async () => {
-                  try {
-                    await saveProvider({
-                      ...form,
-                      id: form.id || undefined,
-                      apiKey: form.apiKey || undefined,
-                    });
-                    setForm({
-                      name: "",
-                      baseUrl: "https://",
-                      prefix: "",
-                      apiKey: "",
-                      id: "",
-                    });
-                    await refresh();
-                    setTab("models");
-                  } finally {
-                    setSaving(false);
-                  }
-                });
-              }}
-            >
-              <h3>{form.id ? "编辑服务商" : "添加服务商"}</h3>
-              <label>
-                名称
-                <input
-                  className="du-input du-input-sm"
-                  required
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                />
-              </label>
-              <label>
-                Base URL
-                <input
-                  className="du-input du-input-sm"
-                  required
-                  type="url"
-                  placeholder="https://example.com/v1"
-                  value={form.baseUrl}
-                  onChange={(e) =>
-                    setForm({ ...form, baseUrl: e.target.value })
-                  }
-                />
-              </label>
-              <label>
-                API Key
-                <input
-                  className="du-input du-input-sm"
-                  type="password"
-                  autoComplete="new-password"
-                  placeholder={
-                    form.id ? "留空保留已有密钥" : "输入专用 API Key"
-                  }
-                  value={form.apiKey}
-                  onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
-                />
-              </label>
-              <label>
-                显示前缀（可选）
-                <input
-                  className="du-input du-input-sm"
-                  placeholder="OR/"
-                  value={form.prefix}
-                  onChange={(e) => setForm({ ...form, prefix: e.target.value })}
-                />
-              </label>
-              <button className="primary" disabled={saving}>
-                {saving ? "正在连接…" : "保存并获取模型"}
-              </button>
-            </form>
-          </>
+          <ProvidersPanel
+            providers={providers}
+            refresh={refresh}
+            run={run}
+            onModels={(name) => {
+              setFilter(name);
+              setTab("models");
+            }}
+          />
         )}
         {tab === "models" && (
           <>
@@ -2484,7 +2375,7 @@ function SettingsPanel({
               {[
                 ["全部开启", true, false],
                 ["全部关闭", false, false],
-                ["开启搜索结果", true, true],
+                ["开启筛选", true, true],
               ].map(([label, enabled, onlyResults]) => (
                 <button
                   key={String(label)}
@@ -2504,6 +2395,13 @@ function SettingsPanel({
                     })
                   }
                 >
+                  {onlyResults ? (
+                    <ListChecks size={15} />
+                  ) : enabled ? (
+                    <ToggleRight size={15} />
+                  ) : (
+                    <ToggleLeft size={15} />
+                  )}
                   {label}
                 </button>
               ))}
@@ -2544,59 +2442,49 @@ function SettingsPanel({
                 )}
               </select>
             </label>
-            {modelRows.map((m) => (
-              <div className="model-entry" key={m.p.id + "/" + m.id}>
-                <div className="model-row">
-                  <label>
-                    <input
-                      className="du-toggle du-toggle-primary du-toggle-sm"
-                      type="checkbox"
-                      checked={m.enabled}
-                      onChange={(e) =>
-                        void run(async () => {
-                          await api("/providers/" + m.p.id + "/models", "PUT", {
-                            models: [{ id: m.id, enabled: e.target.checked }],
-                          });
-                          await refresh();
-                        })
-                      }
-                    />
-                    <span>
-                      {m.p.prefix + m.id}
-                      <small>{m.p.name}</small>
-                    </span>
-                  </label>
-                  <label>
-                    上下文预算
-                    <input
-                      className="du-input du-input-sm"
-                      aria-label={m.id + "上下文预算"}
-                      type="number"
-                      min="1"
-                      defaultValue={m.capacity}
-                      onBlur={(e) =>
-                        void run(async () => {
-                          await api("/providers/" + m.p.id + "/models", "PUT", {
-                            models: [
-                              { id: m.id, capacity: Number(e.target.value) },
-                            ],
-                          });
-                          await refresh();
-                        })
-                      }
-                    />
-                  </label>
+            <div className="models-grid">
+              {modelRows.map((m) => (
+                <div className="model-entry du-card" key={m.p.id + "/" + m.id}>
+                  <div className="model-card-heading">
+                    <label>
+                      <input
+                        className="du-toggle du-toggle-primary du-toggle-sm"
+                        type="checkbox"
+                        checked={m.enabled}
+                        onChange={(e) =>
+                          void run(async () => {
+                            await api(
+                              "/providers/" + m.p.id + "/models",
+                              "PUT",
+                              {
+                                models: [
+                                  { id: m.id, enabled: e.target.checked },
+                                ],
+                              },
+                            );
+                            await refresh();
+                          })
+                        }
+                      />
+                      <span>
+                        {m.p.prefix + m.id}
+                        <small>{m.p.name}</small>
+                      </span>
+                    </label>
+                  </div>
+                  <ModelControls
+                    provider={m.p}
+                    model={m}
+                    run={run}
+                    refresh={refresh}
+                  />
                 </div>
-                <ModelControls
-                  provider={m.p}
-                  model={m}
-                  run={run}
-                  refresh={refresh}
-                />
-              </div>
-            ))}
+              ))}
+            </div>
             {!modelRows.length && (
-              <p className="muted">先保存一个服务商来获取模型列表。</p>
+              <p className="muted">
+                没有匹配的模型。可调整搜索词，或到服务商页获取模型列表。
+              </p>
             )}
           </>
         )}

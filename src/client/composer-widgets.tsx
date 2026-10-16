@@ -179,7 +179,6 @@ export function ContextUsage({
         <div>
           已用 {compact(used)} 标记，共 {compact(capacity)}
         </div>
-        <small>本地估算</small>
       </FloatingPanel>
     </>
   );

@@ -168,6 +168,36 @@ for (const mobile of [false, true])
     await page.reload();
     await expect(page.locator(".header-title")).toHaveText("定位和编辑验证");
     await expect.poll(() => atBottom(page)).toBeLessThan(2);
+    const timeline = page.getByRole("navigation", {
+        name: "对话导航",
+        exact: true,
+      }),
+      tick = timeline.locator(".timeline-tick").first();
+    await expect(timeline.locator(".timeline-tick")).toHaveCount(8);
+    if (mobile) await tick.click();
+    else await tick.hover();
+    const preview = page.getByRole("dialog", {
+      name: "第1轮预览",
+      exact: true,
+    });
+    await expect(preview).toBeVisible();
+    await expect(preview.getByRole("button", { name: /书签/ })).toHaveCount(0);
+    await page.screenshot({
+      path: `docs/screenshots/conversation-timeline-${mobile ? "phone" : "desktop"}.png`,
+    });
+    if (mobile)
+      await preview
+        .getByRole("button", { name: "跳转到第1轮", exact: true })
+        .click();
+    else await tick.click();
+    await expect.poll(() => offset(page, "u0")).toBeGreaterThanOrEqual(15);
+    await expect.poll(() => offset(page, "u0")).toBeLessThan(24);
+    await expect(preview).toHaveCount(0);
+    await page
+      .locator(".message-scroll")
+      .evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await expect.poll(() => atBottom(page)).toBeLessThan(2);
+
     await page
       .getByRole("button", { name: "当前聊天设置", exact: true })
       .click();

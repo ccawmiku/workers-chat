@@ -63,10 +63,17 @@ export async function readCompletion(
   const reader = response.body?.getReader();
   if (!reader) throw Error("上游没有返回响应流");
   const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
   let buffer = "",
     finished = false,
     doneEvent = false,
-    size = 0;
+    size = encoder.encode(output.content + output.reasoning).byteLength;
+  const append = (kind: "content" | "reasoning", text: unknown) => {
+    if (typeof text !== "string") return;
+    size += encoder.encode(text).byteLength;
+    if (size > 8 * 1024 * 1024) throw Error("上游回答文字超过安全上限");
+    output[kind] += text;
+  };
   const consume = (block: string) => {
     const text = block
       .split("\n")
@@ -82,13 +89,13 @@ export async function readCompletion(
     if (event.error) throw Error(event.error.message ?? "上游流式错误");
     const choice = event.choices?.[0],
       delta = choice?.delta;
-    if (typeof delta?.content === "string") output.content += delta.content;
-    output.reasoning +=
+    append("content", delta?.content);
+    append(
+      "reasoning",
       typeof delta?.reasoning_content === "string"
         ? delta.reasoning_content
-        : typeof delta?.reasoning === "string"
-          ? delta.reasoning
-          : "";
+        : delta?.reasoning,
+    );
     if (event.usage) output.usage = sanitizeUsage(event.usage);
     if (choice?.finish_reason) finished = true;
     onUpdate();
@@ -102,8 +109,8 @@ export async function readCompletion(
       signal.throwIfAborted();
       const part = await reader.read();
       signal.throwIfAborted();
-      if (part.value) size += part.value.byteLength;
-      if (size > 8 * 1024 * 1024) throw Error("上游响应超过安全上限");
+      // Bound the assembled answer and each event, not SSE framing/heartbeats.
+      // Long streams may carry much more protocol metadata than actual text.
       buffer = (
         buffer + decoder.decode(part.value, { stream: !part.done })
       ).replace(/\r\n|\r(?!$)/g, "\n");

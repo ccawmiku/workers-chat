@@ -1900,6 +1900,114 @@ describe("workerd HTTP + D1 + Workflows", () => {
     controls.delay = 0;
     await value("/settings", "PUT", settings);
   }, 45000);
+  it("bans five consecutive login failures per IP, reports timestamps only after login and expires the ban", async () => {
+    const db = await mf.getD1Database("DB");
+    await db.batch([
+      db.prepare("DELETE FROM login_guards"),
+      db.prepare("DELETE FROM login_notice"),
+    ]);
+    const attempt = (ip: string, password: string, recovery = false) =>
+      mf.dispatchFetch(
+        "https://chat.test/api/auth/" + (recovery ? "recover" : "login"),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Origin: "https://chat.test",
+            "CF-Connecting-IP": ip,
+          },
+          body: JSON.stringify({ password }),
+        },
+      );
+    const started = Date.now();
+    for (let i = 0; i < 4; i++)
+      expect((await attempt("192.0.2.1", "incorrect")).status).toBe(401);
+    const banned = await attempt("192.0.2.1", "incorrect");
+    expect(banned.status).toBe(429);
+    expect(Number(banned.headers.get("Retry-After"))).toBeGreaterThan(890);
+    const body = (await banned.json()) as {
+      retryAt: number;
+      failedAttempts?: unknown;
+    };
+    expect(body.retryAt).toBeGreaterThan(Date.now() + 890000);
+    expect(body.failedAttempts).toBeUndefined();
+    expect((await attempt("192.0.2.1", fixturePassword)).status).toBe(429);
+    const blocked = await db
+      .prepare("SELECT failures,blocked_until FROM login_guards")
+      .first<{ failures: number; blocked_until: number }>();
+    expect(blocked).toEqual({ failures: 5, blocked_until: body.retryAt });
+    const valid = await attempt("192.0.2.2", fixturePassword);
+    expect(valid.status).toBe(200);
+    const notice = (
+      (await valid.json()) as {
+        failedAttempts: { count: number; firstAt: number; lastAt: number };
+      }
+    ).failedAttempts;
+    expect(notice.count).toBe(5);
+    expect(notice.firstAt).toBeGreaterThanOrEqual(started);
+    expect(notice.lastAt).toBeGreaterThanOrEqual(notice.firstAt);
+    expect(
+      (
+        (await (await attempt("192.0.2.2", fixturePassword)).json()) as {
+          failedAttempts?: unknown;
+        }
+      ).failedAttempts,
+    ).toBeUndefined();
+    // Advance only persisted expiry; no real 15-minute sleep or production writes.
+    await db
+      .prepare("UPDATE login_guards SET blocked_until=?,updated_at=?")
+      .bind(Date.now() - 1, Date.now() - 900001)
+      .run();
+    expect((await attempt("192.0.2.1", "incorrect")).status).toBe(401);
+    expect(
+      (
+        await db
+          .prepare("SELECT failures FROM login_guards")
+          .first<{ failures: number }>()
+      )?.failures,
+    ).toBe(1);
+    expect((await attempt("192.0.2.1", fixturePassword)).status).toBe(200);
+    expect(
+      (
+        await db
+          .prepare("SELECT COUNT(*) AS n FROM login_guards")
+          .first<{ n: number }>()
+      )?.n,
+    ).toBe(0);
+    for (let i = 0; i < 4; i++)
+      expect((await attempt("192.0.2.3", "incorrect", i === 0)).status).toBe(
+        401,
+      );
+    expect((await attempt("192.0.2.3", fixturePassword)).status).toBe(200);
+    expect((await attempt("192.0.2.3", "incorrect")).status).toBe(401);
+    expect(
+      (
+        await db
+          .prepare("SELECT failures FROM login_guards")
+          .first<{ failures: number }>()
+      )?.failures,
+    ).toBe(1);
+    await db.batch([
+      db.prepare("DELETE FROM login_guards"),
+      db.prepare("DELETE FROM login_notice"),
+    ]);
+    const burst = await Promise.all(
+      Array.from({ length: 8 }, () => attempt("192.0.2.4", "incorrect")),
+    );
+    expect(burst.filter((r) => r.status === 401)).toHaveLength(4);
+    expect(burst.filter((r) => r.status === 429)).toHaveLength(4);
+    expect(
+      (
+        await db
+          .prepare("SELECT count FROM login_notice")
+          .first<{ count: number }>()
+      )?.count,
+    ).toBe(5);
+    await db.batch([
+      db.prepare("DELETE FROM login_guards"),
+      db.prepare("DELETE FROM login_notice"),
+    ]);
+  });
   it("changes password and revokes every prior session", async () => {
     const response = await value<{ recoveryCode: string }>(
       "/auth/password",

@@ -35,6 +35,7 @@ import {
   pluginDefaults,
   pluginName,
   preparePlugin,
+  upgradeLegacyPlugin,
   normalizePluginOutput,
 } from "../shared/plugins";
 import {
@@ -152,7 +153,7 @@ export function PluginEditor({
         <p className="muted">
           {local
             ? "只覆盖当前聊天。已经运行的结果保留当时配置。"
-            : "新聊天默认关闭插件；在输入区下方启用。"}
+            : "新聊天默认关闭插件；在发送框左下角启用。"}
         </p>
         <div className="plugin-fields">
           <label>
@@ -633,6 +634,7 @@ function ContextDetails({
   );
 }
 export function PluginBar({
+  entryTarget,
   chat,
   settings,
   providers,
@@ -644,6 +646,7 @@ export function PluginBar({
   command,
   busy,
 }: {
+  entryTarget: HTMLElement | null;
   chat: Chat | null;
   settings: Settings;
   providers: Provider[];
@@ -660,6 +663,25 @@ export function PluginBar({
     [context, setContext] = useState<string | null>(null),
     [error, setError] = useState("");
   const [optimistic, setOptimistic] = useState<PluginBinding[] | null>(null);
+  const entryRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (!entryRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        entryRef.current?.querySelector("button")?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
   const selected = chat ? enabledPlugins(chat, settings) : [],
     list = definitions(settings),
     bindings = optimistic ?? chat?.plugins ?? [];
@@ -729,10 +751,17 @@ export function PluginBar({
         ? bindings.map((b) => (b.id === id ? { ...b, enabled } : b))
         : [...bindings, { id, enabled }],
     );
+  const sortable = bindings.filter((b) =>
+    list.some(
+      (p) => p.id === b.id && (p.kind === "analysis" || p.kind === "clarify"),
+    ),
+  );
   const move = (id: string, delta: number) => {
     const ordered = [...bindings],
+      position = sortable.findIndex((b) => b.id === id),
+      target = sortable[position + delta],
       i = ordered.findIndex((b) => b.id === id),
-      j = i + delta;
+      j = target ? ordered.findIndex((b) => b.id === target.id) : -1;
     if (i < 0 || j < 0 || j >= ordered.length) return;
     [ordered[i], ordered[j]] = [ordered[j]!, ordered[i]!];
     void persist(ordered).catch(() => {});
@@ -746,146 +775,177 @@ export function PluginBar({
         ["running", "waiting"].includes(r.status),
     );
   return (
-    <div
-      className="plugin-bar"
-      data-chat-id={chat?.id ?? ""}
-      aria-label="插件栏"
-    >
-      <button
-        className={
-          "du-btn du-btn-ghost du-btn-sm plugin-menu-button " +
-          (open ? "active" : "")
-        }
-        aria-label="插件"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
+    <>
+      <div
+        className={"plugin-bar" + (selected.length ? "" : " empty")}
+        data-chat-id={chat?.id ?? ""}
+        aria-label="插件栏"
       >
-        <Blocks size={17} />
-        <span>插件</span>
-      </button>
-      <div className="plugin-chips">
-        {selected.map((p) => {
-          const run = activeRun(p.id),
-            metrics = run?.metrics ?? previews.get(p.id)?.metrics;
-          return (
-            <button
-              key={p.id}
-              className={
-                "plugin-chip " +
-                (metrics && metrics.total > metrics.capacity
-                  ? "over-budget"
-                  : "")
-              }
-              aria-label={p.name + "上下文"}
-              onClick={() => setContext(p.id)}
-            >
-              <span>
-                {p.name}
-                <b>{metrics ? "预计 " + k(metrics.total) : "未选模型"}</b>
-              </span>
-              <progress
-                max={metrics?.capacity ?? 1}
-                value={Math.min(metrics?.total ?? 0, metrics?.capacity ?? 1)}
-              />
-              {metrics && (metrics.trimmed > 0 || metrics.shortened > 0) && (
-                <small>
-                  {metrics.trimmed ? `裁 ${metrics.trimmed} 组 ` : ""}
-                  {metrics.shortened ? `截 ${metrics.shortened} 条` : ""}
-                </small>
-              )}
-            </button>
-          );
-        })}
-      </div>
-      {open && (
-        <div
-          className="plugin-picker du-card"
-          role="dialog"
-          aria-label="当前聊天插件"
-        >
-          <div className="plugin-picker-heading">
-            <strong>当前聊天插件</strong>
-            <IconButton label="关闭插件列表" onClick={() => setOpen(false)}>
-              <X size={15} />
-            </IconButton>
-          </div>
-          <p className="muted">按顺序独立运行。配置修改用于下一次调用。</p>
-          {[
-            ...bindings
-              .map((b) => list.find((p) => p.id === b.id))
-              .filter((p): p is PluginDefinition => !!p),
-            ...list.filter((p) => !bindings.some((b) => b.id === p.id)),
-          ].map((p) => {
-            const binding = bindings.find((b) => b.id === p.id),
-              merged = { ...p, ...binding?.overrides };
+        <div className="plugin-chips">
+          {selected.map((p) => {
+            const run = activeRun(p.id),
+              metrics = run?.metrics ?? previews.get(p.id)?.metrics;
             return (
-              <div className="plugin-picker-row" key={p.id}>
+              <button
+                key={p.id}
+                className={
+                  "plugin-chip " +
+                  (metrics && metrics.total > metrics.capacity
+                    ? "over-budget"
+                    : "")
+                }
+                aria-label={p.name + "上下文"}
+                onClick={() => setContext(p.id)}
+              >
                 <span>
-                  {merged.name}
-                  <small>{pluginName(p.kind)}</small>
+                  <span className="plugin-chip-name">{p.name}</span>
+                  <b>{metrics ? "预计 " + k(metrics.total) : "未选模型"}</b>
                 </span>
-                {(p.kind === "rewrite" || p.kind === "suggest") &&
-                  binding?.enabled && (
-                    <IconButton
-                      label={"运行 " + p.name}
-                      disabled={busy || (p.kind === "rewrite" && !draft.trim())}
-                      onClick={() => {
-                        setOpen(false);
-                        void command(
-                          p.kind === "rewrite" ? "rewrite" : "suggest",
-                          { pluginId: p.id, content: draft },
-                        ).catch((e) => setError(e.message));
-                      }}
-                    >
-                      <Play size={14} />
-                    </IconButton>
-                  )}
-                <IconButton
-                  label={"上移 " + p.name}
-                  onClick={() => move(p.id, -1)}
-                  disabled={!binding}
-                >
-                  <ArrowUp size={14} />
-                </IconButton>
-                <IconButton
-                  label={"下移 " + p.name}
-                  onClick={() => move(p.id, 1)}
-                  disabled={!binding}
-                >
-                  <ArrowDown size={14} />
-                </IconButton>
-                <IconButton
-                  label={"配置 " + p.name}
-                  onClick={() => setEditing(merged)}
-                >
-                  <SlidersHorizontal size={15} />
-                </IconButton>
-                <input
-                  className="du-toggle du-toggle-primary du-toggle-sm"
-                  type="checkbox"
-                  aria-label={"启用 " + p.name}
-                  checked={binding?.enabled ?? false}
-                  disabled={busy || optimistic !== null}
-                  onChange={(e) =>
-                    void toggle(p.id, e.target.checked).catch(() => {})
-                  }
+                <progress
+                  max={metrics?.capacity ?? 1}
+                  value={Math.min(metrics?.total ?? 0, metrics?.capacity ?? 1)}
                 />
-              </div>
+                {metrics && (metrics.trimmed > 0 || metrics.shortened > 0) && (
+                  <small>
+                    {metrics.trimmed ? `裁 ${metrics.trimmed} 组 ` : ""}
+                    {metrics.shortened ? `截 ${metrics.shortened} 条` : ""}
+                  </small>
+                )}
+              </button>
             );
           })}
-          <label className="toggle">
-            仅调试前置插件
-            <input
-              className="du-toggle du-toggle-info du-toggle-sm"
-              type="checkbox"
-              aria-label="仅调试插件"
-              checked={debug}
-              onChange={(e) => setDebug(e.target.checked)}
-            />
-          </label>
-          {error && <p role="alert">{error}</p>}
         </div>
-      )}
+      </div>
+      {entryTarget &&
+        createPortal(
+          <div className="plugin-entry" ref={entryRef}>
+            <button
+              className={
+                "icon-button plugin-menu-button " + (open ? "active" : "")
+              }
+              aria-label="插件"
+              title="插件"
+              aria-expanded={open}
+              aria-haspopup="dialog"
+              onClick={() => setOpen(!open)}
+            >
+              <Blocks size={20} />
+            </button>
+            {open && (
+              <div
+                className="plugin-picker du-card"
+                role="dialog"
+                aria-label="当前聊天插件"
+              >
+                <div className="plugin-picker-heading">
+                  <strong>当前聊天插件</strong>
+                  <IconButton
+                    label="关闭插件列表"
+                    onClick={() => setOpen(false)}
+                  >
+                    <X size={15} />
+                  </IconButton>
+                </div>
+                <p className="muted">
+                  仅前置注入插件按顺序运行；追问和重新生成 user 提示独立触发。
+                </p>
+                {[
+                  ...bindings
+                    .map((b) => list.find((p) => p.id === b.id))
+                    .filter((p): p is PluginDefinition => !!p),
+                  ...list.filter((p) => !bindings.some((b) => b.id === p.id)),
+                ].map((p) => {
+                  const binding = bindings.find((b) => b.id === p.id),
+                    merged = upgradeLegacyPlugin({
+                      ...p,
+                      ...binding?.overrides,
+                    }),
+                    canSort = p.kind === "analysis" || p.kind === "clarify",
+                    sortIndex = sortable.findIndex((b) => b.id === p.id);
+                  return (
+                    <div className="plugin-picker-row" key={p.id}>
+                      <span>
+                        {merged.name}
+                        <small>{pluginName(p.kind)}</small>
+                      </span>
+                      {(p.kind === "rewrite" || p.kind === "suggest") &&
+                        binding?.enabled && (
+                          <IconButton
+                            label={"运行 " + p.name}
+                            disabled={
+                              busy || (p.kind === "rewrite" && !draft.trim())
+                            }
+                            onClick={() => {
+                              setOpen(false);
+                              void command(
+                                p.kind === "rewrite" ? "rewrite" : "suggest",
+                                { pluginId: p.id, content: draft },
+                              ).catch((e) => setError(e.message));
+                            }}
+                          >
+                            <Play size={14} />
+                          </IconButton>
+                        )}
+                      {canSort && (
+                        <IconButton
+                          label={"上移 " + p.name}
+                          onClick={() => move(p.id, -1)}
+                          disabled={busy || sortIndex <= 0}
+                        >
+                          <ArrowUp size={14} />
+                        </IconButton>
+                      )}
+                      {canSort && (
+                        <IconButton
+                          label={"下移 " + p.name}
+                          onClick={() => move(p.id, 1)}
+                          disabled={
+                            busy ||
+                            sortIndex < 0 ||
+                            sortIndex === sortable.length - 1
+                          }
+                        >
+                          <ArrowDown size={14} />
+                        </IconButton>
+                      )}
+                      <IconButton
+                        label={"配置 " + p.name}
+                        onClick={() => {
+                          setOpen(false);
+                          setEditing(merged);
+                        }}
+                      >
+                        <SlidersHorizontal size={15} />
+                      </IconButton>
+                      <input
+                        className="du-toggle du-toggle-primary du-toggle-sm"
+                        type="checkbox"
+                        aria-label={"启用 " + p.name}
+                        checked={binding?.enabled ?? false}
+                        disabled={busy || optimistic !== null}
+                        onChange={(e) =>
+                          void toggle(p.id, e.target.checked).catch(() => {})
+                        }
+                      />
+                    </div>
+                  );
+                })}
+                <label className="toggle">
+                  仅调试前置插件
+                  <input
+                    className="du-toggle du-toggle-info du-toggle-sm"
+                    type="checkbox"
+                    aria-label="仅调试插件"
+                    checked={debug}
+                    onChange={(e) => setDebug(e.target.checked)}
+                  />
+                </label>
+                {error && <p role="alert">{error}</p>}
+              </div>
+            )}
+          </div>,
+          entryTarget,
+        )}
       {editing && (
         <PluginEditor
           local
@@ -920,7 +980,7 @@ export function PluginBar({
           onCommand={command}
         />
       )}
-    </div>
+    </>
   );
 }
 function ResultCard({
@@ -1322,7 +1382,7 @@ export function RewriteReview({
     [error, setError] = useState("");
   return (
     <Dialog
-      title="请求重生 · 对比"
+      title="重新生成 user 提示 · 对比"
       close={() => void command("dismiss", { runId: run.id }).catch(() => {})}
       wide
     >

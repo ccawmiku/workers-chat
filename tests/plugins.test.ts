@@ -13,6 +13,9 @@ import {
   injectPlugins,
   normalizePluginOutput,
   shortenUser,
+  upgradeLegacyPlugin,
+  REWRITE_PROMPT,
+  SUGGEST_PROMPT,
   type PluginRun,
 } from "../src/shared/plugins";
 const provider: Provider = {
@@ -64,6 +67,40 @@ const run = (
   },
 });
 describe("plugin context assembly", () => {
+  it("updates the built-in rewrite defaults and old labels while preserving customized settings and prompts", () => {
+    const legacy = {
+      ...pluginDefaults("rewrite"),
+      name: "请求重生",
+      cardTitle: "请求重生",
+      historyRounds: 5,
+      highWater: 30000,
+      lowWater: 10000,
+    };
+    expect(upgradeLegacyPlugin(legacy)).toMatchObject({
+      name: "重新生成 user 提示",
+      historyRounds: 50,
+      highWater: 200000,
+      lowWater: 100000,
+    });
+    expect(
+      upgradeLegacyPlugin({
+        ...legacy,
+        historyRounds: 12,
+        prompt: "my custom prompt",
+      }),
+    ).toMatchObject({
+      historyRounds: 12,
+      highWater: 30000,
+      prompt: "my custom prompt",
+    });
+    expect(pluginDefaults("suggest")).toMatchObject({
+      historyRounds: 5,
+      highWater: 30000,
+      lowWater: 10000,
+      prompt: SUGGEST_PROMPT,
+    });
+    expect(pluginDefaults("rewrite").prompt).toBe(REWRITE_PROMPT);
+  });
   it("keeps the final historical reply for an empty preview and counts only complete recent pairs", () => {
     const { chat, settings, state } = fixture();
     for (let i = 0; i < 2; i++) {

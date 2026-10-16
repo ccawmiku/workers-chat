@@ -97,6 +97,34 @@ describe("direct transport and templates", () => {
     ).rejects.toThrow("提前结束");
     expect(output.content).toBe("partial");
   });
+  it("does not truncate an answer because SSE heartbeat/metadata overhead exceeds 8 MiB", async () => {
+    const output: CompletionOutput = { content: "", reasoning: "" };
+    const overhead = ": " + "x".repeat(65536) + "\n\n";
+    const stream = new ReadableStream({
+      start(controller) {
+        const encode = new TextEncoder();
+        controller.enqueue(
+          encode.encode('data: {"choices":[{"delta":{"content":"开头"}}]}\n\n'),
+        );
+        for (let i = 0; i < 130; i++)
+          controller.enqueue(encode.encode(overhead));
+        controller.enqueue(
+          encode.encode(
+            'data: {"choices":[{"delta":{"content":"完整结尾✓"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          ),
+        );
+        controller.close();
+      },
+    });
+    await readCompletion(
+      new Response(stream),
+      true,
+      new AbortController().signal,
+      output,
+      () => {},
+    );
+    expect(output.content).toBe("开头完整结尾✓");
+  });
 });
 
 it("retains non-streaming cache hit rates", async () => {

@@ -2638,6 +2638,49 @@ main {
   min-width: 0;
   font-size: 12px;
 }
+.plugin-bar.empty {
+  display: none;
+}
+.composer-plugin-entry {
+  flex: 0 0 34px;
+}
+.plugin-entry {
+  position: relative;
+}
+.plugin-entry .plugin-menu-button {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+}
+.plugin-entry .plugin-menu-button.active {
+  background: var(--hover);
+  color: var(--accent);
+}
+.login-security-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 20px 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  font-size: 13px;
+}
+.login-security-notice > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.login-security-notice > div {
+  flex: 1;
+  min-width: 0;
+}
+.login-security-notice p {
+  margin: 4px 0;
+}
+.login-security-notice small {
+  color: var(--muted);
+}
 .plugin-chips {
   display: flex;
   gap: 6px;
@@ -2657,11 +2700,15 @@ main {
   text-align: left;
   background: var(--panel);
 }
-.plugin-chip span {
+.plugin-chip > span {
   display: flex;
   justify-content: space-between;
   gap: 10px;
   white-space: nowrap;
+}
+.plugin-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .plugin-chip b {
   font-weight: 400;
@@ -2985,7 +3032,7 @@ main {
     grid-template-columns: 1fr;
   }
   .plugin-picker {
-    width: min(420px, calc(100vw - 24px));
+    width: min(420px, calc(100vw - 48px));
   }
   .plugin-bar {
     margin-top: 6px;

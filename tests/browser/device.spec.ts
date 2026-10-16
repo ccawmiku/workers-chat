@@ -159,6 +159,41 @@ test("device streams paint before completion, unlock once, save, title, stop and
   expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(
     "synthetic-device-key",
   );
+  // A snapshot requested during streaming returns only after /finish. It must
+  // not replace the complete local answer or satisfy the final fresh refresh.
+  let releaseSnapshot!: () => void;
+  const snapshotGate = new Promise<void>((resolve) => {
+    releaseSnapshot = resolve;
+  });
+  let held = false;
+  await page.route(/\/api\/chats\/[^/?]+$/, async (route) => {
+    if (route.request().method() !== "GET" || held) return route.continue();
+    held = true;
+    const response = await route.fetch();
+    await snapshotGate;
+    await route.fulfill({ response });
+  });
+  await page.getByLabel("消息", { exact: true }).fill("快照不能覆盖完整回答");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(
+    page.locator(".message.assistant .markdown").last(),
+  ).toContainText("第一段即时内容");
+  await page.evaluate(() =>
+    document.dispatchEvent(new Event("visibilitychange")),
+  );
+  await expect.poll(() => held).toBe(true);
+  await page.waitForResponse(
+    (r) =>
+      /\/api\/device\/jobs\/[^/]+\/finish$/.test(r.url()) && r.status() === 200,
+  );
+  releaseSnapshot();
+  await expect(
+    page.getByRole("button", { name: "停止生成", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.locator(".message.assistant .markdown").last()).toHaveText(
+    "第一段即时内容，第二段完整回答",
+  );
+  await page.unroute(/\/api\/chats\/[^/?]+$/);
   let rejectedSave = false;
   await page.route(/\/api\/device\/jobs\/[^/]+\/finish$/, async (route) => {
     if (!rejectedSave) {
@@ -208,7 +243,7 @@ test("device streams paint before completion, unlock once, save, title, stop and
         }
       ).directFixture,
   );
-  expect(state.calls).toBe(4);
+  expect(state.calls).toBe(5);
   expect(state.titles).toBe(1);
   expect(
     state.credentials.every((key) => key === "Bearer synthetic-device-key"),

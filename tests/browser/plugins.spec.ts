@@ -90,7 +90,7 @@ for (const mobile of [false, true])
         } else if (last.includes("提出一批具体、必要的澄清问题")) {
           kind = "clarify";
           content = "1. 请问希望采用哪种风格？";
-        } else if (all.includes("预测用户下一轮会怎么说")) {
+        } else if (all.includes('"suggestions"')) {
           kind = "suggest";
           content = JSON.stringify({
             suggestions: ["再给我一个例子", "换成更简短的版本", "加入新的场景"],
@@ -145,13 +145,41 @@ for (const mobile of [false, true])
     await expect(page.locator(".header-title")).toHaveText(
       "四插件实际界面测试",
     );
+    await expect(
+      page
+        .locator(".composer-controls")
+        .getByRole("button", { name: "插件", exact: true }),
+    ).toBeVisible();
     await page.getByRole("button", { name: "插件", exact: true }).click();
-    for (const name of ["JSON 分析", "提问澄清", "追问建议", "请求重生"]) {
+    for (const name of [
+      "JSON 分析",
+      "提问澄清",
+      "追问建议",
+      "重新生成 user 提示",
+    ]) {
       await page.getByLabel("启用 " + name, { exact: true }).check();
       await expect(
         page.getByRole("button", { name: name + "上下文", exact: true }),
       ).toBeVisible();
     }
+    await expect(
+      page.getByRole("button", { name: "上移 追问建议", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", {
+        name: "上移 重新生成 user 提示",
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "上移 提问澄清", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "上移 提问澄清", exact: true }),
+    ).toBeDisabled();
+    await page
+      .getByRole("button", { name: "下移 提问澄清", exact: true })
+      .click();
     await page.getByRole("button", { name: "关闭插件列表" }).click();
     let previewAPIs = 0;
     const counter = (r: any) => {
@@ -222,10 +250,13 @@ for (const mobile of [false, true])
       "保留的旧草稿",
     );
     await page
-      .getByRole("button", { name: "重新生成用户请求", exact: true })
+      .getByRole("button", { name: "重新生成 user 提示", exact: true })
       .click();
     await expect(
-      page.getByRole("dialog", { name: "请求重生 · 对比", exact: true }),
+      page.getByRole("dialog", {
+        name: "重新生成 user 提示 · 对比",
+        exact: true,
+      }),
     ).toBeVisible();
     await page
       .getByLabel("新用户请求", { exact: true })

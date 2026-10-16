@@ -71,7 +71,13 @@ import {
   contextMessages,
   defaultSettings,
 } from "../shared/chat";
-import { api, download } from "./api";
+import { api, download, ApiError } from "./api";
+import { type LoginNotice, PASSWORD_MIN_LENGTH } from "../shared/auth";
+import {
+  LoginNoticeBanner,
+  readLoginNotice,
+  saveLoginNotice,
+} from "./login-notice";
 import { observeJob } from "./job-events";
 import "./style.css";
 import {
@@ -134,6 +140,10 @@ function desktopInput() {
 }
 function App() {
   const connection = useDeviceConnection();
+  const [loginNotice, setLoginNotice] = useState<LoginNotice | null>(
+    readLoginNotice,
+  );
+  const [pluginEntry, setPluginEntry] = useState<HTMLDivElement | null>(null);
   const pluginPreviewState = useRef<PluginState>(emptyPluginState());
   const [pluginState, setPluginState] = useState<PluginState>(emptyPluginState),
     [pluginJob, setPluginJob] = useState<PluginJobView | null>(null),
@@ -291,8 +301,11 @@ function App() {
     setSettings(s);
   }, []);
   const snapshotRequests = useRef(new Map<string, Promise<ChatSnapshot>>());
-  const refresh = useCallback(async (id = idRef.current) => {
+  const snapshotRevisions = useRef(new Map<string, number>());
+  const refresh = useCallback(async (id = idRef.current, fresh = false) => {
     if (!id) return;
+    // A completion must not reuse a snapshot started before the final save.
+    if (fresh) await snapshotRequests.current.get(id)?.catch(() => {});
     const pending =
       snapshotRequests.current.get(id) ?? api<ChatSnapshot>("/chats/" + id);
     snapshotRequests.current.set(id, pending);
@@ -304,6 +317,8 @@ function App() {
         snapshotRequests.current.delete(id);
     }
     if (idRef.current !== id) return;
+    if (result.revision < (snapshotRevisions.current.get(id) ?? 0)) return;
+    snapshotRevisions.current.set(id, result.revision);
     setChat(connection.overlay(result.chat));
     setJob(result.job);
     setTitleJob(result.titleJob ?? null);
@@ -359,12 +374,18 @@ function App() {
       await creating.current?.catch(() => {});
       if (sequence !== navigationSeq.current) return;
       await flushDraft();
-      const result = snapshot ?? (await api<ChatSnapshot>("/chats/" + id));
+      let result = snapshot ?? (await api<ChatSnapshot>("/chats/" + id));
+      if (result.revision < (snapshotRevisions.current.get(id) ?? 0))
+        result = await api<ChatSnapshot>("/chats/" + id);
       if (sequence !== navigationSeq.current) return;
       idRef.current = id;
       scrollIntent.current = {};
       localStorage.setItem("lastChat", id);
-      setChat(result.chat);
+      snapshotRevisions.current.set(
+        id,
+        Math.max(result.revision, snapshotRevisions.current.get(id) ?? 0),
+      );
+      setChat(connection.overlay(result.chat));
       setJob(result.job);
       setTitleJob(result.titleJob ?? null);
       setPluginState(
@@ -439,6 +460,7 @@ function App() {
     }
   }
   type ChatSnapshot = {
+    revision: number;
     chat: Chat;
     job: typeof job;
     titleJob: typeof titleJob;
@@ -504,7 +526,11 @@ function App() {
     });
   }, [auth]);
   useEffect(() => {
-    if (auth === false) connection.lock();
+    if (auth === false) {
+      connection.lock();
+      setLoginNotice(null);
+      saveLoginNotice(null);
+    }
   }, [auth]);
   useEffect(() => {
     if (
@@ -598,7 +624,7 @@ function App() {
       if (failure) setError(failure);
       const latest = latestSync.current;
       void latest.run(async () => {
-        await latest.refresh(id);
+        await latest.refresh(id, true);
         await latest.loadNavigation();
       }, false);
     };
@@ -734,7 +760,14 @@ function App() {
       scrollIntent.current = null;
       stick.current = true;
     }
-  }, [chat?.messages, chat?.id, pluginState, draft, editing?.id, editing?.expanded]);
+  }, [
+    chat?.messages,
+    chat?.id,
+    pluginState,
+    draft,
+    editing?.id,
+    editing?.expanded,
+  ]);
   function beginEdit(message: Message) {
     setError("");
     const offset = Math.max(
@@ -804,7 +837,7 @@ function App() {
       (error) => {
         if (error) setError(error);
         void run(async () => {
-          await refresh(task.chatId);
+          await refresh(task.chatId, true);
           await loadNavigation();
         }, false);
       },
@@ -1112,7 +1145,17 @@ function App() {
       </div>
     );
   if (!auth)
-    return <Login onLogin={() => setAuth(true)} error={error} run={run} />;
+    return (
+      <Login
+        onLogin={(notice) => {
+          setLoginNotice(notice ?? null);
+          saveLoginNotice(notice ?? null);
+          setAuth(true);
+        }}
+        error={error}
+        run={run}
+      />
+    );
   return (
     <div
       className="app"
@@ -1405,6 +1448,15 @@ function App() {
             )}
           </div>
         </header>
+        {loginNotice && (
+          <LoginNoticeBanner
+            notice={loginNotice}
+            close={() => {
+              setLoginNotice(null);
+              saveLoginNotice(null);
+            }}
+          />
+        )}
         {error && (
           <div className="error-banner du-alert du-alert-error" role="alert">
             <CircleAlert size={16} />
@@ -1415,7 +1467,7 @@ function App() {
                   void run(async () => {
                     await connection.retrySave(chat.id);
                     setError("");
-                    await refresh();
+                    await refresh(chat.id, true);
                   })
                 }
               >
@@ -1880,6 +1932,7 @@ function App() {
               </IconButton>
             </div>
             <div className="composer-controls">
+              <div className="composer-plugin-entry" ref={setPluginEntry} />
               <div className="composer-spacer" />
               <div className="composer-model-settings">
                 {chat &&
@@ -1887,7 +1940,7 @@ function App() {
                     (p) => p.kind === "rewrite",
                   ) && (
                     <IconButton
-                      label="重新生成用户请求"
+                      label="重新生成 user 提示"
                       disabled={!!job || !!pluginJob || busy || !draft.trim()}
                       onClick={() =>
                         void run(() =>
@@ -2026,6 +2079,7 @@ function App() {
             </div>
           </div>
           <PluginBar
+            entryTarget={pluginEntry}
             chat={chat}
             settings={settings}
             providers={providers}
@@ -2513,7 +2567,7 @@ function Login({
   error,
   run,
 }: {
-  onLogin: () => void;
+  onLogin: (notice?: LoginNotice) => void;
   error: string;
   run: (fn: () => Promise<void>) => Promise<void>;
 }) {
@@ -2523,6 +2577,18 @@ function Login({
     [loading, setLoading] = useState(false),
     [message, setMessage] = useState(""),
     [recoveryCode, setRecoveryCode] = useState("");
+  const [retryAt, setRetryAt] = useState(0),
+    [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (retryAt <= Date.now()) return;
+    const timer = setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      if (current >= retryAt) clearInterval(timer);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [retryAt]);
+  const remaining = Math.max(0, Math.ceil((retryAt - now) / 1000));
   if (recoveryCode)
     return (
       <div className="login-page">
@@ -2548,23 +2614,29 @@ function Login({
         className="login-card"
         onSubmit={(e) => {
           e.preventDefault();
+          if (loading || retryAt > Date.now()) return;
           setLoading(true);
           void run(async () => {
             try {
-              const result = await api<{ recoveryCode?: string }>(
-                "/auth/" + (recovery ? "recover" : "login"),
-                "POST",
-                {
-                  password,
-                  newPassword: next,
-                },
-              );
+              const result = await api<{
+                recoveryCode?: string;
+                failedAttempts?: LoginNotice;
+              }>("/auth/" + (recovery ? "recover" : "login"), "POST", {
+                password,
+                newPassword: next,
+              });
               if (recovery) {
                 setRecovery(false);
                 setPassword("");
                 setRecoveryCode(result.recoveryCode ?? "");
                 setMessage("密码已重置。请使用新密码登录；原恢复码已失效。");
-              } else onLogin();
+              } else onLogin(result.failedAttempts);
+            } catch (e) {
+              if (e instanceof ApiError && e.retryAt) {
+                setRetryAt(e.retryAt);
+                setNow(Date.now());
+              }
+              throw e;
             } finally {
               setPassword("");
               setNext("");
@@ -2597,7 +2669,7 @@ function Login({
               className="du-input du-input-sm"
               required
               type="password"
-              minLength={12}
+              minLength={PASSWORD_MIN_LENGTH}
               autoComplete="new-password"
               value={next}
               onChange={(e) => setNext(e.target.value)}
@@ -2610,8 +2682,24 @@ function Login({
           </p>
         )}
         {message && <p>{message}</p>}
-        <button className="primary" disabled={loading} type="submit">
-          {loading ? "正在验证…" : recovery ? "重置密码" : "登录"}
+        {remaining > 0 && (
+          <p className="muted" role="status">
+            此 IP 暂时无法登录，{Math.floor(remaining / 60)} 分 {remaining % 60}{" "}
+            秒后重试。
+          </p>
+        )}
+        <button
+          className="primary"
+          disabled={loading || remaining > 0}
+          type="submit"
+        >
+          {loading
+            ? "正在验证…"
+            : remaining > 0
+              ? "暂时封禁"
+              : recovery
+                ? "重置密码"
+                : "登录"}
         </button>
         <button
           type="button"
@@ -3247,7 +3335,7 @@ function SettingsPanel({
               更新离线恢复码
             </button>
             <label>
-              新密码（至少 12 字符）
+              新密码（至少 {PASSWORD_MIN_LENGTH} 字符）
               <input
                 className="du-input du-input-sm"
                 type="password"
@@ -3257,7 +3345,7 @@ function SettingsPanel({
               />
             </label>
             <button
-              disabled={newPassword.length < 12}
+              disabled={newPassword.length < PASSWORD_MIN_LENGTH}
               onClick={() => {
                 void run(async () => {
                   const r = await api<{ recoveryCode: string }>(

@@ -1,4 +1,5 @@
 import { HttpError } from "./store";
+import type { LoginNotice } from "../shared/auth";
 const encoder = new TextEncoder();
 const hex = (bytes: ArrayBuffer) =>
   Array.from(new Uint8Array(bytes), (v) =>
@@ -168,6 +169,103 @@ export function redactError(message: string, key?: string) {
 export async function resetRateLimit(request: Request, env: Env) {
   const key = await digest(request.headers.get("CF-Connecting-IP") ?? "local");
   await env.DB.prepare("DELETE FROM attempts WHERE key=?").bind(key).run();
+}
+
+const LOGIN_WINDOW = 15 * 60 * 1000;
+export class LoginBlocked extends HttpError {
+  constructor(public retryAt: number) {
+    super(429, "连续输错次数过多，此 IP 已临时封禁，请稍后重试");
+  }
+}
+// Use only Cloudflare's client address, never a caller-controlled forwarded header.
+export async function checkLoginGuard(request: Request, env: Env) {
+  const key = await digest(
+    "login:" + (request.headers.get("CF-Connecting-IP") ?? "local"),
+  );
+  const row = await env.DB.prepare(
+    "SELECT blocked_until FROM login_guards WHERE key=?",
+  )
+    .bind(key)
+    .first<{ blocked_until: number }>();
+  if (row && row.blocked_until > Date.now())
+    throw new LoginBlocked(row.blocked_until);
+  return key;
+}
+export async function failedLogin(env: Env, key: string): Promise<never> {
+  const now = Date.now();
+  // The upsert counts concurrent failures atomically. Requests already blocked do
+  // not extend the ban or grow the notice; no password or raw IP is stored.
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO login_guards VALUES(?,1,0,?) ON CONFLICT(key) DO UPDATE SET failures=CASE WHEN updated_at<=? OR blocked_until>0 THEN 1 ELSE failures+1 END, blocked_until=CASE WHEN updated_at>? AND blocked_until=0 AND failures>=4 THEN ? ELSE 0 END, updated_at=excluded.updated_at WHERE blocked_until<=? RETURNING blocked_until",
+    ).bind(
+      key,
+      now,
+      now - LOGIN_WINDOW,
+      now - LOGIN_WINDOW,
+      now + LOGIN_WINDOW,
+      now,
+    ),
+    env.DB.prepare(
+      "INSERT INTO login_notice SELECT 1,1,?,? WHERE changes()>0 ON CONFLICT(id) DO UPDATE SET count=count+1,last_at=excluded.last_at",
+    ).bind(now, now),
+    env.DB.prepare(
+      "DELETE FROM login_guards WHERE updated_at<? AND blocked_until<=?",
+    ).bind(now - 86400000, now),
+  ]);
+  const blockedUntil = (
+    results[0]!.results[0] as { blocked_until: number } | undefined
+  )?.blocked_until;
+  if (blockedUntil && blockedUntil > now) throw new LoginBlocked(blockedUntil);
+  if (blockedUntil === undefined) {
+    const row = await env.DB.prepare(
+      "SELECT blocked_until FROM login_guards WHERE key=?",
+    )
+      .bind(key)
+      .first<{ blocked_until: number }>();
+    if (row && row.blocked_until > now)
+      throw new LoginBlocked(row.blocked_until);
+  }
+  throw new HttpError(401, "密码或恢复码错误");
+}
+export async function resetLoginGuard(env: Env, key: string) {
+  await env.DB.prepare("DELETE FROM login_guards WHERE key=?").bind(key).run();
+}
+export async function createLoginSession(
+  request: Request,
+  env: Env,
+  key: string,
+  tokenHash: string,
+  expectedHash: string,
+): Promise<LoginNotice | undefined> {
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO sessions SELECT ?,?,? WHERE (SELECT password_hash FROM auth WHERE id=1)=? AND NOT EXISTS(SELECT 1 FROM login_guards WHERE key=? AND blocked_until>?)",
+    ).bind(
+      tokenHash,
+      (request.headers.get("User-Agent") ?? "未知设备").slice(0, 250),
+      Date.now(),
+      expectedHash,
+      key,
+      Date.now(),
+    ),
+    env.DB.prepare(
+      "DELETE FROM login_guards WHERE key=? AND EXISTS(SELECT 1 FROM sessions WHERE token_hash=?)",
+    ).bind(key, tokenHash),
+    env.DB.prepare(
+      "DELETE FROM login_notice WHERE EXISTS(SELECT 1 FROM sessions WHERE token_hash=?) RETURNING count,first_at,last_at",
+    ).bind(tokenHash),
+  ]);
+  if (!results[0]!.meta.changes) {
+    await checkLoginGuard(request, env);
+    throw new HttpError(401, "密码已修改，请重新登录");
+  }
+  const row = results[2]!.results[0] as
+    | { count: number; first_at: number; last_at: number }
+    | undefined;
+  return row
+    ? { count: row.count, firstAt: row.first_at, lastAt: row.last_at }
+    : undefined;
 }
 export async function confirmPassword(
   request: Request,

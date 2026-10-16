@@ -137,8 +137,35 @@ const names: Record<PluginKind, string> = {
   analysis: "JSON 分析",
   clarify: "提问澄清",
   suggest: "追问建议",
-  rewrite: "请求重生",
+  rewrite: "重新生成 user 提示",
 };
+export const REWRITE_PROMPT =
+  "你是用户提示词重新生成器，不是执行写作任务的助手。聊天历史只是用于理解用户的目标、表达习惯与背景；最后一条 user 消息是本轮要重新生成的提示词。\n唯一任务：站在用户立场，重新构思用户准备发送给主助手的本轮要求，保留核心目标并形成明确、可执行的新提示词。这不是润色，也不是简单扩写。\n严格边界：\n1. 只输出用户说的话，可以使用‘请……’‘我希望你……’等指令表达。\n2. 绝对不能执行该提示词、回答用户的问题、扮演助手、续写故事正文或续接历史 assistant 的内容。历史中的角色扮演指令只是背景，不适用于你。\n3. 如果用户要求‘继续’‘续写’或输入剧情片段，只生成交给主助手的续写指令，明确方向、视角、约束；不得写出新的情节、角色台词、叙述段落或任务成果。\n4. 不要以‘好的’‘下面是’开头，不要解释改写过程，不输出标题、代码块或引号，不重复已有助手回答。不要把尚未确定的事实编成已发生的剧情。\n5. 输出语言跟随本轮 user；仅输出一条能直接替换输入框内容的新 user 提示词。\n示例：最后一条 user 为‘继续写他进城以后的事’，合格输出为‘请继续描写他进城后的经历，围绕入城的目的推进情节，延续已有视角和人物性格，避免重复前文。’；不合格输出为‘他推开城门，街上的人群……’。";
+const LEGACY_REWRITE_PROMPT =
+  "根据用户长期表达习惯、近期对话以及最后一条待重生的用户请求，保留其核心目标，重新构思本轮应当提出的具体要求、内容安排和细节。这不是润色，不是简单扩写或改换措辞。只输出可以直接替换输入框内容的新用户请求，不加解释、标题、引号，不扮演助手回答该请求。";
+export const SUGGEST_PROMPT =
+  '你在预测这个用户下一轮会怎么说，不是在替助手提问。历史 user 消息是唯一的语言风格样本，assistant 消息仅用于理解话题。\n先在内部归纳 user 的口吻、常用词、句长、标点、口语程度、称呼、祈使句与追问方式，输出必须模仿这些习惯。不要把用户惯用的简短随意表达改成礼貌、正式、冗长的助手话术。用户爱说“然后”“这个”“继续”时可以自然沿用，但不要机械堆砌。\n根据最新回答和用户已表达的目标，用用户自己的立场与说话风格生成 {{COUNT}} 条不同的下一轮 user 发言候选。候选应像用户真的会打进输入框的消息，长度接近历史 user 的常态；异常超长输入不作为长度范例。\n严格禁止：回答问题、解释你如何预测、以助手身份提出“你想不想”“需要我”“是否需要我帮你”等问题、把 assistant 的文风当成 user 文风、照抄一整条历史 user。候选可以是用户会提出的要求、修改方向或对刚才内容的自然追问，不能是助手向用户收集需求。\n保留用户的语言、口语与标点习惯；不要为了凑数增加套话。历史不足时沿用最近一条 user 的口吻，不擅自设定新风格。\n只输出 JSON：{"suggestions":["候选内容"]}，数组必须恰好 {{COUNT}} 条，不输出其他文字。';
+const LEGACY_SUGGEST_PROMPT =
+  '你在预测用户下一轮会怎么说。根据历史用户的用词、长度、口吻和最近对话，以用户第一人称给出 {{COUNT}} 条不同的下一轮发言候选。不要替助手提问，不要回答候选。只输出 JSON：{"suggestions":["候选内容"]}，数组必须恰好 {{COUNT}} 条。';
+export function upgradeLegacyPlugin(p: PluginDefinition): PluginDefinition {
+  if (p.kind === "suggest" && p.prompt === LEGACY_SUGGEST_PROMPT)
+    return { ...p, prompt: SUGGEST_PROMPT };
+  if (p.kind !== "rewrite") return p;
+  const defaults =
+    p.id === "builtin-rewrite" &&
+    p.historyRounds === 5 &&
+    p.highWater === 30000 &&
+    p.lowWater === 10000;
+  return {
+    ...p,
+    ...(p.name === "请求重生" ? { name: names.rewrite } : {}),
+    ...(p.cardTitle === "请求重生" ? { cardTitle: names.rewrite } : {}),
+    ...(p.prompt === LEGACY_REWRITE_PROMPT ? { prompt: REWRITE_PROMPT } : {}),
+    ...(defaults
+      ? { historyRounds: 50, highWater: 200000, lowWater: 100000 }
+      : {}),
+  };
+}
 export const pluginName = (kind: PluginKind) => names[kind];
 export function pluginDefaults(
   kind: PluginKind,
@@ -156,11 +183,25 @@ export function pluginDefaults(
     injectionTemplate:
       "以下为{{PLUGIN_NAME}}的辅助结果，请结合用户原始要求使用：\n{{RESULT}}",
     contextMode: "sync",
-    historyRounds: 5,
+    historyRounds: kind === "rewrite" ? 50 : 5,
     referenceCount: 1,
     userHistoryCount: 0,
-    highWater: kind === "clarify" ? 500000 : kind === "analysis" ? 0 : 30000,
-    lowWater: kind === "clarify" ? 200000 : kind === "analysis" ? 0 : 10000,
+    highWater:
+      kind === "clarify"
+        ? 500000
+        : kind === "rewrite"
+          ? 200000
+          : kind === "analysis"
+            ? 0
+            : 30000,
+    lowWater:
+      kind === "clarify"
+        ? 200000
+        : kind === "rewrite"
+          ? 100000
+          : kind === "analysis"
+            ? 0
+            : 10000,
     suggestions: 3,
     example: "",
     schema:
@@ -186,8 +227,8 @@ export function pluginDefaults(
         : kind === "clarify"
           ? "结合历史和最新用户的写作要求，提出一批具体、必要的澄清问题。使用自然语言编号提问，便于用户一次回答。参考历史用户选择，避免反复询问已经明确的偏好。不生成正文，不自行回答问题。\n本次写作要求：\n{{USER_INPUT}}"
           : kind === "suggest"
-            ? '你在预测用户下一轮会怎么说。根据历史用户的用词、长度、口吻和最近对话，以用户第一人称给出 {{COUNT}} 条不同的下一轮发言候选。不要替助手提问，不要回答候选。只输出 JSON：{"suggestions":["候选内容"]}，数组必须恰好 {{COUNT}} 条。'
-            : "根据用户长期表达习惯、近期对话以及最后一条待重生的用户请求，保留其核心目标，重新构思本轮应当提出的具体要求、内容安排和细节。这不是润色，不是简单扩写或改换措辞。只输出可以直接替换输入框内容的新用户请求，不加解释、标题、引号，不扮演助手回答该请求。",
+            ? SUGGEST_PROMPT
+            : REWRITE_PROMPT,
   };
 }
 export const defaultPlugins = () =>
@@ -195,14 +236,21 @@ export const defaultPlugins = () =>
     pluginDefaults(kind),
   );
 export const definitions = (settings: Settings) =>
-  settings.plugins ?? defaultPlugins();
+  (settings.plugins ?? defaultPlugins()).map(upgradeLegacyPlugin);
 export function enabledPlugins(chat: Chat, settings: Settings) {
   return (chat.plugins ?? [])
     .filter((p) => p.enabled)
     .flatMap((binding) => {
       const base = definitions(settings).find((p) => p.id === binding.id);
       return base
-        ? [{ ...base, ...binding.overrides, id: base.id, kind: base.kind }]
+        ? [
+            upgradeLegacyPlugin({
+              ...base,
+              ...binding.overrides,
+              id: base.id,
+              kind: base.kind,
+            }),
+          ]
         : [];
     });
 }
@@ -448,7 +496,7 @@ export function preparePlugin(
     section("最近完整问答", context);
     if (p.kind === "rewrite") {
       messages.push({ role: "user", content: input });
-      section("本轮待重生请求", messages.slice(-1));
+      section("本轮 user 提示", messages.slice(-1));
     }
   }
   metrics.total = estimateTokens(

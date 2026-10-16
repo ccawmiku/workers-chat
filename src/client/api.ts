@@ -1,4 +1,13 @@
 import { deviceMode } from "./device-mode";
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public retryAt?: number,
+  ) {
+    super(message);
+  }
+}
 export async function api<T = unknown>(
   path: string,
   method = "GET",
@@ -20,8 +29,16 @@ export async function api<T = unknown>(
         }
       : {}),
   });
-  const result = (await response.json()) as { error?: string };
-  if (!response.ok) throw new Error(result.error ?? "请求失败");
+  const result = (await response.json()) as {
+    error?: string;
+    retryAt?: number;
+  };
+  if (!response.ok)
+    throw new ApiError(
+      result.error ?? "请求失败",
+      response.status,
+      result.retryAt,
+    );
   return result as T;
 }
 export function download(

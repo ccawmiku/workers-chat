@@ -34,6 +34,7 @@ npm run deploy:dry
 
 ## 资料
 
+- [插件工作原理、流程图与默认提示词](docs/PLUGINS.md)。
 - [有效规格](SPEC.md)、[工程指引](AGENTS.md)、[原始交接](docs/CLOUD_HANDOFF.md)。
 - [部署与恢复](docs/DEPLOYMENT.md)、[运行时选型与参考版本](docs/RUNTIME.md)。
 - [完成度与代码审计](docs/REVIEW-2026-10-16.md)。

@@ -18,6 +18,7 @@ import {
 import { exportSettings, importSettings } from "./backup";
 import { importChats, exportChat } from "../shared/exchange";
 import { HttpError, Store, summary } from "./store";
+import { PASSWORD_MIN_LENGTH } from "../shared/auth";
 import {
   authenticate,
   authRow,
@@ -33,6 +34,11 @@ import {
   redactError,
   confirmPassword,
   resetRateLimit,
+  checkLoginGuard,
+  failedLogin,
+  resetLoginGuard,
+  createLoginSession,
+  LoginBlocked,
 } from "./security";
 import {
   readChat,
@@ -228,7 +234,7 @@ async function api(request: Request, env: Env) {
   const body =
     method === "GET" || method === "HEAD" ? {} : await readBody(request);
   if (path === "/api/auth/login" || path === "/api/auth/recover") {
-    await rateLimit(request, env);
+    const loginKey = await checkLoginGuard(request, env);
     const row = await authRow(env),
       recovery = path.endsWith("recover");
     if (
@@ -237,10 +243,11 @@ async function api(request: Request, env: Env) {
         recovery ? row.recovery_hash : row.password_hash,
       ))
     )
-      throw new HttpError(401, "密码或恢复码错误");
+      return failedLogin(env, loginKey);
     if (recovery) {
       const next = str(body.newPassword, 1024);
-      if (next.length < 12) throw new HttpError(400, "新密码至少 12 个字符");
+      if (next.length < PASSWORD_MIN_LENGTH)
+        throw new HttpError(400, `新密码至少 ${PASSWORD_MIN_LENGTH} 个字符`);
       const code = uuid() + uuid();
       const changed = await env.DB.batch([
         env.DB.prepare(
@@ -254,6 +261,7 @@ async function api(request: Request, env: Env) {
       ]);
       if (!changed[0]!.meta.changes) throw new HttpError(401, "恢复码已失效");
       await resetRateLimit(request, env);
+      await resetLoginGuard(env, loginKey);
       return Response.json({
         ok: true,
         recoveryConsumed: true,
@@ -261,21 +269,16 @@ async function api(request: Request, env: Env) {
       });
     }
     const token = uuid() + uuid();
-    const loginResult = await env.DB.prepare(
-      "INSERT INTO sessions SELECT ?,?,? WHERE (SELECT password_hash FROM auth WHERE id=1)=?",
-    )
-      .bind(
-        await digest(token),
-        (request.headers.get("User-Agent") ?? "未知设备").slice(0, 250),
-        Date.now(),
-        row.password_hash,
-      )
-      .run();
-    if (!loginResult.meta.changes)
-      throw new HttpError(401, "密码已修改，请重新登录");
+    const failedAttempts = await createLoginSession(
+      request,
+      env,
+      loginKey,
+      await digest(token),
+      row.password_hash,
+    );
     await resetRateLimit(request, env);
     return Response.json(
-      { ok: true },
+      { ok: true, failedAttempts },
       { headers: { "Set-Cookie": sessionCookie(request, token) } },
     );
   }
@@ -409,7 +412,8 @@ async function api(request: Request, env: Env) {
     if (!(await verifyPassword(str(body.password, 1024), row.password_hash)))
       throw new HttpError(401, "密码错误");
     const next = str(body.newPassword, 1024);
-    if (next.length < 12) throw new HttpError(400, "新密码至少 12 个字符");
+    if (next.length < PASSWORD_MIN_LENGTH)
+      throw new HttpError(400, `新密码至少 ${PASSWORD_MIN_LENGTH} 个字符`);
     const recovery = uuid() + uuid();
     const changed = await env.DB.batch([
       env.DB.prepare(
@@ -1000,8 +1004,20 @@ export default {
             e instanceof HttpError
               ? e.message
               : "操作失败，请重试；若持续失败请检查部署配置",
+          ...(e instanceof LoginBlocked ? { retryAt: e.retryAt } : {}),
         },
-        { status: e instanceof HttpError ? e.status : 500 },
+        {
+          status: e instanceof HttpError ? e.status : 500,
+          ...(e instanceof LoginBlocked
+            ? {
+                headers: {
+                  "Retry-After": String(
+                    Math.max(1, Math.ceil((e.retryAt - Date.now()) / 1000)),
+                  ),
+                },
+              }
+            : {}),
+        },
       );
     }
     if (response.status === 101) return response;

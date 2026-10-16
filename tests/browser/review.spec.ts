@@ -19,10 +19,20 @@ test("large imports and delayed send preserve newer cloud drafts", async ({
   page.on("pageerror", (error) => errors.push(error.message));
   // Corrupt device preferences must not prevent even the login screen loading.
   await page.addInitScript(() => localStorage.setItem("appearance", "{broken"));
+  let releaseConfig!: () => void;
+  const configGate = new Promise<void>((resolve) => {
+    releaseConfig = resolve;
+  });
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() === "GET") await configGate;
+    await route.continue();
+  });
   await page.goto("/");
   await page.getByLabel("访问密码", { exact: true }).fill(credential.password);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await page.locator(".new-chat").waitFor();
+  await expect(page.getByLabel("消息", { exact: true })).toBeDisabled();
+  releaseConfig();
   await page.getByLabel("消息", { exact: true }).fill("未点击新聊天的首个草稿");
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("lastChat")))

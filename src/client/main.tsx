@@ -105,7 +105,8 @@ function App() {
   const [auth, setAuth] = useState<boolean | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
-    [opening, setOpening] = useState(false);
+    [opening, setOpening] = useState(false),
+    [initializing, setInitializing] = useState(true);
   const [chats, setChats] = useState<Brief[]>([]),
     [groups, setGroups] = useState<Group[]>([]),
     [chat, setChat] = useState<Chat | null>(null),
@@ -358,15 +359,20 @@ function App() {
   }, [run]);
   useEffect(() => {
     if (!auth) return;
+    setInitializing(true);
     void run(async () => {
-      await Promise.all([loadNavigation(), loadConfig()]);
-      const id = localStorage.getItem("lastChat");
-      if (id)
-        try {
-          await open(id);
-        } catch {
-          localStorage.removeItem("lastChat");
-        }
+      try {
+        await Promise.all([loadNavigation(), loadConfig()]);
+        const id = localStorage.getItem("lastChat");
+        if (id)
+          try {
+            await open(id);
+          } catch {
+            localStorage.removeItem("lastChat");
+          }
+      } finally {
+        setInitializing(false);
+      }
     });
   }, [auth]);
   useEffect(() => {
@@ -515,6 +521,7 @@ function App() {
       submitting.current ||
       job ||
       opening ||
+      initializing ||
       !draftRef.current.trim()
     )
       return;
@@ -786,7 +793,7 @@ function App() {
         </div>
         <button
           className="new-chat"
-          disabled={opening}
+          disabled={opening || initializing}
           onClick={() => void run(() => create())}
         >
           <Pencil size={17} />
@@ -884,7 +891,7 @@ function App() {
                   )}
                   <IconButton
                     label={"在 " + g.name + " 新建聊天"}
-                    disabled={opening}
+                    disabled={opening || initializing}
                     onClick={() => void run(() => create(g.id))}
                   >
                     <Plus size={15} />
@@ -1384,7 +1391,7 @@ function App() {
             <div className="composer-input">
               <textarea
                 ref={textarea}
-                disabled={opening}
+                disabled={opening || initializing}
                 aria-label="消息"
                 placeholder="发送消息…"
                 value={draft}
@@ -1433,7 +1440,7 @@ function App() {
                         : "选择模型"
                     }
                     aria-expanded={modelMenu}
-                    disabled={opening}
+                    disabled={opening || initializing}
                     onClick={() => {
                       setModelMenu(!modelMenu);
                       setSearch("");

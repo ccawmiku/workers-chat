@@ -33,7 +33,7 @@ describe("direct transport and templates", () => {
     copy.messages[copy.currentId!]!.content = "independent";
     expect(b.content).toBe("B");
   });
-  it("expands message placeholders at their positions without reasoning or excluded turns", () => {
+  it("expands message placeholders at their positions without reasoning while ignoring legacy exclusion switches", () => {
     const chat = newChat();
     const u = addMessage(chat, "user", "old question");
     addMessage(chat, "assistant", "old answer").reasoning = "private";
@@ -52,7 +52,7 @@ describe("direct transport and templates", () => {
       chat.currentId!,
     );
     expect(result).toBe(
-      'prefix [{"role":"user","content":"new question"}] suffix []',
+      'prefix [{"role":"user","content":"old question"}] suffix []',
     );
     expect(result).not.toContain("private");
     expect(extractTitle('```json\n{"title":"📖 新话题"}\n```')).toBe(

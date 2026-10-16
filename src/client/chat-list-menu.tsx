@@ -28,24 +28,39 @@ export function ChatListMenu({
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const running = ["running", "pending"].includes(chat.status ?? "");
-  const actions = [
-    { name: "export", label: "导出 JSON", Icon: Download },
-    { name: "rename", label: "重命名", Icon: Pencil },
-    {
-      name: "title",
-      label: "重新生成标题",
-      Icon: RotateCcw,
-      disabled: running || chat.deleted,
-    },
-    { name: "pin", label: chat.pinned ? "取消置顶" : "置顶", Icon: Pin },
-    { name: "duplicate", label: "复制", Icon: Copy, disabled: running },
-    {
-      name: "archive",
-      label: chat.archived ? "取消归档" : "归档",
-      Icon: Archive,
-    },
-    { name: "delete", label: chat.deleted ? "永久删除" : "删除", Icon: Trash2 },
-  ];
+  const actions: {
+    name: string;
+    label: string;
+    Icon: typeof Copy;
+    disabled?: boolean;
+  }[] = chat.deleted
+    ? [
+        { name: "export", label: "导出 JSON", Icon: Download },
+        { name: "restore", label: "恢复聊天", Icon: RotateCcw },
+        { name: "delete", label: "永久删除", Icon: Trash2 },
+      ]
+    : [
+        { name: "export", label: "导出 JSON", Icon: Download },
+        { name: "rename", label: "重命名", Icon: Pencil },
+        {
+          name: "title",
+          label: "重新生成标题",
+          Icon: RotateCcw,
+          disabled: running || chat.deleted,
+        },
+        { name: "pin", label: chat.pinned ? "取消置顶" : "置顶", Icon: Pin },
+        { name: "duplicate", label: "复制", Icon: Copy, disabled: running },
+        {
+          name: "archive",
+          label: chat.archived ? "取消归档" : "归档",
+          Icon: Archive,
+        },
+        {
+          name: "delete",
+          label: chat.deleted ? "永久删除" : "删除",
+          Icon: Trash2,
+        },
+      ];
   return (
     <>
       <button

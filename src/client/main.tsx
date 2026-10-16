@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -31,22 +32,16 @@ import {
   Folder,
   Download,
   Upload,
-  Eye,
   LogOut,
   LoaderCircle,
   Pencil,
-  Sun,
-  Moon,
   Search,
   CircleAlert,
   FileText,
   Info,
   ArrowRight,
-  MessageSquareOff,
-  MessageSquarePlus,
   Palette,
   UserRound,
-  Pin,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -58,7 +53,6 @@ import {
   type ModelRef,
   route,
   indexChildren,
-  contextTurns,
   markdownExport,
   estimateTokens,
   contextMessages,
@@ -69,6 +63,7 @@ import "./style.css";
 import { IconButton, ParameterControl, useDialogFocus } from "./controls";
 import { ModelControls, TemplatePicker, MessageUsage } from "./chat-controls";
 import { SettingsTools, KeyReveal } from "./settings-tools";
+import { MessageEditor } from "./message-editor";
 import { ImportDialog } from "./import-dialog";
 import {
   DeviceConnectionProvider,
@@ -133,9 +128,13 @@ function App() {
     [view, setView] = useState("active");
   const [menu, setMenu] = useState<string | null>(null),
     [expanded, setExpanded] = useState(false),
-    [editing, setEditing] = useState<{ id: string; content: string } | null>(
-      null,
-    ),
+    [editSaving, setEditSaving] = useState(false),
+    [editing, setEditing] = useState<{
+      id: string;
+      content: string;
+      expanded: boolean;
+      offset: number;
+    } | null>(null),
     [groupMenu, setGroupMenu] = useState<string | null>(null),
     [scrollBottom, setScrollBottom] = useState(false);
   const [settingsTab, setSettingsTab] = useState("providers");
@@ -290,6 +289,7 @@ function App() {
       }>("/chats/" + id);
       if (sequence !== navigationSeq.current) return;
       idRef.current = id;
+      scrollIntent.current = {};
       localStorage.setItem("lastChat", id);
       setChat(result.chat);
       setJob(result.job);
@@ -446,13 +446,56 @@ function App() {
     document.addEventListener("visibilitychange", activate);
     return () => document.removeEventListener("visibilitychange", activate);
   }, [auth, run, refresh, loadNavigation]);
-  useEffect(() => {
-    if (stick.current)
-      scrollRef.current?.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: "instant",
-      });
-  }, [chat?.messages, draft, chat?.id]);
+  const scrollIntent = useRef<{ id?: string; offset?: number } | null>(null);
+  function messageElement(id: string) {
+    return scrollRef.current?.querySelector<HTMLElement>(
+      '[data-message-id="' + CSS.escape(id) + '"]',
+    );
+  }
+  useLayoutEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const intent = scrollIntent.current;
+    if (intent?.id) {
+      const element = messageElement(intent.id);
+      if (element) {
+        container.scrollTop +=
+          element.getBoundingClientRect().top -
+          container.getBoundingClientRect().top -
+          (intent.offset ?? 18);
+        scrollIntent.current = null;
+        stick.current = false;
+      }
+    } else if (intent || (stick.current && !editing)) {
+      container.scrollTop = container.scrollHeight;
+      scrollIntent.current = null;
+      stick.current = true;
+    }
+  }, [chat?.messages, chat?.id, draft, editing?.id, editing?.expanded]);
+  function beginEdit(message: Message) {
+    setError("");
+    const offset = Math.max(
+      18,
+      Math.min(
+        messageElement(message.id)!.getBoundingClientRect().top -
+          scrollRef.current!.getBoundingClientRect().top,
+        scrollRef.current!.clientHeight - 140,
+      ),
+    );
+    stick.current = false;
+    scrollIntent.current = { id: message.id, offset };
+    setEditing({
+      id: message.id,
+      content: message.content,
+      expanded: false,
+      offset,
+    });
+  }
+  function finishEdit() {
+    if (editing)
+      scrollIntent.current = { id: editing.id, offset: editing.offset };
+    setEditing(null);
+  }
   async function patch(
     value: Partial<Omit<Chat, "rounds">> & { rounds?: number | null },
   ) {
@@ -495,7 +538,11 @@ function App() {
       },
     );
   }
-  async function action(name: string, body: Record<string, unknown> = {}) {
+  async function action(
+    name: string,
+    body: Record<string, unknown> = {},
+    revealMessage?: string,
+  ) {
     if (!chat) return;
     if (name === "stop" && connection.stop(chat.id)) return;
     await flushDraft();
@@ -507,6 +554,14 @@ function App() {
     if (["regenerate", "retry", "continue", "edit"].includes(name))
       acceptGeneration(result);
     setMenu(null);
+    if (
+      ["select", "fork", "regenerate", "retry", "continue"].includes(name) ||
+      (name === "edit" &&
+        chat.messages[String(body.messageId)]?.role === "user")
+    ) {
+      stick.current = !revealMessage;
+      scrollIntent.current = revealMessage ? { id: revealMessage } : {};
+    }
     if (name === "fork") {
       await loadNavigation();
       await open(result.id);
@@ -587,18 +642,6 @@ function App() {
         .includes(search.toLowerCase()),
   );
   const path = useMemo(() => (chat ? route(chat) : []), [chat]);
-  const excludedIds = useMemo(
-    () =>
-      new Set(
-        chat
-          ? contextTurns(chat)
-              .filter((turn) => turn.some((m) => m.excluded))
-              .flat()
-              .map((m) => m.id)
-          : [],
-      ),
-    [chat],
-  );
   const byParent = useMemo(
     () => (chat ? indexChildren(chat) : new Map<string | null, Message[]>()),
     [chat?.messages],
@@ -679,6 +722,8 @@ function App() {
       await loadNavigation();
       await open(copy.id);
       return;
+    } else if (name === "restore") {
+      await api("/chats/" + c.id, "PATCH", { deleted: false });
     } else if (name === "delete" && c.deleted) {
       if (!confirm("永久删除这个聊天？无法恢复。")) return;
       await api("/chats/" + c.id + "/permanent", "DELETE", {});
@@ -953,11 +998,6 @@ function App() {
                 onClick: () => showSettings("security"),
               },
               {
-                label: "导入聊天",
-                icon: <Upload size={19} />,
-                onClick: () => fileRef.current?.click(),
-              },
-              {
                 label: view === "archive" ? "返回聊天" : "归档",
                 icon: <Archive size={19} />,
                 onClick: () =>
@@ -968,18 +1008,6 @@ function App() {
                 icon: <Trash2 size={19} />,
                 onClick: () => setView(view === "trash" ? "active" : "trash"),
               },
-              ...(view === "trash"
-                ? [
-                    {
-                      label: "导出回收站",
-                      icon: <Download size={19} />,
-                      onClick: () =>
-                        void downloadChats(
-                          chats.filter((c) => c.deleted).map((c) => c.id),
-                        ),
-                    },
-                  ]
-                : []),
               {
                 label: "退出登录",
                 icon: <LogOut size={19} />,
@@ -1090,11 +1118,8 @@ function App() {
                 return (
                   <article
                     key={m.id}
-                    className={
-                      "message " +
-                      m.role +
-                      (excludedIds.has(m.id) ? " excluded" : "")
-                    }
+                    className={"message " + m.role}
+                    data-message-id={m.id}
                     onPointerDown={(e) => {
                       if (
                         e.pointerType !== "touch" ||
@@ -1131,31 +1156,43 @@ function App() {
                     }}
                   >
                     {editing?.id === m.id ? (
-                      <div className="edit-area">
-                        <textarea
-                          value={editing.content}
-                          onChange={(e) =>
-                            setEditing({ ...editing, content: e.target.value })
-                          }
-                        />
-                        <div>
-                          <button onClick={() => setEditing(null)}>取消</button>
-                          <button
-                            className="primary"
-                            onClick={() =>
-                              void run(async () => {
-                                await action("edit", {
-                                  messageId: m.id,
-                                  content: editing.content,
-                                });
-                                setEditing(null);
-                              })
+                      <MessageEditor
+                        value={editing.content}
+                        expanded={editing.expanded}
+                        saving={editSaving}
+                        error={error}
+                        user={m.role === "user"}
+                        onChange={(content) =>
+                          setEditing({ ...editing, content })
+                        }
+                        onExpand={(expanded) => {
+                          scrollIntent.current = {
+                            id: m.id,
+                            offset: editing.offset,
+                          };
+                          setEditing({ ...editing, expanded });
+                        }}
+                        onCancel={finishEdit}
+                        onSave={() => {
+                          setEditSaving(true);
+                          void run(async () => {
+                            await action("edit", {
+                              messageId: m.id,
+                              content: editing.content,
+                            });
+                            if (m.role === "assistant")
+                              scrollIntent.current = {
+                                id: m.id,
+                                offset: editing.offset,
+                              };
+                            else {
+                              scrollIntent.current = {};
+                              stick.current = true;
                             }
-                          >
-                            保存{m.role === "user" ? "为新分支" : ""}
-                          </button>
-                        </div>
-                      </div>
+                            setEditing(null);
+                          }).finally(() => setEditSaving(false));
+                        }}
+                      />
                     ) : (
                       <div className="message-body">
                         {m.reasoning && (
@@ -1222,9 +1259,7 @@ function App() {
                           <IconButton
                             label="编辑消息"
                             disabled={!!job}
-                            onClick={() =>
-                              setEditing({ id: m.id, content: m.content })
-                            }
+                            onClick={() => beginEdit(m)}
                           >
                             <Pencil size={14} />
                           </IconButton>
@@ -1278,25 +1313,6 @@ function App() {
                               <RotateCcw size={15} />
                             </IconButton>
                           )}
-                          <IconButton
-                            label={
-                              excludedIds.has(m.id)
-                                ? "加入本轮上下文"
-                                : "移除本轮上下文"
-                            }
-                            disabled={!!job}
-                            onClick={() =>
-                              void run(() =>
-                                action("exclude", { messageId: m.id }),
-                              )
-                            }
-                          >
-                            {excludedIds.has(m.id) ? (
-                              <MessageSquarePlus size={15} />
-                            ) : (
-                              <MessageSquareOff size={15} />
-                            )}
-                          </IconButton>
                           <IconButton
                             label="复制纯文字"
                             onClick={() =>
@@ -1578,65 +1594,6 @@ function App() {
           </div>
           {panelTab === "settings" ? (
             <div className="panel-content">
-              <label className="toggle">
-                流式回答
-                <input
-                  type="checkbox"
-                  checked={chat.stream}
-                  onChange={(e) =>
-                    void run(() => patch({ stream: e.target.checked }))
-                  }
-                />
-              </label>
-              <h3>生成参数</h3>
-              {(["temperature", "top_p", "top_k"] as const).map((key) => (
-                <ParameterControl
-                  key={key}
-                  name={
-                    key === "temperature"
-                      ? "温度"
-                      : key === "top_p"
-                        ? "Top P"
-                        : "Top K"
-                  }
-                  value={chat.parameters[key]}
-                  max={key === "temperature" ? 2 : key === "top_p" ? 1 : 100000}
-                  step={key === "top_k" ? 1 : 0.05}
-                  onChange={(value) => {
-                    const p = { ...chat.parameters };
-                    if (value === undefined) delete p[key];
-                    else p[key] = value;
-                    void run(() => patch({ parameters: p }));
-                  }}
-                />
-              ))}
-              <label>
-                最近上下文轮数
-                <input
-                  type="number"
-                  min="1"
-                  placeholder="全部"
-                  defaultValue={chat.rounds ?? ""}
-                  key={chat.id}
-                  onBlur={(e) =>
-                    void run(() =>
-                      patch({
-                        rounds: e.target.value ? Number(e.target.value) : null,
-                      }),
-                    )
-                  }
-                />
-              </label>
-              <label className="toggle">
-                停止的部分纳入上下文
-                <input
-                  type="checkbox"
-                  checked={chat.includeStopped}
-                  onChange={(e) =>
-                    void run(() => patch({ includeStopped: e.target.checked }))
-                  }
-                />
-              </label>
               <h3>系统提示词</h3>
               <label>
                 选择模板时
@@ -1728,63 +1685,59 @@ function App() {
               >
                 ＋ 添加提示词卡片
               </button>
-              <button onClick={() => setModal("preview")}>预览下次请求</button>
 
-              <h3>聊天管理</h3>
-              <div className="chat-management">
-                <button
-                  onClick={() => {
-                    const title = prompt("重命名聊天", chat.title);
-                    if (title) void run(() => patch({ title }));
-                  }}
-                >
-                  <Pencil size={16} />
-                  重命名聊天
-                </button>
-                <button
-                  disabled={
-                    !!job ||
-                    ["pending", "running"].includes(titleJob?.status ?? "")
-                  }
-                  onClick={() => void run(() => action("title"))}
-                >
-                  <RotateCcw size={16} />
-                  重新生成标题
-                </button>
-                {titleJob?.status === "error" && (
-                  <p className="danger-text">标题生成失败：{titleJob.error}</p>
-                )}
-
-                <button
-                  onClick={() =>
-                    void run(() => patch({ pinned: !chat.pinned }))
-                  }
-                >
-                  <Pin size={16} />
-                  {chat.pinned ? "取消置顶" : "置顶聊天"}
-                </button>
-                <button
-                  onClick={() =>
-                    void run(() => patch({ archived: !chat.archived }))
-                  }
-                >
-                  <Archive size={16} />
-                  {chat.archived ? "取消归档" : "归档聊天"}
-                </button>
-                <select
-                  aria-label="移动聊天"
-                  value={chat.groupId ?? ""}
+              <label className="toggle">
+                流式回答
+                <input
+                  type="checkbox"
+                  checked={chat.stream}
                   onChange={(e) =>
-                    void run(() => patch({ groupId: e.target.value || null }))
+                    void run(() => patch({ stream: e.target.checked }))
                   }
-                >
-                  <option value="">主列表</option>
-                  {groups.map((g) => (
-                    <option key={g.id} value={g.id}>
-                      {g.name}
-                    </option>
-                  ))}
-                </select>
+                />
+              </label>
+              <h3>生成参数</h3>
+              {(["temperature", "top_p", "top_k"] as const).map((key) => (
+                <ParameterControl
+                  key={key}
+                  name={
+                    key === "temperature"
+                      ? "温度"
+                      : key === "top_p"
+                        ? "Top P"
+                        : "Top K"
+                  }
+                  value={chat.parameters[key]}
+                  max={key === "temperature" ? 2 : key === "top_p" ? 1 : 100000}
+                  step={key === "top_k" ? 1 : 0.05}
+                  onChange={(value) => {
+                    const p = { ...chat.parameters };
+                    if (value === undefined) delete p[key];
+                    else p[key] = value;
+                    void run(() => patch({ parameters: p }));
+                  }}
+                />
+              ))}
+              <label>
+                最近上下文轮数
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="全部"
+                  defaultValue={chat.rounds ?? ""}
+                  key={chat.id}
+                  onBlur={(e) =>
+                    void run(() =>
+                      patch({
+                        rounds: e.target.value ? Number(e.target.value) : null,
+                      }),
+                    )
+                  }
+                />
+              </label>
+
+              <h3>当前聊天导出</h3>
+              <div className="chat-exports">
                 <button onClick={() => void downloadChats([chat.id])}>
                   <Download size={16} />
                   导出完整树 JSON
@@ -1801,53 +1754,6 @@ function App() {
                   <FileText size={16} />
                   导出当前路线 Markdown
                 </button>
-                <button
-                  onClick={() =>
-                    void downloadChats(
-                      chats.filter((c) => !c.deleted).map((c) => c.id),
-                    )
-                  }
-                >
-                  <Download size={16} />
-                  导出全部聊天（含归档）
-                </button>
-                <button onClick={() => fileRef.current?.click()}>
-                  <Upload size={16} />
-                  导入 OpenWebUI JSON
-                </button>
-                <button
-                  className="danger-text"
-                  onClick={() =>
-                    void run(async () => {
-                      await patch({ deleted: !chat.deleted });
-                      setModal("");
-                    })
-                  }
-                >
-                  <Trash2 size={16} />
-                  {chat.deleted ? "从回收站恢复" : "移入回收站"}
-                </button>
-                {chat.deleted && (
-                  <button
-                    className="danger-text"
-                    onClick={() => {
-                      if (confirm("永久删除这个聊天？无法恢复。"))
-                        void run(async () => {
-                          await api(
-                            "/chats/" + chat.id + "/permanent",
-                            "DELETE",
-                            {},
-                          );
-                          idRef.current = null;
-                          setChat(null);
-                          setModal("");
-                          await loadNavigation();
-                        });
-                    }}
-                  >
-                    永久删除聊天
-                  </button>
-                )}
               </div>
             </div>
           ) : (
@@ -1857,8 +1763,20 @@ function App() {
                   chat={chat}
                   providers={providers}
                   onSelect={(id) => {
-                    if (!job)
-                      void run(() => action("select", { messageId: id }));
+                    void run(async () => {
+                      if (job) {
+                        const element = messageElement(id),
+                          container = scrollRef.current;
+                        if (!element || !container)
+                          throw Error("生成完成后可以切换其他分支");
+                        stick.current = false;
+                        container.scrollTop +=
+                          element.getBoundingClientRect().top -
+                          container.getBoundingClientRect().top -
+                          18;
+                      } else await action("select", { messageId: id }, id);
+                      if (innerWidth <= 760) setPanel(false);
+                    });
                   }}
                 />
               </Suspense>
@@ -1884,11 +1802,7 @@ function App() {
                   ? "设置"
                   : modal.startsWith("versions:")
                     ? "消息版本"
-                    : modal === "tree"
-                      ? "分支总览"
-                      : modal === "preview"
-                        ? "请求预览"
-                        : "消息详情"}
+                    : "消息详情"}
               </h2>
               <IconButton label="关闭" onClick={() => setModal("")}>
                 <X size={20} />
@@ -1903,6 +1817,24 @@ function App() {
                 setAppearance={setAppearance}
                 run={run}
                 refresh={loadConfig}
+                onExportChats={() =>
+                  void run(() =>
+                    downloadChats(
+                      chats.filter((c) => !c.deleted).map((c) => c.id),
+                    ),
+                  )
+                }
+                onExportTrash={() =>
+                  void run(() =>
+                    downloadChats(
+                      chats.filter((c) => c.deleted).map((c) => c.id),
+                    ),
+                  )
+                }
+                onImportChats={() => {
+                  setModal("");
+                  fileRef.current?.click();
+                }}
                 onLogout={() => {
                   setAuth(false);
                   setChat(null);
@@ -1932,8 +1864,6 @@ function App() {
                     </button>
                   ))}
               </div>
-            ) : modal === "preview" && chat ? (
-              <RequestPreview chat={chat} draft={draft} run={run} />
             ) : modal.startsWith("request:") &&
               chat?.messages[modal.slice(8)] ? (
               <div className="message-details">
@@ -2167,36 +2097,6 @@ function Login({
     </div>
   );
 }
-function RequestPreview({
-  chat,
-  draft,
-  run,
-}: {
-  chat: Chat;
-  draft: string;
-  run: (fn: () => Promise<void>) => Promise<void>;
-}) {
-  const [data, setData] = useState("");
-  useEffect(() => {
-    void run(async () => {
-      setData(
-        JSON.stringify(
-          await api("/chats/" + chat.id + "/preview", "POST", { draft }),
-          null,
-          2,
-        ),
-      );
-    });
-  }, [chat.id]);
-  return (
-    <>
-      <p className="muted">
-        下次请求的文字上下文和参数，不包含密钥。历史思考内容不发送。
-      </p>
-      <pre className="request-preview">{data}</pre>
-    </>
-  );
-}
 type Appearance = {
   theme: string;
   font: number;
@@ -2259,6 +2159,9 @@ function SettingsPanel({
   run,
   refresh,
   onLogout,
+  onExportChats,
+  onExportTrash,
+  onImportChats,
 }: {
   initialTab: string;
   providers: ProviderView[];
@@ -2268,6 +2171,9 @@ function SettingsPanel({
   run: (fn: () => Promise<void>) => Promise<void>;
   refresh: () => Promise<void>;
   onLogout: () => void;
+  onExportChats: () => void;
+  onExportTrash: () => void;
+  onImportChats: () => void;
 }) {
   const connection = useDeviceConnection();
   const [tab, setTab] = useState(initialTab),
@@ -2345,6 +2251,7 @@ function SettingsPanel({
           ["models", "模型"],
           ["templates", "提示词模板"],
           ["generation", "生成默认"],
+          ["data", "聊天数据"],
           ["backup", "设置备份"],
           ["appearance", "外观"],
           ["security", "账号与设备"],
@@ -2413,6 +2320,28 @@ function SettingsPanel({
                 许可历史
               </a>
             </p>
+          </>
+        )}
+        {tab === "data" && (
+          <>
+            <h3>聊天数据</h3>
+            <p className="muted">
+              JSON 保留全部消息分支，可与 OpenWebUI 导入导出。
+            </p>
+            <div className="settings-data-actions">
+              <button onClick={onExportChats}>
+                <Download size={17} />
+                导出全部聊天（含归档）
+              </button>
+              <button onClick={onImportChats}>
+                <Upload size={17} />
+                导入 OpenWebUI JSON
+              </button>
+              <button onClick={onExportTrash}>
+                <Download size={17} />
+                单独导出回收站
+              </button>
+            </div>
           </>
         )}
         <SettingsTools

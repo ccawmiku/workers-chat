@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronRight, RotateCcw, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, RotateCcw } from "lucide-react";
 import type { Effort } from "../shared/chat";
 import { useDialogFocus } from "./controls";
 
@@ -232,7 +232,7 @@ export function EffortControl({
         focus
       >
         <div className="effort-heading">
-          <Zap size={18} />
+          <span aria-hidden="true" />
           <strong aria-live="polite">{effortLabels[current]}</strong>
           <button
             className="icon-button"

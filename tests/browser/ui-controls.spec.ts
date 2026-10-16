@@ -164,29 +164,12 @@ for (const mobile of [false, true]) {
       element.style.zoom = "1";
     });
 
-    const first = page.locator(".message.assistant").first();
-    await first
-      .getByRole("button", { name: "移除本轮上下文", exact: true })
-      .click();
-    await expect(page.locator(".message.excluded")).toHaveCount(2);
-    const contents = await page.evaluate(async (chatId) => {
-      const response = await fetch("/api/chats/" + chatId + "/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      return (
-        (await response.json()) as { messages: { content: string }[] }
-      ).messages.map((m: { content: string }) => m.content);
-    }, id);
-    expect(contents).toEqual(["第二轮问题", "第二轮回答"]);
-    await page
-      .locator(".message.user")
-      .first()
-      .getByRole("button", { name: "加入本轮上下文", exact: true })
-      .click();
-    await expect(page.locator(".message.excluded")).toHaveCount(0);
-
+    await expect(
+      page.getByRole("button", { name: "移除本轮上下文", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "加入本轮上下文", exact: true }),
+    ).toHaveCount(0);
     await page
       .getByRole("button", { name: "上下文使用量", exact: true })
       .click();
@@ -238,15 +221,28 @@ for (const mobile of [false, true]) {
     await page
       .getByRole("button", { name: "当前聊天设置", exact: true })
       .click();
-    await expect(page.locator(".parameters .chat-management")).toContainText(
+    const panel = page.locator(".parameters");
+    await expect(panel.locator("h3").first()).toHaveText("系统提示词");
+    for (const name of [
+      "重命名聊天",
       "重新生成标题",
-    );
-    await expect(page.locator(".parameters .chat-management")).toContainText(
-      "导出完整树 JSON",
-    );
-    await expect(page.locator(".parameters .chat-management")).toContainText(
+      "置顶聊天",
+      "归档聊天",
       "移入回收站",
-    );
+      "预览下次请求",
+      "导出全部聊天（含归档）",
+      "导入 OpenWebUI JSON",
+    ])
+      await expect(
+        panel.getByRole("button", { name, exact: true }),
+      ).toHaveCount(0);
+    await expect(
+      panel.getByText("停止的部分纳入上下文", { exact: true }),
+    ).toHaveCount(0);
+    await expect(panel.getByLabel("移动聊天", { exact: true })).toHaveCount(0);
+    await expect(
+      panel.getByRole("button", { name: "导出当前路线 Markdown", exact: true }),
+    ).toBeVisible();
     await page.getByRole("button", { name: "返回聊天", exact: true }).click();
     if (mobile) {
       for (const viewport of [

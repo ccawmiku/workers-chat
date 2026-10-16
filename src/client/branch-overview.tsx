@@ -16,11 +16,14 @@ export default function BranchOverview({
   onSelect: (id: string) => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
+  const select = useRef(onSelect);
+  select.current = onSelect;
+  const selectNode = useRef((id: string) => select.current(id)).current;
   const source = useRef(
     writable({
       history: { currentId: chat.currentId, messages: {} },
       theme: "light",
-      onSelect,
+      onSelect: selectNode,
     }),
   );
   useEffect(() => {
@@ -38,9 +41,6 @@ export default function BranchOverview({
       messages: Record<string, unknown> = {};
     for (let index = 0; index < pending.length; index++) {
       const message = pending[index]!;
-      const provider = providers.find(
-        (p) => p.id === message.model?.providerId,
-      );
       messages[message.id] = {
         ...message,
         model: message.model
@@ -62,7 +62,7 @@ export default function BranchOverview({
       source.current.set({
         history: { currentId: chat.currentId, messages },
         theme: document.documentElement.dataset.theme ?? "light",
-        onSelect,
+        onSelect: selectNode,
       });
     update();
     const observer = new MutationObserver(update);
@@ -71,6 +71,6 @@ export default function BranchOverview({
       attributeFilter: ["data-theme"],
     });
     return () => observer.disconnect();
-  }, [chat, providers, onSelect]);
+  }, [chat.id, chat.messages, chat.currentId, providers, selectNode]);
   return <div className="owui-overview" ref={root} aria-label="分支总览" />;
 }

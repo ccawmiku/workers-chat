@@ -116,11 +116,7 @@ export async function queueTitle(
     ? chat.currentId
     : Object.values(chat.messages)
         .filter(
-          (m) =>
-            m.role === "assistant" &&
-            m.status === "complete" &&
-            m.content &&
-            !m.excluded,
+          (m) => m.role === "assistant" && m.status === "complete" && m.content,
         )
         .sort((a, b) => a.createdAt - b.createdAt)[0]?.id;
   if (

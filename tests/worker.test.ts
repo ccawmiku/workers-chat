@@ -338,7 +338,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     const sessions = await value<{ id: string }[]>("/auth/sessions");
     expect(sessions[0]!.id).not.toBe(cookie.replace("session=", ""));
   });
-  it("excludes complete user-answer turns through either message and removes the subtree-delete endpoint", async () => {
+  it("removes context-exclusion and subtree-delete endpoints without losing history", async () => {
     const imported = await value<{ ids: string[] }>("/import", "POST", {
       data: [
         {
@@ -384,28 +384,21 @@ describe("workerd HTTP + D1 + Workflows", () => {
       ],
     });
     const id = imported.ids[0]!;
-    const first = await value<Chat>("/chats/" + id + "/exclude", "POST", {
-      messageId: "a1",
-    });
     expect(
-      ["u1", "a1", "av"].every((key) => first.messages[key]?.excluded),
-    ).toBe(true);
-    expect(first.messages.u2?.excluded).not.toBe(true);
+      (await request("/chats/" + id + "/exclude", "POST", { messageId: "a1" }))
+        .status,
+    ).toBe(404);
     const preview = await value<{ messages: { content: string }[] }>(
       "/chats/" + id + "/preview",
       "POST",
       {},
     );
     expect(preview.messages.map((m) => m.content)).toEqual([
+      "first question",
+      "first answer",
       "second question",
       "second answer",
     ]);
-    const restored = await value<Chat>("/chats/" + id + "/exclude", "POST", {
-      messageId: "u1",
-    });
-    expect(
-      ["u1", "a1", "av"].some((key) => restored.messages[key]?.excluded),
-    ).toBe(false);
     expect(
       (
         await request("/chats/" + id + "/delete-message", "POST", {
@@ -529,7 +522,6 @@ describe("workerd HTTP + D1 + Workflows", () => {
     await value("/chats/" + id + "/draft", "PUT", {
       draft: "keep unsent draft",
     });
-    await value("/chats/" + id + "/exclude", "POST", { messageId: "u" });
     const count = upstreamCalls.length;
     await value("/chats/" + id + "/regenerate", "POST", { messageId: "a" });
     const regenerated = await finished(id);
@@ -551,14 +543,6 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(regenerated.messages.a?.content).toBe("original answer");
     expect(regenerated.messages.laterA?.content).toBe("old followup answer");
     expect(regenerated.draft).toBe("keep unsent draft");
-    await value("/chats/" + id + "/exclude", "POST", {
-      messageId: question.id,
-    });
-    const toggled = await value<Chat>("/chats/" + id + "/exclude", "POST", {
-      messageId: "u",
-    });
-    expect(toggled.messages.u?.excluded).toBe(false);
-    expect(toggled.messages[question.id]?.excluded).toBe(true);
     await value("/chats/" + id + "/select", "POST", { messageId: "u" });
     expect((await value<{ chat: Chat }>("/chats/" + id)).chat.currentId).toBe(
       "laterA",

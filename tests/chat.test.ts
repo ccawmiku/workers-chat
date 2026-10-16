@@ -9,7 +9,6 @@ import {
   deleteSubtree,
   requestPreview,
   defaultSettings,
-  toggleContextTurn,
   contextMessages,
   type Provider,
 } from "../src/shared/chat";
@@ -30,45 +29,22 @@ const provider = (id: string): Provider => ({
   ],
 });
 describe("message tree", () => {
-  it("toggles a question and all answer versions together without touching later or edited-user turns", () => {
+  it("includes selected history and stopped partial replies despite legacy exclusion options", () => {
     const chat = newChat();
-    const question = addMessage(chat, "user", "question");
-    const first = addMessage(chat, "assistant", "first answer");
-    const next = addMessage(chat, "user", "next question");
-    const nextAnswer = addMessage(chat, "assistant", "next answer");
-    const alternative = addMessage(
-      chat,
-      "assistant",
-      "alternative",
-      question.id,
-    );
-    const edited = addMessage(chat, "user", "edited question", null);
-    const editedAnswer = addMessage(chat, "assistant", "edited answer");
-    chat.currentId = nextAnswer.id;
-    expect(toggleContextTurn(chat, first.id)).toBe(true);
-    expect([question, first, alternative].every((m) => m.excluded)).toBe(true);
-    expect(
-      [next, nextAnswer, edited, editedAnswer].some((m) => m.excluded),
-    ).toBe(false);
+    addMessage(chat, "user", "question").excluded = true;
+    const answer = addMessage(chat, "assistant", "partial");
+    answer.status = "stopped";
+    answer.excluded = true;
+    answer.reasoning = "private";
+    chat.includeStopped = false;
+    addMessage(chat, "user", "next");
     expect(contextMessages(chat)).toEqual([
-      { role: "user", content: "next question" },
-      { role: "assistant", content: "next answer" },
+      { role: "user", content: "question" },
+      { role: "assistant", content: "partial" },
+      { role: "user", content: "next" },
     ]);
-    expect(toggleContextTurn(chat, question.id)).toBe(false);
-    expect(contextMessages(chat).map((m) => m.content)).toEqual([
-      "question",
-      "first answer",
-      "next question",
-      "next answer",
-    ]);
-    // Previously imported half-excluded pairs also produce no orphan question.
-    first.excluded = true;
-    expect(contextMessages(chat).map((m) => m.content)).toEqual([
-      "next question",
-      "next answer",
-    ]);
-    toggleContextTurn(chat, alternative.id);
-    expect(contextMessages(chat)).toHaveLength(4);
+    chat.rounds = 1;
+    expect(contextMessages(chat)).toEqual([{ role: "user", content: "next" }]);
   });
   it("rejects inherited properties and empty parent references as message IDs", () => {
     for (const id of ["__proto__", "constructor", "toString", ""]) {
@@ -140,7 +116,10 @@ describe("message tree", () => {
     expect(result.request.model).toBe("same-model");
     expect(result.request.reasoning_effort).toBe("max");
     expect(result.request).toMatchObject({ temperature: 1, top_p: 0.9 });
-    expect(result.request.messages).toEqual([]);
+    expect(result.request.messages).toEqual([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "body" },
+    ]);
     chat.effort = "inherit";
     expect(
       requestPreview(chat, settings, [provider("two")]).request,

@@ -7,7 +7,6 @@ export function renderTitlePrompt(
 ) {
   const copy = { ...chat, currentId: selection };
   const messages = contextTurns(copy)
-    .filter((turn) => !turn.some((m) => m.excluded))
     .flat()
     .filter((m) => (m.role === "user" || m.role === "assistant") && m.content)
     .map((m) => ({ role: m.role, content: m.content }));

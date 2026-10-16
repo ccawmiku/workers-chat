@@ -9,7 +9,6 @@ import {
   editMessage,
   selectBranch,
   route,
-  toggleContextTurn,
   forkChat,
   duplicateChat,
   sanitizeUsage,
@@ -664,7 +663,7 @@ async function api(request: Request, env: Env) {
       }
       if (body.parameters !== undefined)
         chat.parameters = parameters(body.parameters);
-      for (const k of ["stream", "includeStopped"] as const)
+      for (const k of ["stream"] as const)
         if (typeof body[k] === "boolean") chat[k] = body[k];
       if (body.rounds !== undefined) {
         if (body.rounds === null) delete chat.rounds;
@@ -777,9 +776,6 @@ async function api(request: Request, env: Env) {
       }
     } else if (action === "select") {
       selectBranch(chat, str(body.messageId, 500));
-    } else if (action === "exclude") {
-      if (!message) throw new HttpError(404, "消息不存在");
-      toggleContextTurn(chat, message.id);
     } else if (action === "fork") {
       if (!message) throw new HttpError(404, "消息不存在");
       const fork = forkChat(

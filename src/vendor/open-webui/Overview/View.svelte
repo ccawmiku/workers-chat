@@ -144,9 +144,11 @@
         return false;
     };
 
-	const setLayoutDirection = (direction: LayoutDirection) => {
+	const setLayoutDirection = async (direction: LayoutDirection) => {
 		layoutDirection = direction;
-		drawFlow(layoutDirection);
+		await drawFlow(layoutDirection);
+		await tick();
+		if (!pinned) await fitView();
 	};
 
 	onMount(() => {

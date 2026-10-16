@@ -4,11 +4,26 @@
   height: 100%;
   min-height: 240px;
 }
+/* Handles are library buttons: isolate them from the application's button padding. */
+.owui-overview .svelte-flow__handle {
+  padding: 0;
+  margin: 0;
+  width: 6px;
+  height: 6px;
+  min-width: 6px;
+  min-height: 6px;
+  border: 1px solid var(--bg);
+  border-radius: 50%;
+  background: #9ca3af;
+}
 .owui-overview .w-full {
   width: 100%;
 }
 .owui-overview .h-full {
   height: 100%;
+}
+.owui-overview .group {
+  margin: 0;
 }
 .owui-overview .relative {
   position: relative;

@@ -333,6 +333,7 @@ header {
   font-size: 11px;
 }
 .message-scroll {
+  overflow-anchor: none;
   flex: 1;
   overflow-y: auto;
   scroll-behavior: auto;
@@ -521,14 +522,6 @@ header {
   background: #f55a5a0b;
   border-radius: 8px;
 }
-.message.excluded {
-  opacity: 0.5;
-}
-.message.excluded:before {
-  content: "已排除上下文";
-  font-size: 10px;
-  color: var(--muted);
-}
 details {
   font-size: 13px;
   color: var(--muted);
@@ -570,6 +563,35 @@ summary {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 8px;
+}
+.edit-area > .edit-toolbar {
+  justify-content: space-between;
+  align-items: center;
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.edit-fullscreen-backdrop {
+  position: fixed;
+  inset: 0;
+  padding: 16px;
+  z-index: 110;
+  background: var(--bg);
+}
+.edit-fullscreen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  max-width: 1500px;
+  margin: auto;
+}
+.edit-fullscreen textarea {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+}
+.edit-placeholder {
+  height: 220px;
 }
 .composer-area {
   width: 100%;
@@ -1010,11 +1032,44 @@ summary {
   font-size: 14px;
 }
 .panel-content {
+  flex: 1;
+  min-height: 0;
   padding: 12px 20px 24px;
   overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent;
+  scrollbar-gutter: stable;
+}
+.panel-content::-webkit-scrollbar {
+  width: 7px;
+}
+.panel-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+.panel-content::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+  border-radius: 999px;
+  border: 2px solid var(--nav);
+}
+.panel-content::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+.panel-content::-webkit-scrollbar-button {
+  display: none;
+}
+.chat-exports,
+.settings-data-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.chat-exports button,
+.settings-data-actions button {
+  justify-content: flex-start;
 }
 .panel-content label {
   font-size: 12px;
@@ -1212,16 +1267,6 @@ summary {
 .inline-actions button {
   padding: 6px 10px;
   background: var(--panel);
-}
-.chat-management {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-}
-.chat-management button {
-  justify-content: flex-start;
-  font-size: 13px;
 }
 .tree {
   display: flex;

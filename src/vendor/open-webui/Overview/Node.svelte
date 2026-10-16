@@ -1,7 +1,8 @@
 <!-- Adapted from Open WebUI v0.12.2. See LICENSE and PROVENANCE.md. -->
 <script lang="ts">
 	const WEBUI_API_BASE_URL = '';
-	import { Handle, Position, type NodeProps, type Node } from '@xyflow/svelte';
+	import { Handle, Position, useUpdateNodeInternals, type NodeProps, type Node } from '@xyflow/svelte';
+	import { tick } from 'svelte';
 	import type { OverviewData } from '../types';
 	import { getContext } from 'svelte';
 
@@ -15,6 +16,9 @@
 
 	type $$Props = NodeProps<Node<OverviewData>>;
 	export let data: $$Props['data'];
+	export let id: string;
+	const updateNodeInternals = useUpdateNodeInternals();
+	$: if (data.direction && id) tick().then(() => updateNodeInternals(id));
 
 	const getMessageContent = (nodeData: any) =>
 		getOutputText(nodeData?.message?.output) || nodeData?.message?.content || '';

@@ -50,3 +50,5 @@
 本轮验证：38 项单元/workerd、15 个 Chromium/WebKit 浏览器场景（含指针拖动排序、模板副本、归档持久化、跟随接口灰色状态、概述坐标与旧回复定位）全部通过；TypeScript/Svelte 零错误警告，最终生产构建与保留原资源的 dry run 通过。强度弹层按用户最后截图改为粗圆条、白色圆形滑块及条内圆点。
 
 图标追加：React 与 Svelte 统一 Lucide，替换字形符号及概述的 zoom/fit/layout/pin 控件图标和头像；保留用量数据可视化。连续切换思考强度顺序保存，防止旧请求结果覆盖最后选择；线上检查发现并补入快速 inherit→none 的浏览器用例。最终线上核对以 PRODUCTION.md 为准。
+
+最终已发布 `3598421`，CF `5e9cbfa0-6068-410d-8dba-0866820712f8`。线上合成核对 complete/cleaned 均为 true，0 页面错误/模型请求；最终首页和许可文件浏览器核对 200。详细结果见 PRODUCTION.md。

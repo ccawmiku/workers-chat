@@ -1,6 +1,19 @@
 # 生产部署记录
 
-## 当前版本：右栏精简 / 概述定位 / 全屏回复编辑
+## 当前版本：daisyUI / 提示词排序 / 归档文件夹 / Lucide
+
+- 生产地址：[在线AI](https://workers-chat.1907018245.workers.dev/)。应用提交 `3598421`（功能提交 `e28b5f5`、`3fc6deb`）；CF Version：`5e9cbfa0-6068-410d-8dba-0866820712f8`。
+- 提示词为“＋选择已保存模板”的排序列表，支持电脑/触屏拖动和上下箭头、按名称展开编辑本聊天副本及移除；删除替换/追加和空白卡片。归档是对话列表固定文件夹，不能改名删除，头像菜单移除误导入口。
+- daisyUI 5.7.50 / Tailwind 4.3.3 实际编译 Range/Toggle/Input/Select/Textarea/Button/Card/Avatar/Menu/Tabs/Collapse/Alert/Loading/Table；保留 Codex/ChatGPT 布局及浅暗配色。du- 前缀、无 preflight，隔离 border 变量，概述几何不受影响。
+- 强度按用户最后截图采用粗圆条、白色圆形滑块及内置圆点；跟随接口为左上独立连接按钮，启用时灰色，仍与显式 none 区分。快速连续切换顺序保存，切换聊天隔离状态。上下文轮数改名并说明；用量圈保留已验证的单 SVG。
+- 主界面与概述控件图标统一 Lucide（lucide-react / @lucide/svelte），移除字形图标和旧布局/固定图标。AGENTS.md 已记入后续优先 daisyUI 与 Lucide 规则。依赖许可全文随网站分发于 `/licenses/ui-components.txt`。
+- 38 项单元/workerd 测试、TypeScript/Svelte 检查、15 个 Chromium/WebKit 场景通过；最后隔离强度组件后桌面/手机强度场景再次通过，最终构建和保留原资源的 dry run 通过。
+- 真实 HTTPS 合成聊天核对通过：提示词排序、归档/取消归档、强度快速切换、概述 Lucide 控件/跳转/卡片端口几何、旧回复全屏编辑、手机收栏及整体设置数据页；0 页面错误、0 模型请求。生产整体设置完全一致，合成聊天及测试会话已清理。
+- 最终版本只比已核对的 `202b0a41-14ca-4db7-898e-6354444fa23f` 增加许可静态文件，应用 JS/CSS 哈希一致；已用真实浏览器确认首页与许可均为 200，内容/哈希匹配。
+- 沿用原 D1、DO、Workflows、加密密钥和免费套餐，无数据迁移或初始化。本地开发服务器已停止。
+- 本地合成截图：[提示词](screenshots/prompts-dark.png)、[手机提示词](screenshots/prompts-mobile.png)、[强度](screenshots/effort-desktop.png)、[手机菜单](screenshots/account-mobile.png)。
+
+## 前一版本：右栏精简 / 概述定位 / 全屏回复编辑
 
 - 生产地址：[在线AI](https://workers-chat.1907018245.workers.dev/)。
 - 应用提交：`a4fd303`；CF Version：`d807a934-8a68-49ab-abcb-38c99b44c563`。保留原 D1、DO、Workflows 和加密 Secret，无资源迁移或套餐升级。

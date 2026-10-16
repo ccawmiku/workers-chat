@@ -53,6 +53,8 @@ import {
   CirclePlay,
   Palette,
   UserRound,
+  Blocks,
+  WandSparkles,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -94,6 +96,22 @@ import type { CompletionOutput } from "../shared/completion";
 import type { DirectTask } from "../shared/direct";
 import { ChatListMenu } from "./chat-list-menu";
 import { ContextUsage, EffortControl, AccountMenu } from "./composer-widgets";
+import {
+  PluginBar,
+  GlobalPlugins,
+  PluginTurnCards,
+  Suggestions,
+  RewriteReview,
+  DraftReplacement,
+  GroupPicker,
+} from "./plugins-ui";
+import {
+  emptyPluginState,
+  enabledPlugins,
+  type PluginState,
+  type PluginJobView,
+  type PluginBinding,
+} from "../shared/plugins";
 const BranchOverview = lazy(() => import("./branch-overview"));
 type Brief = Pick<
   Chat,
@@ -116,6 +134,12 @@ function desktopInput() {
 }
 function App() {
   const connection = useDeviceConnection();
+  const pluginPreviewState = useRef<PluginState>(emptyPluginState());
+  const [pluginState, setPluginState] = useState<PluginState>(emptyPluginState),
+    [pluginJob, setPluginJob] = useState<PluginJobView | null>(null),
+    [debugPlugins, setDebugPlugins] = useState(false),
+    [suggestionDraft, setSuggestionDraft] = useState<string | null>(null),
+    [moveChat, setMoveChat] = useState<Brief | null>(null);
   const [auth, setAuth] = useState<boolean | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -283,6 +307,12 @@ function App() {
     setChat(connection.overlay(result.chat));
     setJob(result.job);
     setTitleJob(result.titleJob ?? null);
+    setPluginState(
+      connection.pluginOverlay(result.pluginState ?? emptyPluginState()),
+    );
+    pluginPreviewState.current = result.pluginState ?? emptyPluginState();
+    setPluginJob(result.pluginJob ?? null);
+    if (result.generation) acceptGeneration(result.generation);
     if (
       !result.job &&
       result.chat.unread &&
@@ -337,6 +367,13 @@ function App() {
       setChat(result.chat);
       setJob(result.job);
       setTitleJob(result.titleJob ?? null);
+      setPluginState(
+        connection.pluginOverlay(result.pluginState ?? emptyPluginState()),
+      );
+      pluginPreviewState.current = result.pluginState ?? emptyPluginState();
+      setPluginJob(result.pluginJob ?? null);
+      setDebugPlugins(false);
+      if (result.generation) acceptGeneration(result.generation);
       setMenu(null);
       setEditing(null);
       setModelMenu(false);
@@ -405,8 +442,12 @@ function App() {
     chat: Chat;
     job: typeof job;
     titleJob: typeof titleJob;
+    pluginState?: PluginState;
+    pluginJob?: PluginJobView | null;
+    generation?: GenerationStart;
   };
   type Bootstrap = {
+    requestedChatId?: string | null;
     authenticated: boolean;
     chats: Brief[];
     groups: Group[];
@@ -417,15 +458,19 @@ function App() {
   const boot = useRef<Bootstrap | null>(null);
   const bootRequest = useRef<Promise<Bootstrap> | null>(null);
   const bootstrap = () => {
-    if (!bootRequest.current)
+    if (!bootRequest.current) {
+      const requestedChatId = localStorage.getItem("lastChat");
       bootRequest.current = api<Bootstrap>(
         "/bootstrap" +
-          (localStorage.getItem("lastChat")
-            ? "?chatId=" + encodeURIComponent(localStorage.getItem("lastChat")!)
+          (requestedChatId
+            ? "?chatId=" + encodeURIComponent(requestedChatId)
             : ""),
-      ).finally(() => {
-        bootRequest.current = null;
-      });
+      )
+        .then((data) => ({ ...data, requestedChatId }))
+        .finally(() => {
+          bootRequest.current = null;
+        });
+    }
     return bootRequest.current;
   };
   useEffect(() => {
@@ -451,7 +496,8 @@ function App() {
         setProviders(data.providers);
         setSettings(data.settings);
         if (data.current) await open(data.current.chat.id, data.current);
-        else localStorage.removeItem("lastChat");
+        else if (localStorage.getItem("lastChat") === data.requestedChatId)
+          localStorage.removeItem("lastChat");
       } finally {
         setInitializing(false);
       }
@@ -506,7 +552,9 @@ function App() {
   useEffect(() => {
     if (!auth || !visible) return;
     const running =
-      !!job || ["pending", "running"].includes(titleJob?.status ?? "");
+      !!job ||
+      !!pluginJob ||
+      ["pending", "running"].includes(titleJob?.status ?? "");
     let cancelled = false,
       timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
@@ -524,7 +572,49 @@ function App() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [auth, visible, job?.id, titleJob?.id, titleJob?.status, pushUnavailable]);
+  }, [
+    auth,
+    visible,
+    job?.id,
+    pluginJob?.id,
+    titleJob?.id,
+    titleJob?.status,
+    pushUnavailable,
+  ]);
+  useEffect(() => {
+    if (!auth || !pluginJob) return;
+    const task = pluginJob,
+      id = chat?.id;
+    const update = (content: string) => {
+      if (idRef.current === id)
+        setPluginState((previous) => ({
+          ...previous,
+          runs: previous.runs.map((r) =>
+            r.id === task.runId ? { ...r, output: content } : r,
+          ),
+        }));
+    };
+    const done = (failure?: string) => {
+      if (failure) setError(failure);
+      const latest = latestSync.current;
+      void latest.run(async () => {
+        await latest.refresh(id);
+        await latest.loadNavigation();
+      }, false);
+    };
+    if (task.transport === "device") {
+      connection.startPlugin(task, (output) => update(output.content), done);
+      return;
+    }
+    if (!visible) return;
+    return observeJob(
+      task.id,
+      false,
+      (content) => update(content),
+      () => done(),
+      () => setPushUnavailable(true),
+    );
+  }, [auth, visible, pluginJob?.id]);
   useEffect(() => {
     setPushUnavailable(false);
     if (!auth || !visible || !job || job.transport === "device") return;
@@ -757,6 +847,8 @@ function App() {
       !selectedModel ||
       submitting.current ||
       job ||
+      pluginJob ||
+      (pluginFlow && !waitingPlugin) ||
       opening ||
       initializing ||
       !draftRef.current.trim()
@@ -773,9 +865,11 @@ function App() {
       // Autosaves pause while submitting, then persist any newer input.
       await draftQueue.current.catch(() => {});
       const result = await api<GenerationStart>(
-        "/chats/" + id + "/send",
+        "/chats/" + id + (waitingPlugin ? "/plugins" : "/send"),
         "POST",
-        { content: sent },
+        waitingPlugin
+          ? { action: "answer", runId: waitingPlugin.id, content: sent }
+          : { content: sent, debugPlugins },
       );
       acceptGeneration(result);
       if (draftVersion.current === version && idRef.current === id) {
@@ -864,6 +958,59 @@ function App() {
     draftRef.current = value;
     dirty.current = true;
   }
+  const pluginFlow = pluginState.flows.findLast(
+    (f) =>
+      pathIds.has(f.userId) &&
+      ["running", "waiting", "error", "debug"].includes(f.status),
+  );
+  const waitingPlugin = pluginState.runs.findLast(
+    (r) =>
+      r.flowId === pluginFlow?.id && r.status === "waiting" && !r.dismissed,
+  );
+  const rewriteResult = pluginState.runs.findLast(
+    (r) =>
+      r.plugin.kind === "rewrite" &&
+      r.anchorId === chat?.currentId &&
+      r.status === "complete" &&
+      !r.dismissed,
+  );
+  const rewriteError = pluginState.runs.findLast(
+    (r) =>
+      r.plugin.kind === "rewrite" &&
+      r.anchorId === chat?.currentId &&
+      r.status === "error" &&
+      !r.dismissed,
+  );
+  async function pluginCommand(
+    action: string,
+    body: Record<string, unknown> = {},
+  ) {
+    const id = idRef.current;
+    if (!id) return;
+    try {
+      setError("");
+      await api("/chats/" + id + "/plugins", "POST", { action, ...body });
+      await refresh(id);
+      await loadNavigation();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "插件操作失败");
+      throw error;
+    }
+  }
+  async function configurePlugins(plugins: PluginBinding[]) {
+    await ensureComposerChat();
+    await pluginCommand("configure", { plugins });
+  }
+  async function stopGeneration() {
+    if (pluginJob) {
+      if (connection.stopPlugin(pluginJob.id)) return;
+      await pluginCommand("cancel");
+    } else await action("stop");
+  }
+  function chooseSuggestion(text: string) {
+    if (draftRef.current.trim()) setSuggestionDraft(text);
+    else updateDraft(text);
+  }
   function showSettings(tab = "providers") {
     setSettingsTab(tab);
     setModal("settings");
@@ -877,6 +1024,14 @@ function App() {
     });
   }
   async function listAction(c: Brief, name: string) {
+    if (name === "group") {
+      if (c.groupId) {
+        await api("/chats/" + c.id, "PATCH", { groupId: null });
+        await loadNavigation();
+        if (idRef.current === c.id) await refresh();
+      } else setMoveChat(c);
+      return;
+    }
     if (name === "export") {
       await downloadChats([c.id]);
       return;
@@ -1459,7 +1614,7 @@ function App() {
                           </IconButton>
                           <IconButton
                             label="编辑消息"
-                            disabled={!!job}
+                            disabled={!!job || !!pluginJob}
                             onClick={() => beginEdit(m)}
                           >
                             <Pencil size={14} />
@@ -1467,7 +1622,7 @@ function App() {
                           {m.role === "assistant" && (
                             <IconButton
                               label="重新生成"
-                              disabled={!!job}
+                              disabled={!!job || !!pluginJob}
                               onClick={() =>
                                 void run(() =>
                                   action("regenerate", { messageId: m.id }),
@@ -1479,7 +1634,7 @@ function App() {
                           )}
                           <IconButton
                             label="从这里 Fork"
-                            disabled={!!job}
+                            disabled={!!job || !!pluginJob}
                             onClick={() =>
                               void run(() =>
                                 action("fork", { messageId: m.id }),
@@ -1491,7 +1646,7 @@ function App() {
                           {m.role === "assistant" && (
                             <IconButton
                               label="继续回答"
-                              disabled={!!job}
+                              disabled={!!job || !!pluginJob}
                               onClick={() =>
                                 void run(() =>
                                   action("continue", { messageId: m.id }),
@@ -1504,7 +1659,7 @@ function App() {
                           {m.role === "assistant" && m.status === "error" && (
                             <IconButton
                               label="重试为新版本"
-                              disabled={!!job}
+                              disabled={!!job || !!pluginJob}
                               onClick={() =>
                                 void run(() =>
                                   action("retry", { messageId: m.id }),
@@ -1534,7 +1689,7 @@ function App() {
                             <div className="versions">
                               <IconButton
                                 label="上个版本"
-                                disabled={!!job || version === 0}
+                                disabled={!!job || !!pluginJob || version === 0}
                                 onClick={() =>
                                   void run(() =>
                                     action("select", {
@@ -1554,7 +1709,9 @@ function App() {
                               <IconButton
                                 label="下个版本"
                                 disabled={
-                                  !!job || version === siblings.length - 1
+                                  !!job ||
+                                  !!pluginJob ||
+                                  version === siblings.length - 1
                                 }
                                 onClick={() =>
                                   void run(() =>
@@ -1573,6 +1730,25 @@ function App() {
                           <MessageUsage
                             message={m}
                             historical={m.id !== lastAssistant && menu !== m.id}
+                          />
+                        )}
+                        {m.role === "user" && (
+                          <PluginTurnCards
+                            chatId={chat!.id}
+                            userId={m.id}
+                            state={pluginState}
+                            activeUserId={pluginFlow?.userId}
+                            command={pluginCommand}
+                            busy={busy || !!job || !!pluginJob}
+                          />
+                        )}
+                        {m.role === "assistant" && m.id === lastAssistant && (
+                          <Suggestions
+                            state={pluginState}
+                            messageId={m.id}
+                            onChoose={chooseSuggestion}
+                            command={pluginCommand}
+                            busy={busy || !!job || !!pluginJob}
                           />
                         )}
                       </div>
@@ -1599,7 +1775,70 @@ function App() {
               <ArrowDown size={17} />
             </IconButton>
           )}
-          <div className={"composer " + (expanded ? "expanded" : "")}>
+          {pluginFlow && (
+            <div className="plugin-flow-controls">
+              <span>
+                {waitingPlugin
+                  ? `正在回答 ${waitingPlugin.plugin.name}`
+                  : pluginFlow.status === "debug"
+                    ? "调试完成，尚未生成正文"
+                    : pluginFlow.status === "error"
+                      ? "插件流程已暂停"
+                      : "插件正在运行"}
+              </span>
+              {pluginFlow.status === "debug" && (
+                <>
+                  <button
+                    className="du-btn du-btn-xs"
+                    onClick={() => void run(() => pluginCommand("use"))}
+                  >
+                    <CirclePlay size={14} />
+                    使用结果生成正文
+                  </button>
+                  <button
+                    className="du-btn du-btn-xs"
+                    onClick={() => void run(() => pluginCommand("debug-rerun"))}
+                  >
+                    <RotateCcw size={14} />
+                    重新调试
+                  </button>
+                </>
+              )}
+              {pluginFlow.status === "error" &&
+                !pluginState.runs.some(
+                  (r) => r.flowId === pluginFlow.id && r.status === "error",
+                ) && (
+                  <>
+                    <span role="alert">{pluginFlow.error}</span>
+                    <button
+                      className="du-btn du-btn-xs"
+                      onClick={() => void run(() => pluginCommand("retry"))}
+                    >
+                      <RotateCcw size={14} />
+                      重试流程
+                    </button>
+                  </>
+                )}
+              <button
+                className="du-btn du-btn-ghost du-btn-xs"
+                onClick={() =>
+                  void run(() =>
+                    pluginJob ? stopGeneration() : pluginCommand("cancel"),
+                  )
+                }
+              >
+                <X size={14} />
+                取消本轮
+              </button>
+            </div>
+          )}
+          <div
+            className={
+              "composer " +
+              (expanded ? "expanded " : "") +
+              (waitingPlugin ? "plugin-reply" : "")
+            }
+          >
             {!selectedModel && (
               <p className="muted" role="status">
                 没有可用的当前模型或默认模型，请在设置中添加服务商并选择有效的默认模型。
@@ -1611,7 +1850,11 @@ function App() {
                 ref={textarea}
                 disabled={opening || initializing}
                 aria-label="消息"
-                placeholder="发送消息…"
+                placeholder={
+                  waitingPlugin
+                    ? `回答 ${waitingPlugin.plugin.name} 的问题…`
+                    : "发送消息…"
+                }
                 value={draft}
                 rows={expanded ? 14 : 2}
                 onChange={(e) => updateDraft(e.target.value)}
@@ -1639,6 +1882,27 @@ function App() {
             <div className="composer-controls">
               <div className="composer-spacer" />
               <div className="composer-model-settings">
+                {chat &&
+                  enabledPlugins(chat, settings).some(
+                    (p) => p.kind === "rewrite",
+                  ) && (
+                    <IconButton
+                      label="重新生成用户请求"
+                      disabled={!!job || !!pluginJob || busy || !draft.trim()}
+                      onClick={() =>
+                        void run(() =>
+                          pluginCommand("rewrite", {
+                            pluginId: enabledPlugins(chat, settings).find(
+                              (p) => p.kind === "rewrite",
+                            )!.id,
+                            content: draftRef.current,
+                          }),
+                        )
+                      }
+                    >
+                      <WandSparkles size={17} />
+                    </IconButton>
+                  )}
                 <ContextUsage used={estimate} capacity={capacity} />
                 <div className="model-control">
                   <button
@@ -1735,11 +1999,11 @@ function App() {
                   }
                 />
               </div>
-              {job ? (
+              {job || pluginJob ? (
                 <IconButton
                   label="停止生成"
                   className="send-button"
-                  onClick={() => void run(() => action("stop"))}
+                  onClick={() => void run(stopGeneration)}
                 >
                   <Square size={15} fill="currentColor" />
                 </IconButton>
@@ -1748,7 +2012,11 @@ function App() {
                   label="发送"
                   className="send-button"
                   disabled={
-                    !draft.trim() || busy || !!chat?.deleted || !selectedModel
+                    !draft.trim() ||
+                    busy ||
+                    !!chat?.deleted ||
+                    !selectedModel ||
+                    (!!pluginFlow && !waitingPlugin)
                   }
                   onClick={() => void run(send)}
                 >
@@ -1757,6 +2025,65 @@ function App() {
               )}
             </div>
           </div>
+          <PluginBar
+            chat={chat}
+            settings={settings}
+            providers={providers}
+            state={pluginPreviewState.current}
+            draft={draft}
+            debug={debugPlugins}
+            setDebug={setDebugPlugins}
+            configure={configurePlugins}
+            command={pluginCommand}
+            busy={busy || !!job || !!pluginJob}
+          />
+          {pluginJob && connection.pluginUnsaved(pluginJob.id) && (
+            <button
+              className="du-btn du-btn-xs"
+              onClick={() =>
+                void run(async () => {
+                  await connection.retryPluginSave(pluginJob.id);
+                  await refresh();
+                  await loadNavigation();
+                })
+              }
+            >
+              重试保存插件结果
+            </button>
+          )}
+          {rewriteError && (
+            <div className="plugin-flow-controls" role="alert">
+              <span>
+                {rewriteError.plugin.name}：{rewriteError.error}
+              </span>
+              <button
+                className="du-btn du-btn-xs"
+                disabled={!!pluginJob || !!job}
+                onClick={() =>
+                  void run(async () => {
+                    await pluginCommand("dismiss", { runId: rewriteError.id });
+                    await pluginCommand("rewrite", {
+                      pluginId: rewriteError.plugin.id,
+                      content: rewriteError.input,
+                    });
+                  })
+                }
+              >
+                <RotateCcw size={14} />
+                重试
+              </button>
+              <button
+                className="du-btn du-btn-xs"
+                onClick={() =>
+                  void run(() =>
+                    pluginCommand("dismiss", { runId: rewriteError.id }),
+                  )
+                }
+              >
+                关闭
+              </button>
+            </div>
+          )}
           {estimate > capacity && (
             <p className="context-warning">超出所设上下文预算，仍可发送。</p>
           )}
@@ -2000,7 +2327,7 @@ function App() {
                   .map((item, index) => (
                     <button
                       key={item.id}
-                      disabled={!!job}
+                      disabled={!!job || !!pluginJob}
                       onClick={() =>
                         void run(async () => {
                           await action("select", { messageId: item.id });
@@ -2068,6 +2395,37 @@ function App() {
             if (groupNameDialog.id)
               await api("/groups/" + groupNameDialog.id, "PATCH", { name });
             else await api("/groups", "POST", { name });
+            await loadNavigation();
+          }}
+        />
+      )}
+      {rewriteResult && (
+        <RewriteReview
+          key={rewriteResult.id}
+          run={rewriteResult}
+          current={draft}
+          apply={updateDraft}
+          command={pluginCommand}
+        />
+      )}
+      {suggestionDraft !== null && (
+        <DraftReplacement
+          current={draft}
+          candidate={suggestionDraft}
+          close={() => setSuggestionDraft(null)}
+          apply={() => {
+            updateDraft(suggestionDraft);
+            setSuggestionDraft(null);
+          }}
+        />
+      )}
+      {moveChat && (
+        <GroupPicker
+          groups={groups}
+          close={() => setMoveChat(null)}
+          choose={async (groupId) => {
+            await api("/chats/" + moveChat.id, "PATCH", { groupId });
+            if (idRef.current === moveChat.id) await refresh();
             await loadNavigation();
           }}
         />
@@ -2386,6 +2744,7 @@ function SettingsPanel({
             ["connection", "连接", <Cable size={17} aria-hidden="true" />],
             ["providers", "服务商", <Server size={17} aria-hidden="true" />],
             ["models", "模型", <Boxes size={17} aria-hidden="true" />],
+            ["plugins", "插件", <Blocks size={17} aria-hidden="true" />],
             [
               "templates",
               "提示词模板",
@@ -2420,6 +2779,13 @@ function SettingsPanel({
         ))}
       </nav>
       <div className="settings-content">
+        {tab === "plugins" && (
+          <GlobalPlugins
+            settings={settings}
+            providers={providers}
+            save={saveSettings}
+          />
+        )}
         {tab === "connection" && (
           <>
             <h3>请求方式</h3>

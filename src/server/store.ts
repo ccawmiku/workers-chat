@@ -253,6 +253,13 @@ export function summary(chat: import("../shared/chat").Chat) {
     archived: chat.archived,
     deleted: chat.deleted,
     unread: chat.unread,
-    status: chat.currentId ? chat.messages[chat.currentId]?.status : undefined,
+    status:
+      chat.pluginPending === "running"
+        ? "running"
+        : chat.pluginPending === "error"
+          ? "error"
+          : chat.currentId
+            ? chat.messages[chat.currentId]?.status
+            : undefined,
   };
 }

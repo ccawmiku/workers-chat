@@ -4,6 +4,11 @@ import { build } from "esbuild";
 import { readFile, readdir } from "node:fs/promises";
 import { randomBytes, pbkdf2Sync } from "node:crypto";
 import type { Chat, Settings, Provider } from "../src/shared/chat";
+import {
+  defaultPlugins,
+  type PluginState,
+  type PluginJobView,
+} from "../src/shared/plugins";
 const fixturePassword = randomBytes(18).toString("hex"),
   fixtureRecovery = randomBytes(24).toString("hex");
 const hash = (s: string) => {
@@ -157,6 +162,82 @@ beforeAll(async () => {
                 });
               }
               upstreamCalls.push(payload);
+              const pluginMarker =
+                messages.find((m) => m.content?.startsWith("[PLUGIN_TEST_"))
+                  ?.content ?? "";
+              if (pluginMarker) {
+                if (controls.mode === "plugin-http-error")
+                  return MFResponse.json(
+                    { error: { message: "plugin fixture rejection" } },
+                    { status: 400 },
+                  );
+                const content =
+                  controls.mode === "plugin-invalid"
+                    ? "invalid JSON"
+                    : pluginMarker.startsWith("[PLUGIN_TEST_analysis]")
+                      ? '{"ABC":"analysis-result"}'
+                      : pluginMarker.startsWith("[PLUGIN_TEST_suggest]")
+                        ? '{"suggestions":["用户下一句一","用户下一句二","用户下一句三"]}'
+                        : pluginMarker.startsWith("[PLUGIN_TEST_rewrite]")
+                          ? "重生后的用户要求"
+                          : "1. 请问你希望采用什么风格？";
+                if (controls.mode === "plugin-slow") {
+                  const delay = controls.delay,
+                    encode = new TextEncoder();
+                  let cancelled = false;
+                  return new MFResponse(
+                    new ReadableStream({
+                      async start(controller) {
+                        controller.enqueue(
+                          encode.encode(
+                            "data: " +
+                              JSON.stringify({
+                                choices: [
+                                  { delta: { content: content.slice(0, 5) } },
+                                ],
+                              }) +
+                              "\n\n",
+                          ),
+                        );
+                        await new Promise((r) => setTimeout(r, delay));
+                        if (cancelled) return;
+                        controller.enqueue(
+                          encode.encode(
+                            "data: " +
+                              JSON.stringify({
+                                choices: [
+                                  {
+                                    delta: { content: content.slice(5) },
+                                    finish_reason: "stop",
+                                  },
+                                ],
+                              }) +
+                              "\n\ndata: [DONE]\n\n",
+                          ),
+                        );
+                        controller.close();
+                      },
+                      cancel() {
+                        cancelled = true;
+                      },
+                    }),
+                    { headers: { "Content-Type": "text/event-stream" } },
+                  );
+                }
+                return new MFResponse(
+                  "data: " +
+                    JSON.stringify({
+                      choices: [{ delta: { content }, finish_reason: "stop" }],
+                      usage: {
+                        input_tokens: 500,
+                        cached_tokens: 400,
+                        cache_hit_rate: "80%",
+                      },
+                    }) +
+                    "\n\ndata: [DONE]\n\n",
+                  { headers: { "Content-Type": "text/event-stream" } },
+                );
+              }
               const mode = controls.mode,
                 delay = controls.delay;
               if (mode === "reject")
@@ -1384,6 +1465,441 @@ describe("workerd HTTP + D1 + Workflows", () => {
     ).toBe(403);
     controls.delay = 0;
   });
+  it("runs ordered independent plugins, awaits clarification once, injects tool results and generates suggestions", async () => {
+    controls.mode = "normal";
+    controls.delay = 0;
+    const list = defaultPlugins().map((p) => ({
+      ...p,
+      prompt: `[PLUGIN_TEST_${p.kind}]\n${p.prompt}`,
+      ...(p.kind === "analysis"
+        ? {
+            schema:
+              '{"type":"object","required":["ABC"],"properties":{"ABC":{"type":"string"}}}',
+          }
+        : {}),
+    }));
+    await value("/settings", "PUT", { ...settings, plugins: list });
+    const chat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + chat.id, "PATCH", {
+      title: "Plugin integration fixture",
+    });
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "configure",
+      plugins: list.map((p) => ({ id: p.id, enabled: true })),
+    });
+    type Snapshot = {
+      chat: Chat;
+      pluginState: PluginState;
+      pluginJob: PluginJobView | null;
+      job: { id: string } | null;
+    };
+    const wait = async (predicate: (s: Snapshot) => boolean) => {
+      for (let i = 0; i < 160; i++) {
+        const s = await value<Snapshot>("/chats/" + chat.id);
+        if (predicate(s)) return s;
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      throw Error("plugin transition timeout");
+    };
+    const before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "写一篇短故事",
+    });
+    let s = await wait((s) => s.chat.pluginPending === "waiting");
+    expect(Object.values(s.chat.messages)).toHaveLength(1);
+    expect(s.pluginState.runs.map((r) => r.status)).toEqual([
+      "complete",
+      "waiting",
+    ]);
+    expect(upstreamCalls.length - before).toBe(2);
+    const question = s.pluginState.runs[1]!;
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "answer",
+      runId: question.id,
+      content: "轻松幽默",
+    });
+    s = await wait(
+      (s) =>
+        !s.job &&
+        !s.pluginJob &&
+        s.pluginState.runs.some(
+          (r) => r.plugin.kind === "suggest" && r.status === "complete",
+        ),
+    );
+    expect(Object.values(s.chat.messages).map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(upstreamCalls.length - before).toBe(4);
+    const main = upstreamCalls[before + 2]!.messages as {
+      role: string;
+      content: string;
+    }[];
+    expect(main.filter((m) => m.role === "tool")).toHaveLength(2);
+    expect(JSON.stringify(main)).toContain("轻松幽默");
+    expect(JSON.stringify(s.chat.messages)).not.toContain("analysis-result");
+    const exp = await value("/chats/" + chat.id + "/export");
+    expect(JSON.stringify(exp)).not.toMatch(
+      /analysis-result|轻松幽默|pluginState/,
+    );
+    const snapshot = await value<{ messages: unknown[] }>(
+      "/chats/" + chat.id + "/plugins",
+      "POST",
+      { action: "request", runId: s.pluginState.runs[0]!.id },
+    );
+    expect(snapshot.messages.length).toBeGreaterThan(0);
+    expect(JSON.stringify(snapshot)).not.toMatch(
+      /encryptedKey|synthetic-fixture-key/,
+    );
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "rewrite",
+      pluginId: "builtin-rewrite",
+      content: "重新构思我的计划",
+    });
+    s = await wait(
+      (s) =>
+        !s.pluginJob &&
+        s.pluginState.runs.some(
+          (r) => r.plugin.kind === "rewrite" && r.status === "complete",
+        ),
+    );
+    expect(Object.values(s.chat.messages)).toHaveLength(2);
+    expect(s.pluginState.runs.at(-1)?.output).toBe("重生后的用户要求");
+    const duplicate = await value<Chat>(
+        "/chats/" + chat.id + "/duplicate",
+        "POST",
+        {},
+      ),
+      copy = await value<Snapshot>("/chats/" + duplicate.id);
+    expect(copy.pluginState.runs).toHaveLength(s.pluginState.runs.length);
+    expect(copy.pluginState.runs[0]?.id).not.toBe(s.pluginState.runs[0]?.id);
+    expect(
+      copy.pluginState.runs.every(
+        (r) => !r.anchorId || !!copy.chat.messages[r.anchorId],
+      ),
+    ).toBe(true);
+    await value("/settings", "PUT", settings);
+  }, 30000);
+  it("pauses invalid JSON, repairs without repeating the call, and keeps debug results out of main history", async () => {
+    const list = defaultPlugins().map((p) => ({
+      ...p,
+      prompt: `[PLUGIN_TEST_${p.kind}]\n${p.prompt}`,
+      ...(p.kind === "analysis"
+        ? { schema: '{"type":"object","required":["ABC"]}' }
+        : {}),
+    }));
+    await value("/settings", "PUT", { ...settings, plugins: list });
+    const chat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + chat.id, "PATCH", {
+      title: "Plugin debug fixture",
+    });
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "configure",
+      plugins: [{ id: "builtin-analysis", enabled: true }],
+    });
+    controls.mode = "plugin-invalid";
+    const before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "调试需求",
+      debugPlugins: true,
+    });
+    type S = {
+      chat: Chat;
+      pluginState: PluginState;
+      pluginJob: PluginJobView | null;
+      job: unknown;
+    };
+    let s: S;
+    for (let i = 0; i < 100; i++) {
+      s = await value<S>("/chats/" + chat.id);
+      if (s.chat.pluginPending === "error") break;
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    expect(s!.pluginState.runs[0]?.status).toBe("error");
+    expect(upstreamCalls.length - before).toBe(1);
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "edit",
+      runId: s!.pluginState.runs[0]!.id,
+      content: '{"ABC":"repaired"}',
+    });
+    s = await value<S>("/chats/" + chat.id);
+    expect(s.chat.pluginPending).toBe("debug");
+    expect(Object.values(s.chat.messages)).toHaveLength(1);
+    expect(upstreamCalls.length - before).toBe(1);
+    expect(s.pluginState.runs[0]?.originalOutput).toBe("invalid JSON");
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "configure",
+      plugins: [
+        {
+          id: "builtin-analysis",
+          enabled: true,
+          overrides: { prompt: "[PLUGIN_TEST_analysis] updated task" },
+        },
+      ],
+    });
+    expect(
+      (
+        await request("/chats/" + chat.id + "/plugins", "POST", {
+          action: "use",
+        })
+      ).status,
+    ).toBe(409);
+    controls.mode = "normal";
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "debug-rerun",
+    });
+    for (let i = 0; i < 100; i++) {
+      s = await value<S>("/chats/" + chat.id);
+      if (s.chat.pluginPending === "debug") break;
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    expect(s.chat.pluginPending).toBe("debug");
+    expect(upstreamCalls.length - before).toBe(2);
+    await value("/chats/" + chat.id + "/plugins", "POST", { action: "use" });
+    const result = await finished(chat.id);
+    expect(Object.values(result.messages)).toHaveLength(3);
+    expect(upstreamCalls.length - before).toBe(3);
+    await value("/settings", "PUT", settings);
+  }, 15000);
+  it("delivers each device plugin and chained main task only once", async () => {
+    const chat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + chat.id, "PATCH", {
+      title: "Plugin direct fixture",
+    });
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "configure",
+      plugins: [{ id: "builtin-analysis", enabled: true }],
+    });
+    const response = await request(
+      "/chats/" + chat.id + "/send",
+      "POST",
+      { content: "direct requirement" },
+      true,
+      "https://chat.test",
+      true,
+    );
+    expect(response.status).toBe(202);
+    const first = await value<{ pluginJob: PluginJobView }>(
+      "/chats/" + chat.id,
+    );
+    expect(first.pluginJob.direct?.request.messages.at(-1)?.content).toContain(
+      "direct requirement",
+    );
+    expect(
+      (await value<{ pluginJob: PluginJobView }>("/chats/" + chat.id)).pluginJob
+        .direct,
+    ).toBeUndefined();
+    const saved = await request(
+      "/plugins/jobs/" + first.pluginJob.id + "/finish",
+      "POST",
+      {
+        sequence: 1,
+        status: "complete",
+        content: '{"goals":[],"constraints":[],"plan":[]}',
+      },
+      true,
+      "https://chat.test",
+      true,
+    );
+    expect(saved.status, await saved.text()).toBe(200);
+    const next = await value<{
+      generation: { direct?: { request: { messages: { role: string }[] } } };
+      job: { id: string };
+    }>("/chats/" + chat.id);
+    expect(
+      next.generation.direct?.request.messages.some((m) => m.role === "tool"),
+    ).toBe(true);
+    expect(
+      (await value<{ generation: { direct?: unknown } }>("/chats/" + chat.id))
+        .generation.direct,
+    ).toBeUndefined();
+    await request(
+      "/device/jobs/" + next.job.id + "/finish",
+      "POST",
+      { sequence: 1, status: "complete", content: "direct main result" },
+      true,
+      "https://chat.test",
+      true,
+    );
+  }, 15000);
+  it("preserves clarification answers across new-send regeneration, edits and forks, and supports user injection", async () => {
+    controls.mode = "normal";
+    controls.delay = 0;
+    const list = defaultPlugins()
+      .filter((p) => p.kind === "analysis" || p.kind === "clarify")
+      .map((p) => ({
+        ...p,
+        prompt: `[PLUGIN_TEST_${p.kind}]\n${p.prompt}`,
+        injection: "user",
+        ...(p.kind === "analysis"
+          ? { schema: '{"type":"object","required":["ABC"]}' }
+          : {}),
+      }));
+    await value("/settings", "PUT", { ...settings, plugins: list });
+    const chat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + chat.id, "PATCH", {
+      title: "Plugin branch fixture",
+    });
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "configure",
+      plugins: list.map((p) => ({ id: p.id, enabled: true })),
+    });
+    type S = {
+      chat: Chat;
+      pluginState: PluginState;
+      pluginJob: PluginJobView | null;
+      job: unknown;
+    };
+    const wait = async (predicate: (s: S) => boolean) => {
+      for (let i = 0; i < 160; i++) {
+        const s = await value<S>("/chats/" + chat.id);
+        if (predicate(s)) return s;
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      throw Error("plugin branch timeout");
+    };
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "原始故事要求",
+    });
+    let s = await wait((s) => s.chat.pluginPending === "waiting");
+    const originalRun = s.pluginState.runs.find((r) => r.status === "waiting")!;
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "answer",
+      runId: originalRun.id,
+      content: "旧偏好",
+    });
+    s = await wait(
+      (s) =>
+        !s.job && !s.pluginJob && Object.values(s.chat.messages).length === 2,
+    );
+    const originalAssistant = s.chat.currentId!;
+    expect(
+      (
+        upstreamCalls.at(-1)?.messages as { role: string; content: string }[]
+      ).at(-1)?.content,
+    ).toContain("旧偏好");
+    expect(
+      (upstreamCalls.at(-1)?.messages as { role: string }[]).some(
+        (m) => m.role === "tool",
+      ),
+    ).toBe(false);
+    const count = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/draft", "PUT", {
+      draft: "保留在输入框的新草稿",
+    });
+    await value("/chats/" + chat.id + "/regenerate", "POST", {
+      messageId: originalAssistant,
+    });
+    s = await wait(
+      (s) =>
+        !s.job && !s.pluginJob && Object.values(s.chat.messages).length === 4,
+    );
+    expect(upstreamCalls.length - count).toBe(2);
+    expect(s.chat.draft).toBe("保留在输入框的新草稿");
+    expect(
+      s.pluginState.runs.filter((r) => r.status === "answered"),
+    ).toHaveLength(2);
+    expect(
+      s.pluginState.runs
+        .filter((r) => r.status === "answered")
+        .every((r) => !!s.chat.messages[r.anchorId!]),
+    ).toBe(true);
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "regenerate-main",
+      runId: originalRun.id,
+      answer: "新的偏好",
+    });
+    s = await wait(
+      (s) =>
+        !s.job && !s.pluginJob && Object.values(s.chat.messages).length === 6,
+    );
+    expect(
+      s.pluginState.runs.find((r) => r.id === originalRun.id)?.answer,
+    ).toBe("旧偏好");
+    expect(
+      s.pluginState.runs.findLast((r) => r.status === "answered")?.answer,
+    ).toBe("新的偏好");
+    const fork = await value<Chat>("/chats/" + chat.id + "/fork", "POST", {
+        messageId: originalAssistant,
+      }),
+      forked = await value<S>("/chats/" + fork.id);
+    expect(Object.values(forked.chat.messages)).toHaveLength(2);
+    expect(
+      forked.pluginState.runs.filter((r) => r.status === "answered"),
+    ).toHaveLength(1);
+    expect(
+      forked.pluginState.runs.every(
+        (r) => !r.anchorId || !!forked.chat.messages[r.anchorId],
+      ),
+    ).toBe(true);
+    await value("/settings", "PUT", settings);
+  }, 20000);
+  it("does not retry failed plugins automatically, stops partial output and survives beyond 30 seconds without a page", async () => {
+    const p = {
+      ...defaultPlugins()[0]!,
+      prompt: "[PLUGIN_TEST_analysis]\nReturn JSON",
+      schema: '{"type":"object","required":["ABC"]}',
+    };
+    await value("/settings", "PUT", { ...settings, plugins: [p] });
+    const chat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + chat.id, "PATCH", {
+      title: "Long background plugin fixture",
+    });
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "configure",
+      plugins: [{ id: p.id, enabled: true }],
+    });
+    type S = {
+      chat: Chat;
+      pluginState: PluginState;
+      pluginJob: PluginJobView | null;
+      job: unknown;
+    };
+    const wait = async (predicate: (s: S) => boolean, timeout = 10000) => {
+      const until = Date.now() + timeout;
+      while (Date.now() < until) {
+        const s = await value<S>("/chats/" + chat.id);
+        if (predicate(s)) return s;
+        await new Promise((r) => setTimeout(r, 60));
+      }
+      throw Error("plugin transition timed out");
+    };
+    controls.mode = "plugin-http-error";
+    const before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "失败只调用一次",
+      debugPlugins: true,
+    });
+    let s = await wait((s) => s.chat.pluginPending === "error");
+    await new Promise((r) => setTimeout(r, 150));
+    expect(upstreamCalls.length - before).toBe(1);
+    expect(s.pluginState.runs[0]?.error).toContain("400");
+    controls.mode = "plugin-slow";
+    controls.delay = 33000;
+    await value("/chats/" + chat.id + "/plugins", "POST", { action: "retry" });
+    await new Promise((r) => setTimeout(r, 31000));
+    s = await value<S>("/chats/" + chat.id);
+    expect(s.pluginJob).not.toBeNull();
+    expect(Object.values(s.chat.messages)).toHaveLength(1);
+    s = await wait((s) => s.chat.pluginPending === "debug");
+    expect(s.pluginState.runs.at(-1)?.output).toContain("analysis-result");
+    expect(upstreamCalls.length - before).toBe(2);
+    await value("/chats/" + chat.id + "/plugins", "POST", { action: "cancel" });
+    controls.delay = 1000;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "停止插件不生成正文",
+    });
+    await wait((s) => !!s.pluginJob);
+    await value("/chats/" + chat.id + "/plugins", "POST", { action: "cancel" });
+    s = await value<S>("/chats/" + chat.id);
+    expect(s.pluginState.runs.at(-1)?.status).toBe("cancelled");
+    expect(
+      Object.values(s.chat.messages).filter((m) => m.role === "assistant"),
+    ).toHaveLength(0);
+    controls.mode = "normal";
+    controls.delay = 0;
+    await value("/settings", "PUT", settings);
+  }, 45000);
   it("changes password and revokes every prior session", async () => {
     const response = await value<{ recoveryCode: string }>(
       "/auth/password",

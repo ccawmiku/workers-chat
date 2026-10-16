@@ -8,6 +8,8 @@ import {
   Pin,
   RotateCcw,
   Trash2,
+  FolderInput,
+  FolderOutput,
 } from "lucide-react";
 import { FloatingPanel } from "./composer-widgets";
 
@@ -21,6 +23,7 @@ export function ChatListMenu({
     pinned: boolean;
     archived: boolean;
     deleted: boolean;
+    groupId?: string | null;
     status?: string;
   };
   onAction: (name: string) => void;
@@ -50,6 +53,11 @@ export function ChatListMenu({
         },
         { name: "pin", label: chat.pinned ? "取消置顶" : "置顶", Icon: Pin },
         { name: "duplicate", label: "复制", Icon: Copy, disabled: running },
+        {
+          name: "group",
+          label: chat.groupId ? "移出分组" : "移进分组",
+          Icon: chat.groupId ? FolderOutput : FolderInput,
+        },
         {
           name: "archive",
           label: chat.archived ? "取消归档" : "归档",

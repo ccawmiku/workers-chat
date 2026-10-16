@@ -1,4 +1,4 @@
-import type { Role } from "./chat";
+import type { APIMessage } from "./plugins";
 export type DirectTask = {
   jobId: string;
   chatId: string;
@@ -8,10 +8,14 @@ export type DirectTask = {
   hasKey: boolean;
   seedContent: string;
   request: Record<string, unknown> & {
-    messages: { role: Role; content: string }[];
+    messages: APIMessage[];
   };
 };
-export type GenerationStart = { jobId: string; direct?: DirectTask };
+export type GenerationStart = {
+  jobId?: string;
+  direct?: DirectTask;
+  pluginFlow?: boolean;
+};
 export type DirectTitleTask = {
   jobId: string;
   chatId: string;

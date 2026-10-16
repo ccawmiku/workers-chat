@@ -53,6 +53,18 @@ import {
 export { Progress } from "./progress";
 import { obj, str, parameters, validatedSettings } from "./validation";
 import { requireMethod } from "./routing";
+import {
+  pluginView,
+  pluginEndpoint,
+  devicePluginSave,
+  startPluginFlow,
+  pluginState,
+  finishPlugin,
+  clonePlugins,
+  removePlugins,
+  selectPluginFlow,
+} from "./plugins";
+import { enabledPlugins, flowInjections } from "../shared/plugins";
 const publicProvider = (p: Provider) => {
   const { encryptedKey, ...safe } = p;
   return { ...safe, hasKey: !!encryptedKey };
@@ -73,10 +85,44 @@ async function readBody(request: Request) {
   }
 }
 async function chatState(env: Env, id: string) {
+  let titleJob = await titleStatus(env, id);
   const store = new Store(env.DB),
     { doc, job } = await readChat(env, id);
   if (!doc || !doc.value.messages) throw new HttpError(404, "聊天不存在");
   const chat = doc.value;
+
+  if (job?.kind === "plugin") {
+    const output = await jobOutput(env, job.id),
+      age = Date.now() - (output.updatedAt || job.created_at);
+    let interrupted = job.transport === "device" ? age > 90000 : false;
+    if (job.transport !== "device" && age > 15000)
+      try {
+        interrupted = ["errored", "terminated", "complete", "unknown"].includes(
+          (await (await env.GENERATION.get(job.id)).status()).status,
+        );
+      } catch {}
+    if (interrupted) {
+      await env.PROGRESS.getByName(job.id).cancel();
+      await finishPlugin(
+        env,
+        job.id,
+        output,
+        "error",
+        "插件任务已断开，已保留部分输出；请手动重试，不会自动重复模型请求。",
+      );
+      return chatState(env, id);
+    }
+    const view = await pluginView(env, chat, job);
+    const run = view.pluginState.runs.find((r) => r.id === job.message_id);
+    if (run && output.hasData) run.output = output.content;
+    return {
+      chat,
+      revision: doc.revision,
+      job: null,
+      titleJob,
+      ...view,
+    };
+  }
 
   if (job) {
     const output = await jobOutput(env, job.id);
@@ -142,15 +188,26 @@ async function chatState(env: Env, id: string) {
   }
   if (!job && !chat.titleManual) {
     try {
-      await queueTitle(env, id);
+      const queued = await queueTitle(env, id);
+      if (queued && !titleJob)
+        titleJob = {
+          id: queued,
+          status: "pending",
+          error: null,
+          transport: undefined,
+        };
     } catch {
       /* No retry of an existing title request. */
     }
   }
   return {
     chat,
+    ...(await pluginView(env, chat)),
+    ...(job?.transport === "device"
+      ? { generation: await generationStart(env, job.id) }
+      : {}),
     revision: doc.revision,
-    titleJob: await titleStatus(env, id),
+    titleJob,
     job: job
       ? { id: job.id, status: job.status, transport: job.transport }
       : null,
@@ -255,6 +312,13 @@ async function api(request: Request, env: Env) {
     }
   }
   const session = await authenticate(request, env);
+  const pluginDevice = path.match(
+    /^\/api\/plugins\/jobs\/([^/]+)\/(checkpoint|finish)$/,
+  );
+  if (pluginDevice)
+    return Response.json(
+      await devicePluginSave(env, pluginDevice[1]!, pluginDevice[2]!, body),
+    );
   if (path === "/api/navigation") {
     const [chats, groups] = await Promise.all([
       store.list("chat"),
@@ -658,6 +722,10 @@ async function api(request: Request, env: Env) {
     const { doc, job } = await readChat(env, id);
     if (!doc || !doc.value.messages) throw new HttpError(404, "聊天不存在");
     const chat = doc.value;
+    if (action === "plugins")
+      return Response.json(
+        await pluginEndpoint(env, doc, body, job, transport),
+      );
     if (action === "title" && method === "POST") {
       if (job) throw new HttpError(409, "请等待当前回答完成");
       return Response.json(
@@ -683,6 +751,10 @@ async function api(request: Request, env: Env) {
         ).request,
       );
     if (action === "stop") {
+      if (job?.kind === "plugin")
+        return Response.json(
+          await pluginEndpoint(env, doc, { action: "cancel" }, job, transport),
+        );
       if (job) {
         const output = await env.PROGRESS.getByName(job.id).cancel();
         const seedContent = chat.messages[job.message_id]?.content ?? "";
@@ -768,11 +840,13 @@ async function api(request: Request, env: Env) {
         chat,
         (await store.list<{ title: string }>("chat")).map((c) => c.title),
       );
+      await clonePlugins(env, chat, copy);
       await store.save(copy.id, "chat", copy, 0, summary(copy));
       return Response.json(copy);
     }
     if (action === "permanent" && method === "DELETE") {
       if (!chat.deleted) throw new HttpError(400, "请先移入回收站");
+      await removePlugins(env, id);
       await store.remove(id);
       return Response.json({ ok: true });
     }
@@ -782,10 +856,26 @@ async function api(request: Request, env: Env) {
         ? findMessage(chat, body.messageId)
         : null;
     if (action === "send") {
+      if (chat.pluginPending)
+        throw new HttpError(409, "请先回答、使用或取消当前插件流程");
       const text = str(body.content);
       if (!text.trim()) throw new HttpError(400, "消息不能为空");
       addMessage(chat, "user", text);
       chat.draft = "";
+      const currentSettings = await settings(store);
+      if (
+        await startPluginFlow(
+          env,
+          chat,
+          doc.revision,
+          currentSettings,
+          transport,
+          body.debugPlugins === true,
+          undefined,
+          true,
+        )
+      )
+        return Response.json({ pluginFlow: true }, { status: 202 });
       const jobId = await startGeneration(
         env,
         chat,
@@ -813,6 +903,26 @@ async function api(request: Request, env: Env) {
           throw new HttpError(400, "这条回答没有关联的用户问题，无法重新发送");
         addMessage(chat, "user", question.content, question.parentId);
       } else chat.currentId = message.parentId;
+      const currentSettings = await settings(store);
+      if (
+        action === "regenerate" &&
+        (await startPluginFlow(
+          env,
+          chat,
+          doc.revision,
+          currentSettings,
+          transport,
+          false,
+          message.id,
+        ))
+      )
+        return Response.json({ pluginFlow: true }, { status: 202 });
+      const pluginData = chat.plugins?.length
+        ? (await pluginState(env, id)).value
+        : null;
+      const previousFlow = pluginData?.flows.findLast(
+        (f) => f.mainMessageId === message.id || f.userId === message.parentId,
+      );
       const jobId = await startGeneration(
         env,
         chat,
@@ -822,6 +932,9 @@ async function api(request: Request, env: Env) {
         action === "continue" ? message.id : undefined,
         false,
         transport,
+        previousFlow && pluginData
+          ? flowInjections(pluginData, previousFlow)
+          : undefined,
       );
       return Response.json(await generationStart(env, jobId), { status: 202 });
     }
@@ -829,6 +942,16 @@ async function api(request: Request, env: Env) {
       if (!message) throw new HttpError(404, "消息不存在");
       editMessage(chat, message.id, str(body.content));
       if (message.role === "user") {
+        if (
+          await startPluginFlow(
+            env,
+            chat,
+            doc.revision,
+            await settings(store),
+            transport,
+          )
+        )
+          return Response.json({ pluginFlow: true }, { status: 202 });
         const jobId = await startGeneration(
           env,
           chat,
@@ -845,6 +968,7 @@ async function api(request: Request, env: Env) {
       }
     } else if (action === "select") {
       selectBranch(chat, str(body.messageId, 500));
+      await selectPluginFlow(env, chat);
     } else if (action === "fork") {
       if (!message) throw new HttpError(404, "消息不存在");
       const fork = forkChat(
@@ -852,6 +976,7 @@ async function api(request: Request, env: Env) {
         message.id,
         (await store.list<{ title: string }>("chat")).map((c) => c.title),
       );
+      await clonePlugins(env, chat, fork, message.id);
       await store.save(fork.id, "chat", fork, 0, summary(fork));
       return Response.json(fork);
     } else throw new HttpError(404, "接口不存在");

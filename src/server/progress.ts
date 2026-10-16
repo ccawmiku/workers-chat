@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { chunks } from "./store";
 import { runGeneration } from "./generation";
 import { runTitle, queueTitle } from "./titles";
+import { runPlugin, queueSuggestions } from "./plugins";
 
 /** One SQLite-backed coordinator per generation, never a global singleton. */
 export class Progress extends DurableObject<Env> {
@@ -87,6 +88,9 @@ export class Progress extends DurableObject<Env> {
     this.broadcast({ type: "done" });
     for (const socket of this.ctx.getWebSockets())
       socket.close(1000, "Complete");
+  }
+  settled() {
+    this.complete();
   }
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -181,9 +185,30 @@ export class Progress extends DurableObject<Env> {
     const controller = new AbortController();
     this.activeController = controller;
     try {
-      return JSON.stringify(
-        await runGeneration(this.env, jobId, this, controller),
-      );
+      const job = await this.env.DB.prepare(
+        "SELECT config FROM jobs WHERE id=?",
+      )
+        .bind(jobId)
+        .first<{ config: string }>();
+      if (job && JSON.parse(job.config).kind === "plugin")
+        return JSON.stringify(
+          await runPlugin(this.env, jobId, this, controller),
+        );
+      const result = await runGeneration(this.env, jobId, this, controller);
+      if (result.status === "complete") {
+        const saved = await this.env.DB.prepare(
+          "SELECT chat_id,message_id FROM jobs WHERE id=?",
+        )
+          .bind(jobId)
+          .first<{ chat_id: string; message_id: string }>();
+        if (saved)
+          try {
+            await queueSuggestions(this.env, saved.chat_id, saved.message_id);
+          } catch {
+            /* Main response remains saved if a post-plugin cannot start. */
+          }
+      }
+      return JSON.stringify(result);
     } finally {
       this.activeController = undefined;
       this.complete();
@@ -192,13 +217,15 @@ export class Progress extends DurableObject<Env> {
   }
   async scheduleTitle(jobId: string) {
     const job = await this.env.DB.prepare(
-      "SELECT chat_id FROM jobs WHERE id=? AND status='complete'",
+      "SELECT chat_id,message_id FROM jobs WHERE id=? AND status='complete'",
     )
       .bind(jobId)
-      .first<{ chat_id: string }>();
+      .first<{ chat_id: string; message_id: string }>();
     if (!job) return null;
     try {
-      return await queueTitle(this.env, job.chat_id);
+      const title = await queueTitle(this.env, job.chat_id);
+      await queueSuggestions(this.env, job.chat_id, job.message_id);
+      return title;
     } catch {
       return null;
     }

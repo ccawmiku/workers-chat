@@ -17,7 +17,9 @@ import {
   type DocumentHeader,
 } from "./store";
 import { decrypt, redactError } from "./security";
+import { injectPlugins, type PluginInjection } from "../shared/plugins";
 export type JobConfig = {
+  injections?: PluginInjection[];
   options: Record<string, unknown>;
   provider: Pick<Provider, "id" | "baseUrl" | "encryptedKey">;
   system: Chat["system"];
@@ -48,12 +50,12 @@ export async function activeJob(env: Env, id: string) {
 type ActiveJob = Pick<
   Job,
   "id" | "chat_id" | "message_id" | "status" | "created_at"
-> & { transport?: "device" };
+> & { transport?: "device"; kind?: "plugin" };
 export async function readChat(env: Env, id: string) {
   // The immutable document version and its active job must come from one SQL
   // snapshot. Reading them separately can pair old text with a completed job.
   const row = await env.DB.prepare(
-    "SELECT d.revision,d.kind,d.summary,(SELECT json_object('id',j.id,'chat_id',j.chat_id,'message_id',j.message_id,'status',j.status,'created_at',j.created_at,'transport',json_extract(j.config,'$.transport')) FROM jobs j WHERE j.chat_id=d.id AND j.status IN ('pending','running') LIMIT 1) AS active_job FROM documents d WHERE d.id=? AND d.kind='chat'",
+    "SELECT d.revision,d.kind,d.summary,(SELECT json_object('id',j.id,'chat_id',j.chat_id,'message_id',j.message_id,'status',j.status,'created_at',j.created_at,'transport',json_extract(j.config,'$.transport'),'kind',json_extract(j.config,'$.kind')) FROM jobs j WHERE j.chat_id=d.id AND j.status IN ('pending','running') LIMIT 1) AS active_job FROM documents d WHERE d.id=? AND d.kind='chat'",
   )
     .bind(id)
     .first<DocumentHeader & { active_job: string | null }>();
@@ -89,6 +91,7 @@ export async function startGeneration(
   seedId?: string,
   clearDraft = false,
   transport?: "device",
+  injections?: PluginInjection[],
 ) {
   const { model, provider, request } = previewRequest(
     chat,
@@ -114,6 +117,7 @@ export async function startGeneration(
   };
   chat.unread = false;
   const config: JobConfig = {
+    ...(injections?.length ? { injections } : {}),
     options,
     provider: {
       id: provider.id,
@@ -229,13 +233,16 @@ export function requestForJob(
 ) {
   const target = chat.messages[job.message_id];
   if (!target) throw new HttpError(404, "回答不存在");
-  const messages = contextMessages({
-    ...chat,
-    currentId: target.parentId,
-    system: config.system,
-    rounds: config.rounds,
-    includeStopped: config.includeStopped,
-  });
+  const messages = injectPlugins(
+    contextMessages({
+      ...chat,
+      currentId: target.parentId,
+      system: config.system,
+      rounds: config.rounds,
+      includeStopped: config.includeStopped,
+    }),
+    config.injections ?? [],
+  );
   const seed = config.seedId ? chat.messages[config.seedId] : null;
   if (seed) {
     messages.push({ role: "assistant", content: seed.content });
@@ -256,6 +263,12 @@ export async function generationStart(
   if (!job) throw new HttpError(404, "任务不存在");
   const config = JSON.parse(job.config) as JobConfig;
   if (config.transport !== "device") return { jobId };
+  const delivery = await env.DB.prepare(
+    "UPDATE jobs SET attempted=2 WHERE id=? AND attempted=1 AND status='running' RETURNING id",
+  )
+    .bind(jobId)
+    .first();
+  if (!delivery) return { jobId };
   const doc = await new Store(env.DB).get<Chat>(job.chat_id);
   if (!doc) throw new HttpError(404, "聊天不存在");
   const direct: DirectTask = {

@@ -284,6 +284,7 @@ test("settings restore, model identity, template copies, groups and mobile long 
     "重新生成标题",
     "置顶",
     "复制",
+    "移进分组",
     "归档",
     "删除",
   ]);

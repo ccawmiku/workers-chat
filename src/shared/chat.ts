@@ -1,4 +1,5 @@
 import { DEFAULT_TITLE_PROMPT } from "./default-title-prompt";
+import type { PluginBinding, PluginDefinition } from "./plugins";
 export type Role = "user" | "assistant" | "system";
 export type Effort = "inherit" | "none" | "low" | "medium" | "high" | "max";
 export type Parameters = {
@@ -29,6 +30,8 @@ export type Message = {
   raw?: Record<string, unknown>;
 };
 export type Chat = {
+  plugins?: PluginBinding[];
+  pluginPending?: "running" | "waiting" | "error" | "debug";
   id: string;
   title: string;
   titleManual: boolean;
@@ -69,6 +72,7 @@ export type Provider = {
   }[];
 };
 export type Settings = {
+  plugins?: PluginDefinition[];
   defaultModel: ModelRef | null;
   parameters: Parameters;
   templates: Chat["system"];

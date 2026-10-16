@@ -25,6 +25,7 @@ export default defineConfig({
         "navigation.spec.ts",
         "provider-settings.spec.ts",
         "request-budget.spec.ts",
+        "plugins.spec.ts",
       ],
       use: { browserName: "webkit" },
     },

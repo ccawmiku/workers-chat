@@ -18,6 +18,7 @@ import {
 } from "../shared/completion";
 import { extractTitle } from "../shared/title-template";
 import type { Chat } from "../shared/chat";
+import type { PluginJobView, PluginState } from "../shared/plugins";
 
 type ProviderIdentity = {
   providerId: string;
@@ -32,6 +33,15 @@ type Active = {
   save?: () => Promise<void>;
 };
 type Connection = {
+  startPlugin: (
+    task: PluginJobView,
+    update: (output: CompletionOutput) => void,
+    finished: (error?: string) => void,
+  ) => void;
+  stopPlugin: (id: string) => boolean;
+  retryPluginSave: (id: string) => Promise<void>;
+  pluginOverlay: (state: PluginState) => PluginState;
+  pluginUnsaved: (id: string) => boolean;
   enabled: boolean;
   setEnabled: (value: boolean) => void;
   lock: () => void;
@@ -123,6 +133,17 @@ export function DeviceConnectionProvider({
     titleControllers = useRef(new Map<string, AbortController>());
   const [, rerender] = useState(0),
     epoch = useRef(0);
+  const pluginActive = useRef(
+    new Map<
+      string,
+      {
+        task: PluginJobView;
+        output: CompletionOutput;
+        controller: AbortController;
+        save?: () => Promise<void>;
+      }
+    >(),
+  );
   const [prompt, setPrompt] = useState<{
     identity: ProviderIdentity;
     resolve: (key: string) => void;
@@ -184,6 +205,7 @@ export function DeviceConnectionProvider({
     for (const running of active.current.values()) running.controller.abort();
     for (const controller of titleControllers.current.values())
       controller.abort();
+    for (const item of pluginActive.current.values()) item.controller.abort();
   }, []);
   useEffect(() => {
     window.addEventListener("pagehide", lock);
@@ -369,6 +391,107 @@ export function DeviceConnectionProvider({
     })();
   };
   const connection: Connection = {
+    startPlugin: (task, update, finished) => {
+      if (!task.direct || pluginActive.current.has(task.id)) return;
+      const direct = task.direct,
+        entry = {
+          task,
+          output: { content: "", reasoning: "" } as CompletionOutput,
+          controller: new AbortController(),
+          save: undefined as (() => Promise<void>) | undefined,
+        };
+      pluginActive.current.set(task.id, entry);
+      void (async () => {
+        let sequence = 0,
+          apiKey = "",
+          saving = Promise.resolve(),
+          status: "complete" | "error" | "stopped" = "complete",
+          failure: string | undefined;
+        const checkpoint = () => {
+          saving = saving
+            .catch(() => {})
+            .then(async () => {
+              await api(
+                "/plugins/jobs/" + task.id + "/checkpoint",
+                "POST",
+                { ...entry.output, sequence: ++sequence },
+                { signal: AbortSignal.timeout(15000) },
+              );
+            });
+          return saving;
+        };
+        const timer = setInterval(
+          () => void checkpoint().catch(() => {}),
+          10000,
+        );
+        try {
+          apiKey = await key(direct);
+          const signal = AbortSignal.any([
+            entry.controller.signal,
+            AbortSignal.timeout(30 * 60 * 1000),
+          ]);
+          const response = await directFetch(
+            direct.baseUrl,
+            "/chat/completions",
+            apiKey,
+            direct.request,
+            signal,
+          );
+          let last = 0;
+          await readCompletion(response, true, signal, entry.output, () => {
+            if (Date.now() - last > 60) {
+              last = Date.now();
+              update({ ...entry.output });
+            }
+          });
+        } catch (error) {
+          status = entry.controller.signal.aborted ? "stopped" : "error";
+          failure = redactUpstreamError(
+            error instanceof Error ? error.message : "插件直连失败",
+            apiKey,
+          );
+        } finally {
+          clearInterval(timer);
+          update({ ...entry.output });
+          await saving.catch(() => {});
+          entry.save = async () => {
+            await api(
+              "/plugins/jobs/" + task.id + "/finish",
+              "POST",
+              { ...entry.output, sequence: ++sequence, status, error: failure },
+              { signal: AbortSignal.timeout(15000) },
+            );
+            pluginActive.current.delete(task.id);
+            rerender((n) => n + 1);
+          };
+          try {
+            await entry.save();
+            finished();
+          } catch {
+            rerender((n) => n + 1);
+            finished("插件结果保存失败，保留在此页面，可重试保存。");
+          }
+        }
+      })();
+    },
+    stopPlugin: (id) => {
+      const active = pluginActive.current.get(id);
+      if (!active) return false;
+      active.controller.abort();
+      return true;
+    },
+    retryPluginSave: async (id) => {
+      const entry = pluginActive.current.get(id);
+      if (entry?.save) await entry.save();
+    },
+    pluginUnsaved: (id) => !!pluginActive.current.get(id)?.save,
+    pluginOverlay: (state) => ({
+      ...state,
+      runs: state.runs.map((run) => {
+        const active = pluginActive.current.get(run.id);
+        return active ? { ...run, output: active.output.content } : run;
+      }),
+    }),
     enabled,
     setEnabled: (value) => {
       setEnabledState(value);

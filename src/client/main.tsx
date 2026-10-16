@@ -734,7 +734,7 @@ function App() {
       scrollIntent.current = null;
       stick.current = true;
     }
-  }, [chat?.messages, chat?.id, draft, editing?.id, editing?.expanded]);
+  }, [chat?.messages, chat?.id, pluginState, draft, editing?.id, editing?.expanded]);
   function beginEdit(message: Message) {
     setError("");
     const offset = Math.max(

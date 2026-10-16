@@ -70,6 +70,7 @@ export function SettingsTools({
         <label>
           标题生成模型
           <select
+            className="du-select du-select-sm"
             aria-label="标题生成模型"
             value={
               settings.titleModel ? JSON.stringify(settings.titleModel) : ""
@@ -101,6 +102,7 @@ export function SettingsTools({
         <label>
           标题生成提示词
           <textarea
+            className="du-textarea"
             aria-label="标题生成提示词"
             key={settings.titlePrompt}
             defaultValue={settings.titlePrompt}
@@ -142,6 +144,7 @@ export function SettingsTools({
       <label className="toggle">
         包含 API Key
         <input
+          className="du-checkbox du-checkbox-primary du-checkbox-sm"
           type="checkbox"
           checked={includeKeys}
           onChange={(e) => {
@@ -158,6 +161,7 @@ export function SettingsTools({
           <label>
             验证当前登录密码
             <input
+              className="du-input du-input-sm"
               aria-label="备份验证密码"
               autoComplete="current-password"
               type="password"
@@ -239,6 +243,7 @@ export function SettingsTools({
           <label>
             恢复方式
             <select
+              className="du-select du-select-sm"
               aria-label="设置恢复方式"
               value={mode}
               onChange={(e) => setMode(e.target.value)}
@@ -348,6 +353,7 @@ export function KeyReveal({ provider, run }: { provider: Provider; run: Run }) {
                 <label>
                   当前登录密码
                   <input
+                    className="du-input du-input-sm"
                     required
                     type="password"
                     autoComplete="current-password"

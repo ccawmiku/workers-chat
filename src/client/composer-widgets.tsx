@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronRight, RotateCcw } from "lucide-react";
+import { ChevronDown, ChevronRight, RotateCcw, Unplug } from "lucide-react";
 import type { Effort } from "../shared/chat";
 import { useDialogFocus } from "./controls";
 
@@ -187,7 +187,7 @@ export const effortLabels: Record<Effort, string> = {
   high: "高",
   max: "最高",
 };
-const efforts: Effort[] = ["inherit", "none", "low", "medium", "high", "max"];
+const efforts: Effort[] = ["none", "low", "medium", "high", "max"];
 export function EffortControl({
   value,
   model,
@@ -203,7 +203,10 @@ export function EffortControl({
   const [open, setOpen] = useState(false),
     [current, setCurrent] = useState(value);
   useEffect(() => setCurrent(value), [value]);
-  const index = efforts.indexOf(current);
+  const explicit = useRef<Effort>(value === "inherit" ? "max" : value);
+  if (current !== "inherit") explicit.current = current;
+  const inherited = current === "inherit";
+  const index = efforts.indexOf(inherited ? explicit.current : current);
   const commit = (position: number) => {
     const next = efforts[position]!;
     setCurrent(next);
@@ -232,13 +235,25 @@ export function EffortControl({
         focus
       >
         <div className="effort-heading">
-          <span aria-hidden="true" />
+          <button
+            className="icon-button"
+            aria-label="跟随接口"
+            title="跟随接口（不发送思考强度参数）"
+            aria-pressed={inherited}
+            onClick={() => {
+              const next = inherited ? explicit.current : "inherit";
+              setCurrent(next);
+              void onChange(next);
+            }}
+          >
+            <Unplug size={17} />
+          </button>
           <strong aria-live="polite">{effortLabels[current]}</strong>
           <button
             className="icon-button"
             aria-label="恢复最高思考强度"
             title="恢复最高思考强度"
-            onClick={() => commit(5)}
+            onClick={() => commit(4)}
           >
             <RotateCcw size={18} />
           </button>
@@ -254,25 +269,18 @@ export function EffortControl({
           <span>{model}</span>
           <ChevronRight size={13} />
         </button>
-        <div
-          className="effort-track"
-          style={
-            { "--effort-progress": index * 20 + "%" } as React.CSSProperties
-          }
-        >
-          <div className="effort-ticks" aria-hidden="true">
-            {efforts.map((e) => (
-              <i key={e} />
-            ))}
-          </div>
+        <div className={"effort-track " + (inherited ? "inherited" : "")}>
           <input
+            className="du-range du-range-primary du-range-sm"
             type="range"
             min={0}
-            max={5}
+            max={4}
             step={1}
             value={index}
             aria-label="思考强度滑块"
-            aria-valuetext={effortLabels[current]}
+            aria-valuetext={
+              inherited ? "跟随接口，移动滑块可指定强度" : effortLabels[current]
+            }
             onChange={(e) => setCurrent(efforts[Number(e.target.value)]!)}
             onPointerUp={(e) => commit(Number(e.currentTarget.value))}
             onKeyUp={(e) => {
@@ -291,6 +299,15 @@ export function EffortControl({
                 commit(Number(e.currentTarget.value));
             }}
           />
+          <div className="effort-marks" aria-hidden="true">
+            {efforts.map((e, position) => (
+              <i
+                key={e}
+                title={effortLabels[e]}
+                className={position === index ? "at-thumb" : ""}
+              />
+            ))}
+          </div>
         </div>
       </FloatingPanel>
     </div>
@@ -319,7 +336,9 @@ export function AccountMenu({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        <span className="account-avatar">AI</span>
+        <span className="du-avatar du-avatar-placeholder">
+          <span className="account-avatar">AI</span>
+        </span>
         <span className="account-name">
           <strong>个人账户</strong>
           <small>在线AI</small>
@@ -336,26 +355,32 @@ export function AccountMenu({
         focus
       >
         <div className="account-summary">
-          <span className="account-avatar">AI</span>
+          <span className="du-avatar du-avatar-placeholder">
+            <span className="account-avatar">AI</span>
+          </span>
           <div>
             <strong>个人账户</strong>
             <small>在线AI</small>
           </div>
         </div>
-        {items.map((item) => (
-          <React.Fragment key={item.label}>
-            {item.separator && <hr />}
-            <button
-              onClick={() => {
-                setOpen(false);
-                item.onClick();
-              }}
+        <ul className="du-menu account-menu-list">
+          {items.map((item) => (
+            <li
+              key={item.label}
+              className={item.separator ? "account-menu-separated" : ""}
             >
-              {item.icon}
-              <span>{item.label}</span>
-            </button>
-          </React.Fragment>
-        ))}
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  item.onClick();
+                }}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
       </FloatingPanel>
     </>
   );

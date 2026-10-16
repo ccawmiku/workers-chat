@@ -44,6 +44,7 @@ export function MessageEditor({
         </IconButton>
       </div>
       <textarea
+        className="du-textarea"
         aria-label="编辑消息正文"
         value={value}
         disabled={saving}

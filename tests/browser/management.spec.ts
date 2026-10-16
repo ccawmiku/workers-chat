@@ -144,14 +144,25 @@ test("settings restore, model identity, template copies, groups and mobile long 
     "Two/fixture-model",
   );
   await page.getByRole("button", { name: "当前聊天设置", exact: true }).click();
-  await page.getByText("选择系统模板（可多选）", { exact: true }).click();
-  await page.getByLabel("再拆解步骤", { exact: false }).check();
-  await page.getByLabel("先定义目标", { exact: false }).check();
-  await page.getByRole("button", { name: "应用所选模板", exact: true }).click();
-  await expect(page.locator(".template-card")).toHaveCount(2);
-  await expect(page.locator(".template-card").first()).toContainText(
+  await page
+    .getByRole("button", { name: "选择系统提示词模板", exact: true })
+    .click();
+  await page
+    .locator(".prompt-choices")
+    .getByRole("button", { name: "先定义目标", exact: true })
+    .click();
+  await page
+    .locator(".prompt-choices")
+    .getByRole("button", { name: "再拆解步骤", exact: true })
+    .click();
+  await expect(page.locator(".prompt-item")).toHaveCount(2);
+  await page
+    .getByRole("button", { name: "上移提示词 再拆解步骤", exact: true })
+    .click();
+  await expect(page.locator(".prompt-item").first()).toContainText(
     "再拆解步骤",
   );
+  await page.locator(".prompt-name").filter({ hasText: "再拆解步骤" }).click();
   await page
     .getByRole("textbox", { name: "再拆解步骤", exact: true })
     .fill("当前聊天的独立内容。");
@@ -173,6 +184,28 @@ test("settings restore, model identity, template copies, groups and mobile long 
           .templates[1]!.content,
     ),
   ).toBe("列出可以执行的下一步。");
+  await expect(page.locator(".prompt-grip").last()).toBeEnabled();
+  const grip = (await page.locator(".prompt-grip").last().boundingBox())!,
+    drop = (await page.locator(".prompt-item").first().boundingBox())!;
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(drop.x + 30, drop.y + 15, { steps: 12 });
+  await page.mouse.up();
+  await expect(page.locator(".prompt-name").first()).toContainText(
+    "先定义目标",
+  );
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        async (id) =>
+          (
+            (await (await fetch("/api/chats/" + id)).json()) as { chat: Chat }
+          ).chat.system.map((t) => t.id),
+        chatId,
+      ),
+    )
+    .toEqual(["one", "two"]);
+  await page.screenshot({ path: "docs/screenshots/prompts-sorted.png" });
   await page.getByRole("button", { name: "返回聊天", exact: true }).click();
   const separator = page.getByRole("separator", { name: "导航宽度" });
   await separator.focus();
@@ -233,6 +266,47 @@ test("settings restore, model identity, template copies, groups and mobile long 
   await chatMenu.getByRole("button", { name: "复制", exact: true }).click();
   await expect(page.locator(".header-title")).toContainText("副本");
   await expect(page.locator(".batch-bar")).toHaveCount(0);
+  const duplicateId = await page.evaluate(() =>
+    localStorage.getItem("lastChat"),
+  );
+  await page
+    .locator(".chat-row.selected")
+    .getByRole("button", { name: /^管理 / })
+    .click();
+  await chatMenu.getByRole("button", { name: "归档", exact: true }).click();
+  await page
+    .getByRole("region", { name: "归档文件夹" })
+    .getByRole("button", { name: /归档/ })
+    .click();
+  await expect(
+    page.locator(".archive-contents .chat-row.selected"),
+  ).toBeVisible();
+  await page.reload();
+  await page
+    .getByRole("region", { name: "归档文件夹" })
+    .getByRole("button", { name: /归档/ })
+    .click();
+  await expect(
+    page.locator(".archive-contents .chat-row.selected"),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      async (id) =>
+        (
+          (await (await fetch("/api/chats/" + id)).json()) as {
+            chat: { archived: boolean };
+          }
+        ).chat.archived,
+      duplicateId,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "账户菜单", exact: true }).click();
+  await expect(
+    page
+      .getByRole("dialog", { name: "账户菜单" })
+      .getByRole("button", { name: "归档", exact: true }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
   const mobileId = await page.evaluate(async () => {
     const data = {
       title: "手机分支操作",

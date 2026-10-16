@@ -190,9 +190,52 @@ for (const mobile of [false, true]) {
     });
     await slider.focus();
     await slider.press("Home");
-    await expect(page.locator(".effort-trigger")).toHaveText("跟随接口");
-    await slider.press("ArrowRight");
     await expect(page.locator(".effort-trigger")).toHaveText("无");
+    await page.getByRole("button", { name: "跟随接口", exact: true }).click();
+    await expect(page.locator(".effort-trigger")).toHaveText("跟随接口");
+    await expect(page.locator(".effort-track")).toHaveClass(/inherited/);
+    await expect(
+      page.getByRole("button", { name: "跟随接口", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          async (id) =>
+            (
+              (await (await fetch("/api/chats/" + id)).json()) as {
+                chat: { effort: string };
+              }
+            ).chat.effort,
+          id,
+        ),
+      )
+      .toBe("inherit");
+    expect(
+      await slider.evaluate((el) =>
+        getComputedStyle(el).getPropertyValue("--du-range-fill").trim(),
+      ),
+    ).toBe("0");
+    expect(await slider.evaluate((el) => getComputedStyle(el).color)).toBe(
+      await slider
+        .evaluate(() =>
+          getComputedStyle(document.documentElement)
+            .getPropertyValue("--muted")
+            .trim(),
+        )
+        .then(async (color) =>
+          page.evaluate((color) => {
+            const el = document.createElement("span");
+            el.style.color = color;
+            document.body.appendChild(el);
+            const normalized = getComputedStyle(el).color;
+            el.remove();
+            return normalized;
+          }, color),
+        ),
+    );
+    await slider.focus();
+    await slider.press("ArrowRight");
+    await expect(page.locator(".effort-trigger")).toHaveText("低");
     await slider.press("End");
     await expect(page.locator(".effort-trigger")).toHaveText("最高");
     await slider.press("ArrowLeft");

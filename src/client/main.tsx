@@ -33,7 +33,6 @@ import {
   Download,
   Upload,
   LogOut,
-  LoaderCircle,
   Pencil,
   Search,
   CircleAlert,
@@ -60,8 +59,13 @@ import {
 } from "../shared/chat";
 import { api, download } from "./api";
 import "./style.css";
-import { IconButton, ParameterControl, useDialogFocus } from "./controls";
-import { ModelControls, TemplatePicker, MessageUsage } from "./chat-controls";
+import {
+  IconButton,
+  ParameterControl,
+  useDialogFocus,
+  Loading,
+} from "./controls";
+import { ModelControls, SystemPrompts, MessageUsage } from "./chat-controls";
 import { SettingsTools, KeyReveal } from "./settings-tools";
 import { MessageEditor } from "./message-editor";
 import { ImportDialog } from "./import-dialog";
@@ -126,6 +130,7 @@ function App() {
     [modelMenu, setModelMenu] = useState(false),
     [search, setSearch] = useState(""),
     [view, setView] = useState("active");
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [menu, setMenu] = useState<string | null>(null),
     [expanded, setExpanded] = useState(false),
     [editSaving, setEditSaving] = useState(false),
@@ -669,11 +674,7 @@ function App() {
     ),
     capacity = selectedModel?.capacity ?? 1048576;
   const filteredChats = chats.filter((c) =>
-    view === "trash"
-      ? c.deleted
-      : view === "archive"
-        ? c.archived && !c.deleted
-        : !c.archived && !c.deleted,
+    view === "trash" ? c.deleted : !c.archived && !c.deleted,
   );
   const sorted = (items: Brief[]) =>
     [...items].sort(
@@ -755,7 +756,7 @@ function App() {
       <button className="chat-open" onClick={() => void run(() => open(c.id))}>
         <span className="chat-title">{c.title}</span>
         {c.status === "running" || c.status === "pending" ? (
-          <LoaderCircle size={13} className="spin" />
+          <Loading small />
         ) : c.status === "error" ? (
           <CircleAlert size={13} className="danger-text" />
         ) : c.unread ? (
@@ -773,7 +774,7 @@ function App() {
   if (auth === null)
     return (
       <div className="center">
-        <LoaderCircle className="spin" />
+        <Loading />
       </div>
     );
   if (!auth)
@@ -845,6 +846,33 @@ function App() {
           新聊天<span>＋</span>
         </button>
         <div className="nav-list">
+          <section className="archive-folder" aria-label="归档文件夹">
+            <button
+              aria-expanded={archiveOpen}
+              onClick={() => setArchiveOpen(!archiveOpen)}
+            >
+              {archiveOpen ? (
+                <ChevronDown size={14} />
+              ) : (
+                <ChevronRight size={14} />
+              )}
+              <Archive size={16} />
+              <span>归档</span>
+              <small>
+                {chats.filter((c) => c.archived && !c.deleted).length}
+              </small>
+            </button>
+            {archiveOpen && (
+              <div className="archive-contents">
+                {sorted(chats.filter((c) => c.archived && !c.deleted)).map(
+                  chatRow,
+                )}
+                {!chats.some((c) => c.archived && !c.deleted) && (
+                  <p className="nav-empty">还没有归档聊天</p>
+                )}
+              </div>
+            )}
+          </section>
           <div className="section-label">
             分组
             <IconButton
@@ -962,11 +990,7 @@ function App() {
               })
             }
           >
-            {view === "trash"
-              ? "回收站"
-              : view === "archive"
-                ? "已归档"
-                : "聊天"}
+            {view === "trash" ? "回收站" : "聊天"}
           </div>
           {sorted(
             filteredChats.filter(
@@ -996,12 +1020,6 @@ function App() {
                 label: "账号与设备",
                 icon: <UserRound size={19} />,
                 onClick: () => showSettings("security"),
-              },
-              {
-                label: view === "archive" ? "返回聊天" : "归档",
-                icon: <Archive size={19} />,
-                onClick: () =>
-                  setView(view === "archive" ? "active" : "archive"),
               },
               {
                 label: view === "trash" ? "返回聊天" : "回收站",
@@ -1044,7 +1062,7 @@ function App() {
           <div className="header-actions">
             {job && (
               <span className="status-label">
-                <LoaderCircle size={13} className="spin" />
+                <Loading small />
                 正在生成
               </span>
             )}
@@ -1061,7 +1079,7 @@ function App() {
           </div>
         </header>
         {error && (
-          <div className="error-banner" role="alert">
+          <div className="error-banner du-alert du-alert-error" role="alert">
             <CircleAlert size={16} />
             <span>{error}</span>
             {chat && connection.unsaved(chat.id) && (
@@ -1196,9 +1214,16 @@ function App() {
                     ) : (
                       <div className="message-body">
                         {m.reasoning && (
-                          <details open={m.status === "running"}>
-                            <summary>思考过程</summary>
-                            <div className="reasoning">{m.reasoning}</div>
+                          <details
+                            className="reasoning-collapse du-collapse du-collapse-arrow"
+                            open={m.status === "running"}
+                          >
+                            <summary className="du-collapse-title">
+                              思考过程
+                            </summary>
+                            <div className="reasoning du-collapse-content">
+                              {m.reasoning}
+                            </div>
                           </details>
                         )}
                         <div
@@ -1406,6 +1431,7 @@ function App() {
             )}
             <div className="composer-input">
               <textarea
+                className="du-textarea"
                 ref={textarea}
                 disabled={opening || initializing}
                 aria-label="消息"
@@ -1473,6 +1499,7 @@ function App() {
                       <div className="search-box">
                         <Search size={15} />
                         <input
+                          className="du-input du-input-sm"
                           aria-label="搜索模型"
                           autoFocus={desktopInput()}
                           placeholder="搜索模型或服务商"
@@ -1556,11 +1583,7 @@ function App() {
                   }
                   onClick={() => void run(send)}
                 >
-                  {busy ? (
-                    <LoaderCircle size={19} className="spin" />
-                  ) : (
-                    <ArrowUp size={21} />
-                  )}
+                  {busy ? <Loading /> : <ArrowUp size={21} />}
                 </IconButton>
               )}
             </div>
@@ -1573,16 +1596,30 @@ function App() {
       {panel && chat && (
         <aside className="parameters">
           <div className="panel-heading">
-            <div className="panel-tabs">
+            <div
+              className="panel-tabs du-tabs du-tabs-box"
+              role="tablist"
+              aria-label="聊天面板"
+            >
               <button
-                className={panelTab === "settings" ? "selected" : ""}
+                role="tab"
+                aria-selected={panelTab === "settings"}
+                className={
+                  "du-tab " +
+                  (panelTab === "settings" ? "selected du-tab-active" : "")
+                }
                 onClick={() => setPanelTab("settings")}
               >
                 当前聊天设置
               </button>
               <button
                 aria-label="分支总览"
-                className={panelTab === "overview" ? "selected" : ""}
+                role="tab"
+                aria-selected={panelTab === "overview"}
+                className={
+                  "du-tab " +
+                  (panelTab === "overview" ? "selected du-tab-active" : "")
+                }
                 onClick={() => setPanelTab("overview")}
               >
                 概述
@@ -1595,100 +1632,17 @@ function App() {
           {panelTab === "settings" ? (
             <div className="panel-content">
               <h3>系统提示词</h3>
-              <label>
-                选择模板时
-                <select
-                  value={chat.templateMode}
-                  onChange={(e) =>
-                    void run(() =>
-                      patch({
-                        templateMode: e.target.value as Chat["templateMode"],
-                      }),
-                    )
-                  }
-                >
-                  <option value="replace">替换</option>
-                  <option value="append">追加</option>
-                </select>
-              </label>
-              <TemplatePicker
+              <SystemPrompts
+                key={chat.id}
                 templates={settings.templates}
-                onApply={(templates) =>
-                  run(() =>
-                    patch({
-                      system:
-                        chat.templateMode === "replace"
-                          ? templates
-                          : [...chat.system, ...templates],
-                    }),
-                  )
-                }
+                value={chat.system}
+                onChange={(system) => run(() => patch({ system }))}
               />
-              {chat.system.map((t, i) => (
-                <div className="template-card" key={t.id + "-" + i}>
-                  <div>
-                    {t.name}
-                    <IconButton
-                      label="上移模板"
-                      disabled={i === 0}
-                      onClick={() => {
-                        const next = [...chat.system];
-                        [next[i - 1], next[i]] = [next[i]!, next[i - 1]!];
-                        void run(() => patch({ system: next }));
-                      }}
-                    >
-                      <ArrowUp size={13} />
-                    </IconButton>
-                    <IconButton
-                      label="删除模板卡片"
-                      onClick={() =>
-                        void run(() =>
-                          patch({
-                            system: chat.system.filter((_, j) => j !== i),
-                          }),
-                        )
-                      }
-                    >
-                      <X size={13} />
-                    </IconButton>
-                  </div>
-                  <textarea
-                    aria-label={t.name}
-                    defaultValue={t.content}
-                    onBlur={(e) =>
-                      void run(() =>
-                        patch({
-                          system: chat.system.map((v, j) =>
-                            j === i ? { ...v, content: e.target.value } : v,
-                          ),
-                        }),
-                      )
-                    }
-                  />
-                </div>
-              ))}
-              <button
-                onClick={() =>
-                  void run(() =>
-                    patch({
-                      system: [
-                        ...chat.system,
-                        {
-                          id: crypto.randomUUID(),
-                          name: "自定义提示词",
-                          content: "",
-                        },
-                      ],
-                    }),
-                  )
-                }
-              >
-                ＋ 添加提示词卡片
-              </button>
 
               <label className="toggle">
                 流式回答
                 <input
+                  className="du-toggle du-toggle-primary du-toggle-sm"
                   type="checkbox"
                   checked={chat.stream}
                   onChange={(e) =>
@@ -1719,11 +1673,13 @@ function App() {
                 />
               ))}
               <label>
-                最近上下文轮数
+                发送的对话轮数
                 <input
+                  className="du-input du-input-sm"
                   type="number"
                   min="1"
-                  placeholder="全部"
+                  placeholder="全部历史"
+                  aria-describedby="context-rounds-help"
                   defaultValue={chat.rounds ?? ""}
                   key={chat.id}
                   onBlur={(e) =>
@@ -1734,6 +1690,9 @@ function App() {
                     )
                   }
                 />
+                <small id="context-rounds-help">
+                  一轮是一次提问及其回复。数量包含本次提问；留空则发送当前分支的全部历史。
+                </small>
               </label>
 
               <h3>当前聊天导出</h3>
@@ -1948,6 +1907,11 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
           </a>
         ),
         pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+        table: ({ children, ...props }) => (
+          <table {...props} className="du-table du-table-sm">
+            {children}
+          </table>
+        ),
       }}
     >
       {content}
@@ -2056,6 +2020,7 @@ function Login({
         <label>
           {recovery ? "离线恢复码" : "访问密码"}
           <input
+            className="du-input du-input-sm"
             autoFocus
             required
             autoComplete={recovery ? "off" : "current-password"}
@@ -2068,6 +2033,7 @@ function Login({
           <label>
             新密码
             <input
+              className="du-input du-input-sm"
               required
               type="password"
               minLength={12}
@@ -2244,7 +2210,7 @@ function SettingsPanel({
     );
   return (
     <div className="settings-body">
-      <nav>
+      <nav className="du-menu settings-menu">
         {[
           ["connection", "连接"],
           ["providers", "服务商"],
@@ -2258,7 +2224,9 @@ function SettingsPanel({
           ["about", "关于"],
         ].map(([key, title]) => (
           <button
-            className={tab === key ? "selected" : ""}
+            className={
+              "du-btn du-btn-ghost du-btn-sm " + (tab === key ? "selected" : "")
+            }
             key={key}
             onClick={() => setTab(key!)}
           >
@@ -2273,6 +2241,7 @@ function SettingsPanel({
             <label className="toggle">
               此设备直连
               <input
+                className="du-toggle du-toggle-primary du-toggle-sm"
                 type="checkbox"
                 aria-label="此设备直连"
                 checked={connection.enabled}
@@ -2359,7 +2328,7 @@ function SettingsPanel({
               兼容接口。密钥加密保存在服务端，设备直连时经验证临时解锁。
             </p>
             {providers.map((p) => (
-              <div className="provider-card" key={p.id}>
+              <div className="provider-card du-card" key={p.id}>
                 <div>
                   <strong>{p.name}</strong>
                   <small>{p.baseUrl}</small>
@@ -2443,6 +2412,7 @@ function SettingsPanel({
               <label>
                 名称
                 <input
+                  className="du-input du-input-sm"
                   required
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -2451,6 +2421,7 @@ function SettingsPanel({
               <label>
                 Base URL
                 <input
+                  className="du-input du-input-sm"
                   required
                   type="url"
                   placeholder="https://example.com/v1"
@@ -2463,6 +2434,7 @@ function SettingsPanel({
               <label>
                 API Key
                 <input
+                  className="du-input du-input-sm"
                   type="password"
                   autoComplete="new-password"
                   placeholder={
@@ -2475,6 +2447,7 @@ function SettingsPanel({
               <label>
                 显示前缀（可选）
                 <input
+                  className="du-input du-input-sm"
                   placeholder="OR/"
                   value={form.prefix}
                   onChange={(e) => setForm({ ...form, prefix: e.target.value })}
@@ -2493,6 +2466,7 @@ function SettingsPanel({
               新发现的模型默认关闭。前缀只用于显示，发送时使用原始模型 ID。
             </p>
             <input
+              className="du-input du-input-sm"
               aria-label="筛选设置模型"
               placeholder="搜索模型或服务商…"
               value={filter}
@@ -2529,6 +2503,7 @@ function SettingsPanel({
             <label>
               默认聊天模型
               <select
+                className="du-select du-select-sm"
                 value={
                   settings.defaultModel
                     ? JSON.stringify(settings.defaultModel)
@@ -2566,6 +2541,7 @@ function SettingsPanel({
                 <div className="model-row">
                   <label>
                     <input
+                      className="du-toggle du-toggle-primary du-toggle-sm"
                       type="checkbox"
                       checked={m.enabled}
                       onChange={(e) =>
@@ -2585,6 +2561,7 @@ function SettingsPanel({
                   <label>
                     上下文预算
                     <input
+                      className="du-input du-input-sm"
                       aria-label={m.id + "上下文预算"}
                       type="number"
                       min="1"
@@ -2622,7 +2599,7 @@ function SettingsPanel({
               选择后复制到当前聊天；更改模板不会改变旧聊天。
             </p>
             {settings.templates.map((t) => (
-              <div className="template-card" key={t.id}>
+              <div className="template-card du-card" key={t.id}>
                 <div>
                   <strong>{t.name}</strong>
                   <IconButton
@@ -2642,6 +2619,7 @@ function SettingsPanel({
                   </IconButton>
                 </div>
                 <textarea
+                  className="du-textarea"
                   defaultValue={t.content}
                   onBlur={(e) =>
                     void run(() =>
@@ -2659,6 +2637,7 @@ function SettingsPanel({
             <label>
               模板名称
               <input
+                className="du-input du-input-sm"
                 value={template.name}
                 onChange={(e) =>
                   setTemplate({ ...template, name: e.target.value })
@@ -2668,6 +2647,7 @@ function SettingsPanel({
             <label>
               提示词
               <textarea
+                className="du-textarea"
                 rows={6}
                 value={template.content}
                 onChange={(e) =>
@@ -2702,6 +2682,7 @@ function SettingsPanel({
             <label>
               主题
               <select
+                className="du-select du-select-sm"
                 aria-label="主题"
                 value={appearance.theme}
                 onChange={(e) =>
@@ -2716,6 +2697,7 @@ function SettingsPanel({
             <label>
               字号 {appearance.font}px
               <input
+                className="du-range du-range-primary du-range-sm"
                 type="range"
                 min={13}
                 max={24}
@@ -2728,6 +2710,7 @@ function SettingsPanel({
             <label>
               内容宽度 {appearance.width}px
               <input
+                className="du-range du-range-primary du-range-sm"
                 type="range"
                 min={600}
                 max={1200}
@@ -2744,6 +2727,7 @@ function SettingsPanel({
             <label>
               行间距 {appearance.line}
               <input
+                className="du-range du-range-primary du-range-sm"
                 type="range"
                 min={1.3}
                 max={2.4}
@@ -2757,6 +2741,7 @@ function SettingsPanel({
             <label className="toggle">
               折叠超长消息
               <input
+                className="du-toggle du-toggle-primary du-toggle-sm"
                 type="checkbox"
                 checked={appearance.collapse}
                 onChange={(e) =>
@@ -2767,6 +2752,7 @@ function SettingsPanel({
             <label className="toggle">
               电脑按 Enter 发送
               <input
+                className="du-toggle du-toggle-primary du-toggle-sm"
                 type="checkbox"
                 checked={appearance.enter}
                 onChange={(e) =>
@@ -2780,7 +2766,7 @@ function SettingsPanel({
           <>
             <h3>登录设备</h3>
             {sessions.map((s) => (
-              <div className="provider-card" key={s.id}>
+              <div className="provider-card du-card" key={s.id}>
                 <div>
                   {s.current ? "当前设备" : "其他设备"}
                   <small>{s.device}</small>
@@ -2813,6 +2799,7 @@ function SettingsPanel({
             <label>
               当前密码
               <input
+                className="du-input du-input-sm"
                 type="password"
                 autoComplete="current-password"
                 value={oldPassword}
@@ -2839,6 +2826,7 @@ function SettingsPanel({
             <label>
               新密码（至少 12 字符）
               <input
+                className="du-input du-input-sm"
                 type="password"
                 autoComplete="new-password"
                 value={newPassword}

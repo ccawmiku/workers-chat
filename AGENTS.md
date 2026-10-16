@@ -31,6 +31,14 @@
 - 默认 `max`，不支持时报错；不要静默降级到 high/low，也不自动改协议或吞掉上游错误。
 - 流式关闭时也要保证保存、停止和后台任务状态一致。不重复执行模型请求来模拟恢复/重连。
 
+## daisyUI 组件优先（用户于 2026-10-16 确认）
+
+- 新增功能或修改界面时，先检查 daisyUI 当前已安装版本的现成组件和官方用法；适合时直接使用或适配，再决定是否自行实现。
+- 重点候选包括 Swap、Theme Controller、Accordion/Collapse、Avatar、Card、Table、Breadcrumbs、Menu、Navbar、Tabs、Alert、Loading、Checkbox、Fieldset、Select、Toggle、Drawer/Sidebar、Indicator，以及 Range。
+- 保持 Codex 桌面版／ChatGPT 网页版的整体布局、浅暗色与主题色，不为凑组件增加没有需求的功能。保留组件的键盘、触屏和无障碍语义。
+- 本项目使用 `du-` 前缀，关闭 Tailwind preflight；不要让全局重置或同名样式破坏 OpenWebUI/Svelte Flow 的节点、端口和连线。daisyUI 的 `--border` 是宽度，现有颜色用 `--line-color`，不能混用。
+- 用量圈保留已验证的单 SVG，不能为了换组件重新引入两层圆错位。已有可调整宽度的侧栏和自动主题逻辑可继续复用，避免重复状态。
+
 ## 凭证与安全
 
 - 不在代码、提交、问题、PR、截图、日志、测试报告或聊天回答里输出真实 API Key、登录密码、恢复码、Cloudflare token。

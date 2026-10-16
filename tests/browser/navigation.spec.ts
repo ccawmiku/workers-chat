@@ -171,7 +171,7 @@ for (const mobile of [false, true])
     await page
       .getByRole("button", { name: "当前聊天设置", exact: true })
       .click();
-    await page.getByRole("button", { name: "分支总览", exact: true }).click();
+    await page.getByRole("tab", { name: "分支总览", exact: true }).click();
     await expect(page.locator(".svelte-flow__node")).toHaveCount(19);
     for (const name of ["Horizontal Layout", "Vertical Layout"]) {
       await page.getByRole("button", { name, exact: true }).click();

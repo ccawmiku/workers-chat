@@ -14,7 +14,7 @@ export function IconButton({
 }) {
   return (
     <button
-      className={"icon-button " + className}
+      className={"du-btn du-btn-ghost du-btn-xs icon-button " + className}
       title={label}
       aria-label={label}
       disabled={disabled}
@@ -49,6 +49,10 @@ export function ParameterControl({
       </div>
       <div>
         <input
+          className={
+            "du-range du-range-primary du-range-sm " +
+            (current === undefined ? "is-default" : "")
+          }
           aria-label={name + "滑块"}
           type="range"
           min={0}
@@ -74,6 +78,7 @@ export function ParameterControl({
           }}
         />
         <input
+          className="du-input du-input-sm"
           aria-label={name}
           type="number"
           min={0}
@@ -147,4 +152,16 @@ export function useDialogFocus(
       if (previous?.isConnected) previous.focus();
     };
   }, [enabled, ref]);
+}
+
+export function Loading({ small = false }: { small?: boolean }) {
+  return (
+    <span
+      aria-label="正在加载"
+      className={
+        "du-loading du-loading-spinner " +
+        (small ? "du-loading-xs" : "du-loading-sm")
+      }
+    />
+  );
 }

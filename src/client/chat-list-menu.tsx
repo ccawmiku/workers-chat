@@ -82,20 +82,23 @@ export function ChatListMenu({
         className="chat-list-menu"
         focus
       >
-        {actions.map(({ name, label, Icon, disabled }) => (
-          <button
-            key={name}
-            disabled={disabled}
-            className={name === "delete" ? "danger-text" : ""}
-            onClick={() => {
-              setOpen(false);
-              onAction(name);
-            }}
-          >
-            <Icon size={18} />
-            <span>{label}</span>
-          </button>
-        ))}
+        <ul className="du-menu chat-actions-list">
+          {actions.map(({ name, label, Icon, disabled }) => (
+            <li key={name}>
+              <button
+                disabled={disabled}
+                className={name === "delete" ? "danger-text" : ""}
+                onClick={() => {
+                  setOpen(false);
+                  onAction(name);
+                }}
+              >
+                <Icon size={18} />
+                <span>{label}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
       </FloatingPanel>
     </>
   );

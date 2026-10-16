@@ -1,3 +1,16 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@source "./**/*.{tsx,ts}";
+@plugin "daisyui" {
+  themes: false;
+  prefix: "du-";
+  include:
+    button, input, select, textarea, toggle, checkbox, range, card, badge,
+    avatar, menu, tabs, collapse, alert, loading, table;
+  logs: false;
+}
+
 :root {
   font-family:
     Inter,
@@ -15,7 +28,7 @@
   --hover: #343434;
   --text: #f4f4f4;
   --muted: #929292;
-  --border: #363636;
+  --line-color: #363636;
   --accent: #ed75b5;
   --danger: #ee8989;
   font-synthesis: none;
@@ -64,17 +77,17 @@ select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-input,
-textarea,
-select {
+input:not(.du-input):not(.du-toggle):not(.du-checkbox):not(.du-range),
+textarea:not(.du-textarea),
+select:not(.du-select) {
   background: var(--panel);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-color);
   border-radius: 8px;
   padding: 10px;
   min-width: 0;
 }
-input[type="checkbox"] {
+input[type="checkbox"]:not(.du-toggle):not(.du-checkbox) {
   accent-color: var(--accent);
   width: 16px;
   height: 16px;
@@ -366,7 +379,7 @@ header {
 }
 .subtle-button {
   font-size: 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-color);
   color: var(--muted);
 }
 .messages {
@@ -435,7 +448,7 @@ header {
 .markdown blockquote {
   margin-left: 0;
   padding: 0 16px;
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--line-color);
   color: var(--muted);
 }
 .markdown table {
@@ -447,7 +460,7 @@ header {
 }
 .markdown th,
 .markdown td {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line-color);
   padding: 9px 12px;
   text-align: left;
 }
@@ -473,7 +486,7 @@ header {
 .code-block {
   position: relative;
   background: #121212;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-color);
   border-radius: 12px;
   margin: 20px 0;
   padding-top: 30px;
@@ -532,7 +545,7 @@ summary {
 }
 .reasoning {
   white-space: pre-wrap;
-  border-left: 2px solid var(--border);
+  border-left: 2px solid var(--line-color);
   padding: 10px 14px;
   margin-top: 10px;
 }
@@ -800,64 +813,6 @@ summary {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.effort-track {
-  position: relative;
-  border-radius: 24px;
-  height: 30px;
-  background: linear-gradient(
-    to right,
-    var(--accent) var(--effort-progress),
-    color-mix(in srgb, var(--text) 15%, var(--panel)) var(--effort-progress)
-  );
-}
-.effort-ticks {
-  position: absolute;
-  inset: 0 14px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  pointer-events: none;
-}
-.effort-ticks i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--text) 32%, transparent);
-}
-.effort-track input[type="range"] {
-  position: absolute;
-  inset: 0;
-  margin: 0;
-  width: 100%;
-  height: 30px;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  appearance: none;
-  cursor: pointer;
-  border-radius: 24px;
-}
-.effort-track input::-webkit-slider-runnable-track {
-  height: 30px;
-  background: transparent;
-}
-.effort-track input::-webkit-slider-thumb {
-  appearance: none;
-  width: 32px;
-  height: 32px;
-  margin-top: -1px;
-  background: #fff;
-  border-radius: 50%;
-  border: 1px solid #0000000a;
-  box-shadow: 0 1px 3px #0002;
-}
-.effort-track input::-moz-range-thumb {
-  width: 32px;
-  height: 32px;
-  background: #fff;
-  border-radius: 50%;
-  border: 1px solid #0000000a;
-}
 .account-trigger {
   width: 100%;
   display: flex;
@@ -905,7 +860,7 @@ summary {
   display: flex;
   gap: 10px;
   padding: 12px 12px 15px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line-color);
   margin-bottom: 7px;
 }
 .account-popover > button {
@@ -920,7 +875,7 @@ summary {
 }
 .account-popover hr {
   height: 1px;
-  background: var(--border);
+  background: var(--line-color);
   border: 0;
   margin: 7px 10px;
 }
@@ -938,7 +893,7 @@ summary {
   font-size: 14px;
 }
 .chat-list-menu > button:last-child {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line-color);
   border-radius: 0 0 12px 12px;
   margin-top: 4px;
 }
@@ -997,7 +952,7 @@ summary {
   left: calc(50% - 17px);
   top: -34px;
   background: var(--panel);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-color);
   border-radius: 50%;
   z-index: 5;
 }
@@ -1020,7 +975,7 @@ summary {
 .parameters {
   width: 310px;
   background: var(--nav);
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--line-color);
   display: flex;
   flex-direction: column;
 }
@@ -1106,7 +1061,7 @@ summary {
 }
 .template-card {
   background: var(--panel);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-color);
   padding: 12px;
   border-radius: 12px;
   margin: 8px 0;
@@ -1140,7 +1095,7 @@ summary {
 }
 .modal {
   background: var(--nav);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-color);
   border-radius: 20px;
   max-width: 780px;
   width: 100%;
@@ -1199,14 +1154,14 @@ summary {
   flex: 1;
   min-width: 0;
   overflow: auto;
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--line-color);
 }
 .settings-content form {
   margin-top: 28px;
 }
 .provider-card {
   display: flex;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-color);
   border-radius: 12px;
   padding: 12px;
   margin: 12px 0;
@@ -1233,7 +1188,7 @@ summary {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line-color);
   padding: 14px 0;
   gap: 15px;
 }
@@ -1395,13 +1350,13 @@ summary {
   --hover: #e8e8e8;
   --text: #242424;
   --muted: #777;
-  --border: #dedede;
+  --line-color: #dedede;
   --accent: #db5194;
   --danger: #b93535;
 }
 [data-theme="light"] .model-popover {
   background: #fff;
-  border-color: var(--border);
+  border-color: var(--line-color);
 }
 [data-theme="light"] .code-block {
   background: #f6f6f6;
@@ -1551,7 +1506,7 @@ summary {
     overflow: auto;
     padding: 0 12px 12px;
     gap: 2px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--line-color);
   }
   .settings-body > nav > button {
     flex-shrink: 0;
@@ -1624,7 +1579,7 @@ summary {
   display: flex;
   flex-direction: column;
   background: var(--panel);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-color);
   border-radius: 10px;
   box-shadow: 0 6px 25px #0004;
   padding: 6px;
@@ -1642,7 +1597,7 @@ summary {
   border-radius: 8px;
 }
 .model-entry {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line-color);
 }
 .model-entry .model-row {
   border: 0;
@@ -1665,7 +1620,7 @@ summary {
 }
 .backup-preview {
   padding: 16px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-color);
   border-radius: 12px;
   margin-top: 18px;
 }
@@ -1774,4 +1729,331 @@ summary {
   .model-row > label:last-child {
     width: 105px;
   }
+}
+
+/* daisyUI components share the existing Codex palette, including custom accents. */
+:root {
+  --color-base-100: var(--panel);
+  --color-base-200: var(--input);
+  --color-base-300: var(--line-color);
+  --color-base-content: var(--text);
+  --color-primary: var(--accent);
+  --color-primary-content: #23121b;
+  --color-neutral: var(--muted);
+  --color-neutral-content: var(--text);
+  --color-error: var(--danger);
+  --radius-selector: 999px;
+  --radius-field: 10px;
+  --radius-box: 14px;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: var(--line-color);
+  --depth: 0;
+  --noise: 0;
+}
+/* Existing graph CSS uses --border as a color; daisyUI uses it as a width.
+   Scope the library's width to its components and retain the legacy color alias. */
+:is(.du-input, .du-select, .du-textarea, .du-btn, .du-toggle, .du-checkbox) {
+  --border: 1px;
+}
+.du-input,
+.du-select,
+.du-textarea {
+  width: 100%;
+  font-size: 13px;
+  border-color: var(--color-base-300);
+  background-color: var(--color-base-100);
+  color: var(--text);
+}
+.du-input,
+.du-select {
+  min-height: 38px;
+}
+.du-textarea {
+  padding: 10px 12px;
+}
+input.du-range {
+  width: 100%;
+  min-width: 0;
+  color: var(--accent);
+  --du-range-thumb: #fff;
+  --du-range-bg: color-mix(in srgb, var(--text) 17%, transparent);
+  --du-range-p: 3px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+input.du-range.is-default {
+  color: var(--muted);
+}
+input.du-toggle {
+  flex-shrink: 0;
+}
+.parameter input.du-input {
+  width: 84px;
+  padding-inline: 9px;
+}
+.effort-popover {
+  padding: 12px 15px 15px;
+  border-radius: 20px;
+}
+.effort-heading {
+  height: 28px;
+}
+.effort-model {
+  margin: -2px auto 14px;
+  height: 20px;
+}
+.effort-track {
+  position: relative;
+  height: 32px;
+}
+.effort-track input.du-range {
+  display: block;
+  height: 32px;
+  margin: 0;
+  --du-range-thumb-size: 32px;
+  --du-range-p: 0px;
+  --du-range-thumb: #fff;
+  --du-range-bg: color-mix(in srgb, var(--text) 16%, var(--panel));
+}
+.effort-track input.du-range::-webkit-slider-runnable-track {
+  height: 32px;
+}
+.effort-track input.du-range::-moz-range-track {
+  height: 32px;
+}
+.effort-track.inherited input.du-range {
+  color: var(--muted);
+  --du-range-fill: 0;
+}
+.effort-marks {
+  position: absolute;
+  inset: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.effort-marks i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 30%, transparent);
+}
+.effort-marks .at-thumb {
+  visibility: hidden;
+}
+.effort-heading button[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--hover);
+}
+.prompt-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.prompt-item {
+  border: 1px solid var(--line-color);
+  border-radius: 12px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.prompt-item.dragging {
+  opacity: 0.5;
+}
+.prompt-item.drag-target {
+  outline: 2px solid var(--accent);
+}
+.prompt-row {
+  display: flex;
+  align-items: center;
+  padding: 5px;
+  gap: 2px;
+}
+.prompt-row .prompt-name {
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+  justify-content: flex-start;
+  padding: 6px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.prompt-row .icon-button {
+  width: 26px;
+  height: 30px;
+  padding: 4px;
+}
+.prompt-grip {
+  color: var(--muted);
+  cursor: grab;
+  flex-shrink: 0;
+}
+.prompt-item textarea {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 0 8px 8px;
+  min-height: 100px;
+}
+.prompt-add {
+  position: relative;
+}
+.prompt-add > button {
+  width: 100%;
+  min-height: 42px;
+  border: 1px dashed var(--line-color);
+  color: var(--muted);
+}
+.prompt-choices {
+  border: 1px solid var(--line-color);
+  background: var(--panel);
+  padding: 5px;
+  border-radius: 12px;
+  margin-top: 6px;
+  max-height: 240px;
+  overflow: auto;
+}
+.prompt-choices button {
+  display: flex;
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+}
+.prompt-help {
+  margin: 4px 0 0;
+}
+.archive-folder {
+  margin-bottom: 16px;
+}
+.archive-folder > button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 10px;
+  font-size: 13px;
+}
+.archive-folder > button span {
+  flex: 1;
+  text-align: left;
+}
+.archive-folder > button small {
+  min-width: 20px;
+  text-align: center;
+}
+.archive-contents {
+  padding-left: 7px;
+  border-left: 1px solid var(--line-color);
+  margin-left: 17px;
+}
+.archive-contents .nav-empty {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.prompt-grip {
+  touch-action: none;
+  padding: 4px;
+  width: 24px;
+  height: 30px;
+}
+.du-menu.account-menu-list,
+.du-menu.chat-actions-list {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+.account-menu-separated {
+  border-top: 1px solid var(--line-color);
+  margin-top: 7px;
+  padding-top: 7px;
+}
+.account-popover .du-menu li > button,
+.chat-list-menu .du-menu li > button {
+  width: 100%;
+  justify-content: flex-start;
+  border-radius: 9px;
+  padding: 10px 12px;
+}
+.settings-menu.du-menu {
+  padding: 0 16px 0 0;
+  margin: 0;
+  gap: 4px;
+}
+.settings-menu.du-menu > button {
+  height: auto;
+  min-height: 42px;
+  justify-content: flex-start;
+  font-weight: 400;
+}
+.panel-tabs.du-tabs {
+  padding: 3px;
+  gap: 2px;
+  border-radius: 12px;
+  background: var(--panel);
+}
+.panel-tabs .du-tab {
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.panel-tabs .du-tab-active {
+  background: var(--hover);
+  color: var(--text);
+  border-radius: 9px;
+}
+.du-avatar .account-avatar {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #99a483;
+  color: #fff;
+  font-size: 12px;
+}
+.du-collapse > .du-collapse-title {
+  min-height: 36px;
+  padding: 9px 30px 9px 10px;
+  font-size: 12px;
+}
+.du-collapse > .du-collapse-content {
+  padding-inline: 10px;
+  font-size: 12px;
+}
+.model-controls.du-collapse {
+  background: var(--panel);
+  border: 1px solid var(--line-color);
+  border-radius: 12px;
+  margin: 12px 0;
+}
+.reasoning-collapse.du-collapse {
+  background: transparent;
+  width: 100%;
+  margin-bottom: 8px;
+}
+.du-alert.error-banner {
+  box-shadow: none;
+  display: flex;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+.du-loading {
+  flex-shrink: 0;
+  color: currentColor;
+}
+
+.chat-list-menu .du-menu li:last-child {
+  border-top: 1px solid var(--line-color);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.chat-list-menu .du-menu li > button,
+.account-popover .du-menu li > button {
+  min-height: 40px;
+  gap: 12px;
 }

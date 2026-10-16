@@ -226,7 +226,7 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
     .locator(".composer")
     .screenshot({ path: "docs/screenshots/composer-dark.png" });
   await page.getByRole("button", { name: "当前聊天设置", exact: true }).click();
-  await page.getByRole("button", { name: "分支总览", exact: true }).click();
+  await page.getByRole("tab", { name: "分支总览", exact: true }).click();
   await expect(page.locator(".svelte-flow__node")).toHaveCount(3);
   await page.getByRole("button", { name: "fit view", exact: true }).click();
   await page
@@ -258,7 +258,7 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
   await page.getByRole("button", { name: "收起导航", exact: true }).click();
   await page.getByRole("button", { name: "当前聊天设置", exact: true }).click();
   await expect(page.getByText("当前聊天设置", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "分支总览", exact: true }).click();
+  await page.getByRole("tab", { name: "分支总览", exact: true }).click();
   await page.getByRole("button", { name: "fit view", exact: true }).click();
   await page
     .locator(".parameters")

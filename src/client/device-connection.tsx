@@ -463,6 +463,7 @@ export function DeviceConnectionProvider({
               <label>
                 访问密码
                 <input
+                  className="du-input du-input-sm"
                   aria-label="直连验证密码"
                   type="password"
                   autoComplete="current-password"

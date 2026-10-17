@@ -254,17 +254,21 @@ export class Progress extends DurableObject<Env> {
     kind: "summary" | "suggest",
     transport?: "device",
   ) {
-    const job = await this.env.DB.prepare(
-      "SELECT chat_id,message_id FROM jobs WHERE id=? AND status='complete'",
-    )
-      .bind(jobId)
-      .first<{ chat_id: string; message_id: string }>();
-    if (!job) return null;
-    // Each queue runs in a separate invocation to stay within D1 Free's query
-    // budget, while the parent Workflow waits before notifying observers.
-    return kind === "summary"
-      ? queueSummary(this.env, job.chat_id, job.message_id)
-      : queueSuggestions(this.env, job.chat_id, job.message_id, transport);
+    try {
+      const job = await this.env.DB.prepare(
+        "SELECT chat_id,message_id FROM jobs WHERE id=? AND status='complete'",
+      )
+        .bind(jobId)
+        .first<{ chat_id: string; message_id: string }>();
+      if (!job) return null;
+      // Each queue runs in a separate invocation to stay within D1 Free's query
+      // budget, while the parent Workflow waits before notifying observers.
+      return await (kind === "summary"
+        ? queueSummary(this.env, job.chat_id, job.message_id)
+        : queueSuggestions(this.env, job.chat_id, job.message_id, transport));
+    } finally {
+      await this.ctx.storage.setAlarm(Date.now() + 86400000);
+    }
   }
   async runTitle(jobId: string) {
     try {

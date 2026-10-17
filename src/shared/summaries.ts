@@ -197,20 +197,24 @@ export function prepareSummary(
         summary: string;
       }
     | undefined;
+  let previousUser = "";
   for (let i = 0; i < index; i++) {
     const m = path[i]!;
+    if (m.role === "user") {
+      previousUser = m.content;
+      continue;
+    }
     if (m.role !== "assistant") continue;
-    const u = path.slice(0, i).findLast((v) => v.role === "user");
     const saved = savedSummaries.get(m.id);
     history.push({
       message_id: m.id,
-      user_excerpt: excerpt(u?.content ?? "", 500),
+      user_excerpt: excerpt(previousUser, 500),
       summary: saved?.summary ?? null,
     });
     if (saved?.summary)
       previous = {
         message_id: m.id,
-        user_excerpt: excerpt(u?.content ?? "", 500),
+        user_excerpt: excerpt(previousUser, 500),
         assistant_excerpt: excerpt(m.content, 2500),
         summary: saved.summary,
       };

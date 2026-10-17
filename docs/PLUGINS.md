@@ -439,3 +439,5 @@ flowchart TD
 ```json
 { "summary": "本轮有原文依据的客观进展" }
 ```
+
+摘要相关源码：[请求组装与格式验证](../src/shared/summaries.ts)、[持久任务/补齐/采用/源版本](../src/server/summaries.ts)、[并行任务恢复视图](../src/server/post-tasks.ts)、[摘要卡片与设置](../src/client/summaries-ui.tsx)。协调对象一天后清理，历史 U 配对单次顺序遍历，删除多份摘要的任务快照使用一次集合查询，避免逐份增加 D1 查询。

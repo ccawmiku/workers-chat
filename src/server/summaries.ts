@@ -579,9 +579,9 @@ export async function planPruneSummaries(
         doc.revision,
         { id: stateId(chatId), chatId },
       ),
-      ...dropped.map((r) =>
-        env.DB.prepare("DELETE FROM documents WHERE id=?").bind(taskId(r.id)),
-      ),
+      env.DB.prepare(
+        "DELETE FROM documents WHERE id IN (SELECT value FROM json_each(?))",
+      ).bind(JSON.stringify(dropped.map((r) => taskId(r.id)))),
     ],
     cancelIds: dropped.filter((r) => r.status === "running").map((r) => r.id),
   };

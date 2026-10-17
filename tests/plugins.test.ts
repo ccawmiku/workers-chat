@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  candidateReplyExcerpt,
+  candidateTask,
+  swappedHistory,
+} from "../src/shared/candidate-requests";
+import {
   newChat,
   addMessage,
   defaultSettings,
@@ -559,6 +564,54 @@ describe("plugin context assembly", () => {
       });
       expect(result.metrics.total).toBeGreaterThan(result.metrics.capacity / 4);
     }
+  });
+
+  it("temporarily excerpts each original assistant reply before merging, preserving user instructions and source history", () => {
+    const { chat, settings, state } = fixture();
+    const user = "令".repeat(2000),
+      reply = "🙂".repeat(201) + "END_REPLY";
+    addMessage(chat, "user", user);
+    addMessage(chat, "assistant", reply);
+    addMessage(chat, "assistant", "文".repeat(300) + "SECOND_END");
+    const original = structuredClone(chat.messages);
+    for (const kind of ["suggest", "rewrite"] as const) {
+      const request = preparePlugin(
+        chat,
+        pluginDefaults(kind),
+        settings,
+        [provider],
+        state,
+        "DRAFT".repeat(100),
+      );
+      expect(request.request.messages[1]?.content).toBe(user);
+      const tail = request.request.messages.at(-1)?.content ?? "";
+      expect(tail).toContain("🙂".repeat(200) + "\n\n" + "文".repeat(200));
+      expect(tail).not.toMatch(/END_REPLY|SECOND_END/);
+      expect(request.metrics.shortened).toBe(2);
+      if (kind === "rewrite") expect(tail).toContain("DRAFT".repeat(100));
+    }
+    expect(chat.messages).toEqual(original);
+    const task = candidateTask("suggest", 5, "");
+    expect(task).toContain("5 条不同走向的下一步具体行动指令");
+    expect(task).toContain("数组必须恰好 5 条");
+    expect(task).toContain("每条都用“我……”第一人称发令");
+    expect(task).not.toMatch(/写作助手|模仿历史|assistant/);
+  });
+
+  it("caps replies at 200 Unicode code points without cutting surrogate pairs or limiting the task, system or U0", () => {
+    expect(candidateReplyExcerpt("中".repeat(200))).toBe("中".repeat(200));
+    expect(candidateReplyExcerpt("中".repeat(201))).toBe("中".repeat(200));
+    expect(candidateReplyExcerpt("A".repeat(199) + "🙂B")).toBe(
+      "A".repeat(199) + "🙂",
+    );
+    const { chat } = fixture();
+    addMessage(chat, "assistant", "🙂".repeat(201));
+    const system = "S".repeat(300),
+      u0 = "U".repeat(300);
+    expect(swappedHistory(Object.values(chat.messages), u0, system)).toEqual([
+      { role: "system", content: system },
+      { role: "user", content: u0 + "\n\n" + "🙂".repeat(200) },
+    ]);
   });
 
   it("uses independent editable U0 and optional system with no context ceiling", () => {

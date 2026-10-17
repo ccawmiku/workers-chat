@@ -1,4 +1,9 @@
-import { candidateTask, swappedHistory } from "./candidate-requests";
+import {
+  candidateTask,
+  swappedHistory,
+  candidateReplyExcerpt,
+  CANDIDATE_REPLY_CHAR_LIMIT,
+} from "./candidate-requests";
 import { Validator, type Schema } from "@cfworker/json-schema";
 import {
   ANALYSIS_PROMPT,
@@ -538,13 +543,21 @@ export function preparePlugin(
     messages.push({ role: "user", content: suffix });
     section("插件任务与参考", messages.slice(-1));
   } else {
+    metrics.shortened = path.filter(
+      (m) =>
+        m.role === "assistant" &&
+        candidateReplyExcerpt(m.content) !== m.content,
+    ).length;
     messages = swappedHistory(
       path,
       p.initialUser ?? "好的",
       render(p.prompt, { COUNT: String(p.suggestions), USER_INPUT: input }),
     );
     metrics.highWater = metrics.lowWater = 0;
-    section("完整 UA 对调历史（含 U0）", messages);
+    section(
+      `UA 对调历史（回复前 ${CANDIDATE_REPLY_CHAR_LIMIT} 字符，含 U0）`,
+      messages,
+    );
     const task = candidateTask(p.kind, p.suggestions, input);
     const last = messages.at(-1)!;
     if (p.kind === "rewrite" && path.at(-1)?.role === "assistant")

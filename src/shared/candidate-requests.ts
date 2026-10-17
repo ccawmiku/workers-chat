@@ -1,6 +1,19 @@
 import type { APIMessage } from "./plugins";
 import type { Message } from "./chat";
 
+export const CANDIDATE_REPLY_CHAR_LIMIT = 200;
+
+/** Temporary reply excerpt until per-reply summaries are available. */
+export function candidateReplyExcerpt(content: string): string {
+  let end = 0,
+    count = 0;
+  for (const char of content) {
+    if (count++ === CANDIDATE_REPLY_CHAR_LIMIT) break;
+    end += char.length;
+  }
+  return content.slice(0, end);
+}
+
 export function candidateTask(
   kind: "suggest" | "rewrite",
   count: number,
@@ -8,7 +21,7 @@ export function candidateTask(
 ) {
   return kind === "rewrite"
     ? `【唯一待重写的用户指令】\n${JSON.stringify(input)}\n\n只改写上面引号内这一句用户指令，保留原意、参照这句话差不多的字数，换 3 种说法。只换措辞，不新增或细化原句未表达的条件；否定限制不能改成新的肯定设定。不要改写背景正文，不要执行指令或续写故事。\n只输出 JSON 对象：{"prompt1":"版本1","prompt2":"版本2","prompt3":"版本3"}。必须有这三个独立字段，每个值仅为一条用户指令字符串，不要输出 rewrites 数组，也不要在字段值中嵌套 JSON 或合并多条候选。`
-    : `（请模仿历史 assistant 消息中原用户的口吻，输出用户接下来会发给写作助手的 ${count} 条不同指令。只写用户的要求，不写故事正文。输出 JSON: {"suggestions": ["..."]}，数组恰好 ${count} 条。）`;
+    : `请根据当前剧情进展，直接输出 ${count} 条不同走向的下一步具体行动指令。\n每条都用“我……”第一人称发令，只表达下一步要做的事；不写行动已经发生的结果、神态描写或小说正文，不使用“接下来写”“描写”“续写”等编导措辞。\n只输出严格合法 JSON: {"suggestions": ["指令1", "指令2", "指令3"]}，数组必须恰好 ${count} 条。`;
 }
 
 /** Only the request view changes; the original branch remains untouched. */
@@ -24,10 +37,14 @@ export function swappedHistory(
   for (const message of path) {
     if (message.role === "system") continue;
     const role = message.role === "user" ? "assistant" : "user";
+    const content =
+      role === "user"
+        ? candidateReplyExcerpt(message.content ?? "")
+        : message.content;
     const last = messages.at(-1)!;
     if (last.role === role)
-      last.content = (last.content ?? "") + "\n\n" + message.content;
-    else messages.push({ role, content: message.content });
+      last.content = (last.content ?? "") + "\n\n" + content;
+    else messages.push({ role, content });
   }
   return messages;
 }

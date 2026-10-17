@@ -618,7 +618,7 @@ function ContextDetails({
           </div>
           <p className="muted">
             档案原始 {k(m.originalArchive)} · 已移除 {m.trimmed} 组 · 已截短{" "}
-            {m.shortened} 条 user。仅影响发送视图，原始记录保留。
+            {m.shortened} 条历史回复。仅影响发送视图，原始记录保留。
           </p>
           <table className="du-table du-table-sm">
             <tbody>

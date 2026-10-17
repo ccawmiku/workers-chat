@@ -1,3 +1,4 @@
+import { validatedSummaryConfig } from "./summaries";
 import type { Chat, ModelRef, Settings, Provider } from "../shared/chat";
 import { defaultSettings } from "../shared/chat";
 import { HttpError } from "./store";
@@ -48,6 +49,7 @@ export function validatedSettings(v: unknown): Settings {
     throw new HttpError(400, "模板格式无效");
   return {
     plugins,
+    replySummary: validatedSummaryConfig(input.replySummary ?? {}),
     defaultModel: modelRef(input.defaultModel),
     parameters: parameters(input.parameters),
     templates: input.templates.map((v) => {

@@ -42,7 +42,7 @@ export type Job = {
 };
 export async function activeJob(env: Env, id: string) {
   return env.DB.prepare(
-    "SELECT * FROM jobs WHERE chat_id=? AND status IN ('pending','running')",
+    "SELECT * FROM jobs WHERE chat_id=? AND status IN ('pending','running') AND COALESCE(json_extract(config,'$.post'),0)=0",
   )
     .bind(id)
     .first<Job>();
@@ -55,7 +55,7 @@ export async function readChat(env: Env, id: string) {
   // The immutable document version and its active job must come from one SQL
   // snapshot. Reading them separately can pair old text with a completed job.
   const row = await env.DB.prepare(
-    "SELECT d.revision,d.kind,d.summary,(SELECT json_object('id',j.id,'chat_id',j.chat_id,'message_id',j.message_id,'status',j.status,'created_at',j.created_at,'transport',json_extract(j.config,'$.transport'),'kind',json_extract(j.config,'$.kind')) FROM jobs j WHERE j.chat_id=d.id AND j.status IN ('pending','running') LIMIT 1) AS active_job FROM documents d WHERE d.id=? AND d.kind='chat'",
+    "SELECT d.revision,d.kind,d.summary,(SELECT json_object('id',j.id,'chat_id',j.chat_id,'message_id',j.message_id,'status',j.status,'created_at',j.created_at,'transport',json_extract(j.config,'$.transport'),'kind',json_extract(j.config,'$.kind')) FROM jobs j WHERE j.chat_id=d.id AND j.status IN ('pending','running') AND COALESCE(json_extract(j.config,'$.post'),0)=0 LIMIT 1) AS active_job FROM documents d WHERE d.id=? AND d.kind='chat'",
   )
     .bind(id)
     .first<DocumentHeader & { active_job: string | null }>();
@@ -199,6 +199,7 @@ export async function finalize(
     if (!message) return;
     if (message.status !== "running") return;
     message.content = content;
+    message.contentVersion = crypto.randomUUID();
     message.reasoning = reasoning;
     message.status = status;
     message.error = error;

@@ -101,10 +101,15 @@ for (const mobile of [false, true])
       editor.getByLabel("插件历史范围", { exact: true }),
     ).toHaveCount(0);
     await expect(
-      editor.getByText("发送当前分支完整历史，不按轮数或水位裁剪。", {
-        exact: true,
-      }),
-    ).toBeVisible();
+      editor.getByLabel("插件独立 system", { exact: true }),
+    ).toHaveValue("");
+    await expect(
+      editor.getByLabel("最近原始 UA 轮数", { exact: true }),
+    ).toHaveValue("3");
+    await editor.getByLabel("最近原始 UA 轮数", { exact: true }).fill("0");
+    await editor
+      .getByLabel("插件独立 system", { exact: true })
+      .fill("独立系统要求");
     await expect(
       editor.getByLabel("插件流式输出", { exact: true }),
     ).toBeChecked();
@@ -117,9 +122,8 @@ for (const mobile of [false, true])
     expect(
       saved.plugins.find((p: any) => p.id === "builtin-clarify"),
     ).toMatchObject({
-      highWater: 0,
-      lowWater: 0,
-      contextMode: "sync",
+      rawRounds: 0,
+      system: "独立系统要求",
       stream: false,
     });
     await list

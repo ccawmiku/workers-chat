@@ -37,11 +37,6 @@ export function validatedPlugins(value: unknown): PluginDefinition[] {
       )
     )
       throw new HttpError(400, "插件强度无效");
-    if (
-      !["tool", "user"].includes(String(p.injection)) ||
-      !["sync", "rounds"].includes(String(p.contextMode))
-    )
-      throw new HttpError(400, "插件上下文或注入方式无效");
     const schema = str(p.schema, 100000);
     if (schema.trim())
       try {
@@ -71,17 +66,12 @@ export function validatedPlugins(value: unknown): PluginDefinition[] {
       prompt: str(p.prompt, 100000),
       schema,
       example: str(p.example, 100000),
-      injection: p.injection as "tool" | "user",
       injectionTemplate: str(p.injectionTemplate, 10000),
-      contextMode: "sync",
-      historyRounds: num("historyRounds", 1, 1000),
-      referenceCount: num("referenceCount", 0, 1000),
-      userHistoryCount: num("userHistoryCount", 0, 100000),
+      system: str(p.system, 100000),
+      rawRounds: num("rawRounds", 0, 1000),
       suggestions: kind === "rewrite" ? 3 : num("suggestions", 1, 10),
       ...(kind === "rewrite" ? { rewriteFormat: "fields" as const } : {}),
       ...(["suggest", "rewrite"].includes(String(kind)) ? { initialUser } : {}),
-      highWater: 0,
-      lowWater: 0,
     };
   });
 }

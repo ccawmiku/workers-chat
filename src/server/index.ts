@@ -1,3 +1,9 @@
+import {
+  summaryEndpoint,
+  cloneSummaries,
+  planPruneSummaries,
+} from "./summaries";
+import { postView } from "./post-tasks";
 import { deviceGeneration } from "./device-generation";
 import {
   type Chat,
@@ -93,6 +99,15 @@ async function readBody(request: Request) {
   }
 }
 async function chatState(env: Env, id: string) {
+  const view = await chatStateBase(env, id);
+  const post = await postView(
+    env,
+    view.chat,
+    "pluginState" in view ? view.pluginState : undefined,
+  );
+  return { ...view, ...post, pluginState: post.postPluginState };
+}
+async function chatStateBase(env: Env, id: string) {
   let titleJob = await titleStatus(env, id);
   const store = new Store(env.DB),
     { doc, job } = await readChat(env, id);
@@ -118,7 +133,7 @@ async function chatState(env: Env, id: string) {
         "error",
         "插件任务已断开，已保留部分输出；请手动重试，不会自动重复模型请求。",
       );
-      return chatState(env, id);
+      return chatStateBase(env, id);
     }
     const view = await pluginView(env, chat, job);
     const run = view.pluginState.runs.find((r) => r.id === job.message_id);
@@ -728,6 +743,8 @@ async function api(request: Request, env: Env) {
     const { doc, job } = await readChat(env, id);
     if (!doc || !doc.value.messages) throw new HttpError(404, "聊天不存在");
     const chat = doc.value;
+    if (action === "summaries")
+      return Response.json(await summaryEndpoint(env, doc, body));
     if (action === "plugins")
       return Response.json(
         await pluginEndpoint(env, doc, body, job, transport),
@@ -847,13 +864,34 @@ async function api(request: Request, env: Env) {
         (await store.list<{ title: string }>("chat")).map((c) => c.title),
       );
       await clonePlugins(env, chat, copy);
+      await cloneSummaries(env, chat, copy);
       await store.save(copy.id, "chat", copy, 0, summary(copy));
       return Response.json(copy);
     }
     if (action === "permanent" && method === "DELETE") {
       if (!chat.deleted) throw new HttpError(400, "请先移入回收站");
+      const pending = (
+        await env.DB.prepare(
+          "SELECT id FROM jobs WHERE chat_id=? AND status IN ('pending','running')",
+        )
+          .bind(id)
+          .all<{ id: string }>()
+      ).results;
+      await env.DB.prepare(
+        "UPDATE jobs SET status='stopped' WHERE chat_id=? AND status IN ('pending','running')",
+      )
+        .bind(id)
+        .run();
       await removePlugins(env, id);
+      await env.DB.prepare(
+        "DELETE FROM documents WHERE kind IN ('summary-state','summary-task','summary-backfill') AND json_extract(summary,'$.chatId')=?",
+      )
+        .bind(id)
+        .run();
       await store.remove(id);
+      await Promise.allSettled(
+        pending.map((j) => env.PROGRESS.getByName(j.id).cancel()),
+      );
       return Response.json({ ok: true });
     }
     if (chat.deleted) throw new HttpError(400, "请先从回收站恢复聊天");
@@ -862,6 +900,15 @@ async function api(request: Request, env: Env) {
         ? findMessage(chat, body.messageId)
         : null;
     if (action === "send") {
+      if (body.confirmPost !== true) {
+        const post = await env.DB.prepare(
+          "SELECT id FROM jobs WHERE chat_id=? AND status IN ('pending','running') AND json_extract(config,'$.post')=1 LIMIT 1",
+        )
+          .bind(id)
+          .first();
+        if (post)
+          throw new HttpError(409, "摘要或追问仍在生成，请确认后继续发送");
+      }
       if (chat.pluginPending)
         throw new HttpError(409, "请先回答、使用或取消当前插件流程");
       const text = str(body.content);
@@ -947,16 +994,21 @@ async function api(request: Request, env: Env) {
     if (action === "delete-message") {
       if (!message) throw new HttpError(404, "消息不存在");
       const removed = deleteMessage(chat, message.id),
-        pluginChanges = await planPruneMessagePlugins(env, chat, removed);
+        pluginChanges = await planPruneMessagePlugins(env, chat, removed),
+        summaryChanges = await planPruneSummaries(env, id, removed);
       await store.commit([
         ...store.planSave(id, "chat", chat, doc.revision, summary(chat)),
         ...pluginChanges,
+        ...summaryChanges.statements,
         ...removed.map((messageId) =>
           env.DB.prepare(
             "DELETE FROM jobs WHERE chat_id=? AND message_id=?",
           ).bind(id, messageId),
         ),
       ]);
+      await Promise.allSettled(
+        summaryChanges.cancelIds.map((j) => env.PROGRESS.getByName(j).cancel()),
+      );
       return Response.json(chat);
     }
     if (action === "edit") {
@@ -998,6 +1050,7 @@ async function api(request: Request, env: Env) {
         (await store.list<{ title: string }>("chat")).map((c) => c.title),
       );
       await clonePlugins(env, chat, fork, message.id);
+      await cloneSummaries(env, chat, fork, message.id);
       await store.save(fork.id, "chat", fork, 0, summary(fork));
       return Response.json(fork);
     } else throw new HttpError(404, "接口不存在");

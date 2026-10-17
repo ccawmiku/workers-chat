@@ -3,6 +3,8 @@ import { Miniflare, Response as MFResponse } from "miniflare";
 import { build } from "esbuild";
 import { readFile, readdir } from "node:fs/promises";
 import { randomBytes, pbkdf2Sync } from "node:crypto";
+import type { SummaryState, PostJobView } from "../src/shared/summaries";
+import { summaryFor } from "../src/shared/summaries";
 import type { Chat, Settings, Provider } from "../src/shared/chat";
 import {
   defaultPlugins,
@@ -20,6 +22,8 @@ let mf: Miniflare,
   cookie = "",
   provider: Provider,
   settings: Settings;
+const summaryCalls: Record<string, unknown>[] = [];
+const summaryControls = { delay: 0, output: "", active: 0, maxActive: 0 };
 const titleCalls: Record<string, unknown>[] = [];
 const upstreamCalls: Record<string, unknown>[] = [],
   controls = { mode: "normal", delay: 0, titleMode: "normal", titleDelay: 0 };
@@ -60,15 +64,38 @@ async function finished(id: string, timeout = 10000) {
       chat: Chat;
       job: unknown;
       titleJob?: { status: string };
+      postJobs?: unknown[];
     }>("/chats/" + id);
     if (
       !result.job &&
+      !result.postJobs?.length &&
       !["pending", "running"].includes(result.titleJob?.status ?? "")
     )
       return result.chat;
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error("job did not complete");
+}
+type SummarySnapshot = {
+  chat: Chat;
+  job: unknown;
+  pluginJob: PluginJobView | null;
+  pluginState: PluginState;
+  summaryState: SummaryState;
+  postJobs: PostJobView[];
+};
+async function waitSummary(
+  id: string,
+  predicate: (s: SummarySnapshot) => boolean,
+  timeout = 10000,
+) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    const s = await value<SummarySnapshot>("/chats/" + id);
+    if (predicate(s)) return s;
+    await new Promise((r) => setTimeout(r, 30));
+  }
+  throw Error("summary transition timeout");
 }
 beforeAll(async () => {
   const built = await build({
@@ -161,6 +188,51 @@ beforeAll(async () => {
                     },
                   ],
                 });
+              }
+              if (
+                messages.some((m) =>
+                  m.content?.includes("本轮回复提炼为 50–100 字"),
+                )
+              ) {
+                summaryCalls.push(payload);
+                const delay = summaryControls.delay,
+                  output =
+                    summaryControls.output ||
+                    JSON.stringify({
+                      summary:
+                        "你与同行者确认了目前的目标和行动安排，双方交换已有信息，保留尚未确定的分歧，准备依据后续沟通继续处理当前事务。",
+                    });
+                summaryControls.active++;
+                summaryControls.maxActive = Math.max(
+                  summaryControls.maxActive,
+                  summaryControls.active,
+                );
+                if (delay) await new Promise((r) => setTimeout(r, delay));
+                summaryControls.active--;
+                const usage = {
+                  input_tokens: 18929,
+                  output_tokens: 100,
+                  cached_tokens: 16247,
+                  cache_hit_rate: "85.8%",
+                };
+                if (!payload.stream)
+                  return MFResponse.json({
+                    choices: [
+                      { message: { content: output }, finish_reason: "stop" },
+                    ],
+                    usage,
+                  });
+                return new MFResponse(
+                  "data: " +
+                    JSON.stringify({
+                      choices: [
+                        { delta: { content: output }, finish_reason: "stop" },
+                      ],
+                      usage,
+                    }) +
+                    "\n\ndata: [DONE]\n\n",
+                  { headers: { "Content-Type": "text/event-stream" } },
+                );
               }
               upstreamCalls.push(payload);
               const pluginMarker =
@@ -2015,7 +2087,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
       true,
     );
   }, 15000);
-  it("preserves clarification answers across new-send regeneration, edits and forks, and supports user injection", async () => {
+  it("preserves clarification answers across new-send regeneration, edits and forks, migrating user injection to tools", async () => {
     controls.mode = "normal";
     controls.delay = 0;
     const list = defaultPlugins()
@@ -2088,21 +2160,17 @@ describe("workerd HTTP + D1 + Workflows", () => {
       action: "request",
       runId: analysisRun.id,
     });
-    expect(analysisRequest.messages.some((m) => m.role === "tool")).toBe(false);
+    expect(analysisRequest.messages.some((m) => m.role === "tool")).toBe(true);
     expect(JSON.stringify(analysisRequest.messages)).toContain("旧偏好");
     expect(JSON.stringify(analysisRequest.messages)).toContain(
       originalRun.output.replaceAll("\n", "\\n"),
     );
-    expect(
-      (
-        upstreamCalls.at(-1)?.messages as { role: string; content: string }[]
-      ).at(-1)?.content,
-    ).toContain("旧偏好");
+    expect(JSON.stringify(upstreamCalls.at(-1)?.messages)).toContain("旧偏好");
     expect(
       (upstreamCalls.at(-1)?.messages as { role: string }[]).some(
         (m) => m.role === "tool",
       ),
-    ).toBe(false);
+    ).toBe(true);
     const count = upstreamCalls.length;
     await value("/chats/" + chat.id + "/draft", "PUT", {
       draft: "保留在输入框的新草稿",
@@ -2269,6 +2337,322 @@ describe("workerd HTTP + D1 + Workflows", () => {
     ).toBe(400);
     await value("/settings", "PUT", before);
   });
+  it("runs summaries and suggestions in parallel, confirms the next send, and keeps older jobs attached to their source", async () => {
+    controls.mode = "plugin-slow";
+    controls.delay = 1000;
+    summaryControls.delay = 1000;
+    summaryControls.output = "";
+    const suggest = {
+      ...pluginDefaults("suggest"),
+      prompt: "[PLUGIN_TEST_suggest]",
+    };
+    await value("/settings", "PUT", { ...settings, plugins: [suggest] });
+    const c = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + c.id, "PATCH", {
+      title: "Parallel summary fixture",
+    });
+    await value("/chats/" + c.id + "/plugins", "POST", {
+      action: "configure",
+      plugins: [{ id: suggest.id, enabled: true }],
+    });
+    const before = summaryCalls.length;
+    await value("/chats/" + c.id + "/send", "POST", { content: "first turn" });
+    const first = await waitSummary(
+      c.id,
+      (s) => !s.job && s.postJobs.length === 2,
+    );
+    const oldId = first.chat.currentId!;
+    expect(first.pluginJob).toBeNull();
+    expect(first.postJobs.map((j) => j.kind).sort()).toEqual([
+      "suggest",
+      "summary",
+    ]);
+    const denied = await request("/chats/" + c.id + "/send", "POST", {
+      content: "next turn",
+    });
+    expect(denied.status).toBe(409);
+    expect(
+      Object.keys(
+        (await value<{ chat: Chat }>("/chats/" + c.id)).chat.messages,
+      ),
+    ).toHaveLength(2);
+    await value("/chats/" + c.id + "/send", "POST", {
+      content: "next turn",
+      confirmPost: true,
+    });
+    const done = await waitSummary(
+      c.id,
+      (s) =>
+        Object.keys(s.chat.messages).length === 4 &&
+        !s.job &&
+        !s.postJobs.length,
+    );
+    expect(summaryCalls.length - before).toBe(2);
+    expect(done.summaryState.runs.every((r) => r.status === "complete")).toBe(
+      true,
+    );
+    expect(
+      done.pluginState.runs.filter(
+        (r) => r.plugin.kind === "suggest" && r.status === "complete",
+      ),
+    ).toHaveLength(2);
+    expect(summaryFor(done.chat, done.summaryState, oldId)).toBeDefined();
+    expect(done.pluginState.runs.some((r) => r.anchorId === oldId)).toBe(true);
+    const exported = await value("/chats/" + c.id + "/export");
+    expect(JSON.stringify(exported)).not.toMatch(
+      /summaryState|user_excerpt|你与同行者确认|用户下一句/,
+    );
+    controls.mode = "normal";
+    controls.delay = 0;
+    summaryControls.delay = 0;
+    await value("/settings", "PUT", settings);
+  });
+  it("validates summaries, keeps accepted text until explicit replacement, rejects stale candidates, and never replays on reconnect", async () => {
+    controls.mode = "normal";
+    controls.delay = 0;
+    summaryControls.delay = 0;
+    const c = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + c.id, "PATCH", {
+      title: "Summary replace fixture",
+    });
+    await value("/chats/" + c.id + "/send", "POST", { content: "one" });
+    let s = await waitSummary(
+      c.id,
+      (s) =>
+        s.summaryState.runs.some((r) => r.status === "complete") &&
+        !s.postJobs.length,
+    );
+    const messageId = s.chat.currentId!,
+      old = summaryFor(s.chat, s.summaryState, messageId)!;
+    expect(old.usage?.cache_hit_rate).toBe("85.8%");
+    expect(old.config.effort).toBe("inherit");
+    summaryControls.output = '{"summary":"替换候选"}';
+    await value("/chats/" + c.id + "/summaries", "POST", {
+      action: "regenerate",
+      messageId,
+    });
+    s = await waitSummary(c.id, (s) =>
+      s.summaryState.runs.some((r) => r.status === "candidate"),
+    );
+    const candidate = s.summaryState.runs.at(-1)!;
+    expect(candidate.warning).toContain("未自动截断");
+    expect(summaryFor(s.chat, s.summaryState, messageId)?.id).toBe(old.id);
+    await value("/chats/" + c.id + "/summaries", "POST", {
+      action: "dismiss",
+      runId: candidate.id,
+    });
+    s = await value("/chats/" + c.id);
+    expect(summaryFor(s.chat, s.summaryState, messageId)?.id).toBe(old.id);
+    summaryControls.output = '{"summary":"确认后的摘要"}';
+    await value("/chats/" + c.id + "/summaries", "POST", {
+      action: "regenerate",
+      messageId,
+    });
+    s = await waitSummary(c.id, (s) =>
+      s.summaryState.runs.some((r) => r.status === "candidate"),
+    );
+    const acceptedId = s.summaryState.runs.at(-1)!.id;
+    await value("/chats/" + c.id + "/summaries", "POST", {
+      action: "accept",
+      runId: acceptedId,
+    });
+    s = await value("/chats/" + c.id);
+    expect(summaryFor(s.chat, s.summaryState, messageId)?.summary).toBe(
+      "确认后的摘要",
+    );
+    summaryControls.output = '{"summary":"","extra":true}';
+    await value("/chats/" + c.id + "/summaries", "POST", {
+      action: "regenerate",
+      messageId,
+    });
+    s = await waitSummary(
+      c.id,
+      (s) => s.summaryState.runs.at(-1)?.status === "error",
+    );
+    expect(summaryFor(s.chat, s.summaryState, messageId)?.id).toBe(acceptedId);
+    const calls = summaryCalls.length;
+    await value("/chats/" + c.id);
+    await value("/chats/" + c.id);
+    expect(summaryCalls.length).toBe(calls);
+    summaryControls.output = '{"summary":"stale candidate"}';
+    await value("/chats/" + c.id + "/summaries", "POST", {
+      action: "regenerate",
+      messageId,
+    });
+    s = await waitSummary(
+      c.id,
+      (s) => s.summaryState.runs.at(-1)?.status === "candidate",
+    );
+    const stale = s.summaryState.runs.at(-1)!;
+    await value("/chats/" + c.id + "/edit", "POST", {
+      messageId,
+      content: "edited source",
+    });
+    expect(
+      (
+        await request("/chats/" + c.id + "/summaries", "POST", {
+          action: "accept",
+          runId: stale.id,
+        })
+      ).status,
+    ).toBe(409);
+    s = await value("/chats/" + c.id);
+    expect(summaryFor(s.chat, s.summaryState, messageId)).toBeUndefined();
+    summaryControls.output = "";
+  });
+  it("serially backfills imported history and preserves accepted summaries across copies and forks", async () => {
+    summaryControls.delay = 100;
+    summaryControls.maxActive = 0;
+    controls.mode = "normal";
+    controls.delay = 0;
+    const imported = await value<{ ids: string[] }>("/import", "POST", {
+      data: {
+        title: "Backfill fixture",
+        messages: [
+          { id: "u1", role: "user", content: "one" },
+          { id: "a1", role: "assistant", content: "first reply" },
+          { id: "u2", role: "user", content: "two" },
+          { id: "a2", role: "assistant", content: "second reply" },
+        ],
+      },
+    });
+    const id = imported.ids[0]!;
+    let s = await value<SummarySnapshot>("/chats/" + id);
+    expect(s.summaryState.runs).toHaveLength(0);
+    const before = summaryCalls.length;
+    await value("/chats/" + id + "/summaries", "POST", { action: "backfill" });
+    await value("/chats/" + id + "/summaries", "POST", { action: "backfill" });
+    s = await waitSummary(
+      id,
+      (s) =>
+        s.summaryState.runs.filter((r) => r.status === "complete").length ===
+          2 && !s.postJobs.length,
+    );
+    expect(summaryControls.maxActive).toBe(1);
+    expect(summaryCalls.length - before).toBe(2);
+    const second = summaryCalls.at(-1)!.messages as { content: string }[];
+    expect(JSON.stringify(second)).toContain("previous_example");
+    const copy = await value<Chat>("/chats/" + id + "/duplicate", "POST", {}),
+      fork = await value<Chat>("/chats/" + id + "/fork", "POST", {
+        messageId: "a1",
+      });
+    const cs = await value<SummarySnapshot>("/chats/" + copy.id),
+      fs = await value<SummarySnapshot>("/chats/" + fork.id);
+    expect(cs.summaryState.runs).toHaveLength(2);
+    expect(fs.summaryState.runs).toHaveLength(1);
+    expect(
+      summaryFor(cs.chat, cs.summaryState, cs.chat.currentId!),
+    ).toBeDefined();
+    expect(
+      summaryFor(fs.chat, fs.summaryState, fs.chat.currentId!),
+    ).toBeDefined();
+    await value("/chats/" + id + "/delete-message", "POST", {
+      messageId: "a1",
+    });
+    s = await value("/chats/" + id);
+    expect(s.summaryState.runs.some((r) => r.messageId === "a1")).toBe(false);
+    expect(summaryFor(s.chat, s.summaryState, "a2")).toBeUndefined();
+    summaryControls.delay = 0;
+  });
+  it("summarizes device replies on the server, labels manual partials and rejects stale results without blocking the next turn", async () => {
+    controls.mode = "normal";
+    controls.delay = 0;
+    summaryControls.delay = 500;
+    const c = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + c.id, "PATCH", { title: "Device summary fixture" });
+    const start = await request(
+      "/chats/" + c.id + "/send",
+      "POST",
+      { content: "device source" },
+      true,
+      "https://chat.test",
+      true,
+    );
+    const { jobId } = (await start.json()) as { jobId: string };
+    await request(
+      "/device/jobs/" + jobId + "/finish",
+      "POST",
+      { sequence: 1, status: "complete", content: "device full reply" },
+      true,
+      "https://chat.test",
+      true,
+    );
+    let s = await waitSummary(c.id, (s) =>
+      s.postJobs.some((j) => j.kind === "summary"),
+    );
+    const source = s.chat.currentId!;
+    expect(s.postJobs[0]?.transport).toBeUndefined();
+    expect(s.job).toBeNull();
+    await value("/chats/" + c.id + "/edit", "POST", {
+      messageId: source,
+      content: "new source version",
+    });
+    s = await waitSummary(
+      c.id,
+      (s) => s.summaryState.runs.at(-1)?.status === "stale",
+    );
+    expect(summaryFor(s.chat, s.summaryState, source)).toBeUndefined();
+    const next = await request(
+      "/chats/" + c.id + "/send",
+      "POST",
+      { content: "partial" },
+      true,
+      "https://chat.test",
+      true,
+    );
+    const nextId = ((await next.json()) as { jobId: string }).jobId;
+    await request(
+      "/device/jobs/" + nextId + "/finish",
+      "POST",
+      { sequence: 1, status: "stopped", content: "partial reply" },
+      true,
+      "https://chat.test",
+      true,
+    );
+    s = await value("/chats/" + c.id);
+    const partial = s.chat.currentId!;
+    expect(s.summaryState.runs.some((r) => r.messageId === partial)).toBe(
+      false,
+    );
+    await value("/chats/" + c.id + "/summaries", "POST", {
+      action: "regenerate",
+      messageId: partial,
+    });
+    s = await waitSummary(c.id, (s) =>
+      s.summaryState.runs.some(
+        (r) => r.messageId === partial && r.status === "complete",
+      ),
+    );
+    expect(s.summaryState.runs.at(-1)?.sourceIncomplete).toBe(true);
+    summaryControls.delay = 0;
+  });
+  it("finishes a summary after more than 30 seconds without a page and never reissues the upstream request", async () => {
+    controls.mode = "normal";
+    controls.delay = 0;
+    summaryControls.delay = 32000;
+    const c = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + c.id, "PATCH", { title: "Long summary fixture" });
+    const before = summaryCalls.length;
+    await value("/chats/" + c.id + "/send", "POST", {
+      content: "background summary",
+    });
+    const start = await waitSummary(
+      c.id,
+      (s) => !s.job && s.postJobs.some((j) => j.kind === "summary"),
+    );
+    expect(start.summaryState.runs.at(-1)?.status).toBe("running");
+    await new Promise((r) => setTimeout(r, 32500));
+    const done = await waitSummary(
+      c.id,
+      (s) =>
+        !s.postJobs.length && s.summaryState.runs.at(-1)?.status === "complete",
+    );
+    expect(summaryCalls.length - before).toBe(1);
+    expect(done.summaryState.runs.at(-1)?.elapsedMs).toBeGreaterThan(30000);
+    await value("/chats/" + c.id);
+    expect(summaryCalls.length - before).toBe(1);
+    summaryControls.delay = 0;
+  }, 45000);
   it("bans five consecutive login failures per IP, reports timestamps only after login and expires the ban", async () => {
     const db = await mf.getD1Database("DB");
     await db.batch([

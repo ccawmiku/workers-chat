@@ -1,3 +1,4 @@
+import { summaryState } from "./summaries";
 import {
   type Chat,
   type Settings,
@@ -38,13 +39,14 @@ export type PluginTask = {
 };
 const stateId = (id: string) => "plugin-state:" + id;
 const taskId = (id: string) => "plugin-task:" + id;
+const baselines = new WeakMap<Document<PluginState>, PluginState>();
 export async function pluginState(env: Env, id: string) {
-  return (
-    (await new Store(env.DB).get<PluginState>(stateId(id))) ?? {
-      value: emptyPluginState(),
-      revision: 0,
-    }
-  );
+  const doc = (await new Store(env.DB).get<PluginState>(stateId(id))) ?? {
+    value: emptyPluginState(),
+    revision: 0,
+  };
+  baselines.set(doc, structuredClone(doc.value));
+  return doc;
 }
 async function config(env: Env) {
   const store = new Store(env.DB);
@@ -54,14 +56,77 @@ async function config(env: Env) {
     providers: (await store.all<Provider>("provider")).map((p) => p.value),
   };
 }
-async function saveState(env: Env, id: string, doc: Document<PluginState>) {
-  doc.revision = await new Store(env.DB).save(
-    stateId(id),
-    "plugin-state",
-    doc.value,
-    doc.revision,
-    { id: stateId(id), chatId: id },
-  );
+async function saveState(
+  env: Env,
+  id: string,
+  doc: Document<PluginState>,
+  extra: D1PreparedStatement[] = [],
+) {
+  const store = new Store(env.DB),
+    base = baselines.get(doc) ?? structuredClone(doc.value),
+    wanted = structuredClone(doc.value);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      await store.commit([
+        ...store.planSave(
+          stateId(id),
+          "plugin-state",
+          doc.value,
+          doc.revision,
+          { id: stateId(id), chatId: id },
+        ),
+        ...extra,
+      ]);
+      doc.revision++;
+      baselines.set(doc, structuredClone(doc.value));
+      return;
+    } catch (e) {
+      if (!(e instanceof HttpError && e.status === 409) || attempt === 3)
+        throw e;
+      const fresh = await pluginState(env, id);
+      // Rebase only fields this operation actually changed. Post-response jobs
+      // may finish while a user confirms a different plugin in the next turn.
+      for (const key of ["runs", "flows"] as const) {
+        const rows = fresh.value[key] as {
+          id: string;
+          [key: string]: unknown;
+        }[];
+        for (const row of wanted[key]) {
+          const before = base[key].find((r) => r.id === row.id) as
+            | Record<string, unknown>
+            | undefined;
+          const target = rows.find((r) => r.id === row.id);
+          if (!before) {
+            if (!target) rows.push(structuredClone(row));
+            continue;
+          }
+          if (!target) throw new HttpError(409, "插件记录已被删除");
+          for (const field of new Set([
+            ...Object.keys(before),
+            ...Object.keys(row),
+          ])) {
+            const value = (row as unknown as Record<string, unknown>)[field];
+            if (JSON.stringify(value) === JSON.stringify(before[field]))
+              continue;
+            if (
+              JSON.stringify(target[field]) !== JSON.stringify(before[field]) &&
+              JSON.stringify(target[field]) !== JSON.stringify(value)
+            )
+              throw new HttpError(
+                409,
+                "此插件已在其他请求中更新，请刷新后重试",
+              );
+            if (value === undefined) delete target[field];
+            else target[field] = structuredClone(value);
+          }
+        }
+      }
+      if (base.activeFlowId !== wanted.activeFlowId)
+        fresh.value.activeFlowId = wanted.activeFlowId;
+      doc.value = fresh.value;
+      doc.revision = fresh.revision;
+    }
+  }
 }
 async function signature(chat: Chat, settings: Settings) {
   return digest(
@@ -271,6 +336,7 @@ async function enqueue(
   flow?: PluginFlow,
   replaces?: string,
   rewriteMessageId?: string,
+  queuedId?: string,
 ) {
   const { settings, providers } = await config(env),
     prepared = preparePlugin(
@@ -284,8 +350,9 @@ async function enqueue(
       p.kind === "analysis" && flow
         ? flowClarifications(stateDoc.value, flow)
         : [],
+      (await summaryState(env, chat.id)).value,
     );
-  const id = crypto.randomUUID(),
+  const id = queuedId ?? crypto.randomUUID(),
     run: PluginRun = {
       id,
       plugin: p,
@@ -320,14 +387,7 @@ async function enqueue(
     flow.results.push(id);
   }
   const store = new Store(env.DB);
-  await store.commit([
-    ...store.planSave(
-      stateId(chat.id),
-      "plugin-state",
-      stateDoc.value,
-      stateDoc.revision,
-      { id: stateId(chat.id), chatId: chat.id },
-    ),
+  await saveState(env, chat.id, stateDoc, [
     ...store.planSave(taskId(id), "plugin-task", task, 0, {
       id: taskId(id),
       chatId: chat.id,
@@ -342,7 +402,12 @@ async function enqueue(
       transport ? 1 : 0,
       Date.now(),
       Date.now(),
-      JSON.stringify({ kind: "plugin", runId: id, transport }),
+      JSON.stringify({
+        kind: "plugin",
+        runId: id,
+        transport,
+        post: p.kind === "suggest",
+      }),
     ),
   ]);
   if (transport) await env.PROGRESS.getByName(id).deviceCheckpoint(0, "", "");
@@ -524,6 +589,21 @@ export async function finishPlugin(
   status: "complete" | "error" | "stopped",
   failure?: string,
 ) {
+  for (let attempt = 0; attempt < 4; attempt++)
+    try {
+      return await finishPluginOnce(env, id, output, status, failure);
+    } catch (e) {
+      if (!(e instanceof HttpError && e.status === 409) || attempt === 3)
+        throw e;
+    }
+}
+async function finishPluginOnce(
+  env: Env,
+  id: string,
+  output: CompletionOutput,
+  status: "complete" | "error" | "stopped",
+  failure?: string,
+) {
   const job = await env.DB.prepare("SELECT * FROM jobs WHERE id=?")
     .bind(id)
     .first<Job>();
@@ -605,6 +685,7 @@ export async function finishPlugin(
         kind: "plugin",
         runId: id,
         transport: taskDoc?.value.transport,
+        post: run.plugin.kind === "suggest",
       }),
       id,
     ),
@@ -699,11 +780,7 @@ export async function queueSuggestions(
   transport?: "device",
 ) {
   const chat = (await new Store(env.DB).get<Chat>(chatId))?.value;
-  if (
-    !chat ||
-    chat.currentId !== messageId ||
-    chat.messages[messageId]?.status !== "complete"
-  )
+  if (!chat || chat.deleted || chat.messages[messageId]?.status !== "complete")
     return;
   const { settings } = await config(env),
     selected = enabledPlugins(chat, settings).filter(
@@ -718,14 +795,26 @@ export async function queueSuggestions(
       ),
   );
   if (!next) return;
-  // One job per chat; all candidates are produced by one completion.
-  const active = await env.DB.prepare(
-    "SELECT id FROM jobs WHERE chat_id=? AND status IN ('pending','running')",
-  )
-    .bind(chatId)
-    .first();
-  if (active) return;
-  await enqueue(env, chat, state, next, "", messageId, transport);
+  const id =
+    "suggest-" +
+    (await digest(JSON.stringify([chatId, messageId, next.id]))).slice(0, 64);
+  try {
+    await enqueue(
+      env,
+      chat,
+      state,
+      next,
+      "",
+      messageId,
+      transport,
+      undefined,
+      undefined,
+      undefined,
+      id,
+    );
+  } catch (e) {
+    if (!(e instanceof HttpError && e.status === 409)) throw e;
+  }
 }
 export async function pluginEndpoint(
   env: Env,
@@ -777,7 +866,8 @@ export async function pluginEndpoint(
     await markChat(env, chat.id, undefined);
     return { ok: true };
   }
-  if (active) throw new HttpError(409, "请等待当前生成结束，或先停止");
+  if (active && action !== "dismiss")
+    throw new HttpError(409, "请等待当前生成结束，或先停止");
   if (action === "rewrite" || action === "suggest") {
     const { settings } = await config(env),
       p = enabledPlugins(chat, settings).find(

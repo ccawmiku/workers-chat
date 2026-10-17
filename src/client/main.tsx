@@ -1,3 +1,9 @@
+import {
+  ReplySummaryCard,
+  SummaryTools,
+  ConfirmPostSend,
+} from "./summaries-ui";
+import type { SummaryState, PostJobView } from "../shared/summaries";
 import React, {
   useCallback,
   useEffect,
@@ -144,6 +150,9 @@ function App() {
   const [loginNotice, setLoginNotice] = useState<LoginNotice | null>(
     readLoginNotice,
   );
+  const [summaryState, setSummaryState] = useState<SummaryState>({ runs: [] });
+  const [postJobs, setPostJobs] = useState<PostJobView[]>([]);
+  const [confirmPostSend, setConfirmPostSend] = useState(false);
   const [pluginEntry, setPluginEntry] = useState<HTMLDivElement | null>(null);
   const [startingRewrite, setStartingRewrite] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -166,6 +175,7 @@ function App() {
     [chat, setChat] = useState<Chat | null>(null),
     [job, setJob] = useState<{
       id: string;
+
       status: string;
       transport?: "device";
     } | null>(null),
@@ -177,6 +187,7 @@ function App() {
     } | null>(null);
   const [providers, setProviders] = useState<ProviderView[]>([]),
     [settings, setSettings] = useState<Settings>(defaultSettings());
+  useEffect(() => setConfirmPostSend(false), [chat?.id]);
   const [draft, setDraft] = useState(""),
     [sidebar, setSidebar] = useState(innerWidth > 760),
     [panel, setPanel] = useState(false),
@@ -333,6 +344,8 @@ function App() {
     );
     pluginPreviewState.current = result.pluginState ?? emptyPluginState();
     setPluginJob(result.pluginJob ?? null);
+    setSummaryState(result.summaryState ?? { runs: [] });
+    setPostJobs(result.postJobs ?? []);
     if (result.generation) acceptGeneration(result.generation);
     if (
       !result.job &&
@@ -399,6 +412,8 @@ function App() {
       );
       pluginPreviewState.current = result.pluginState ?? emptyPluginState();
       setPluginJob(result.pluginJob ?? null);
+      setSummaryState(result.summaryState ?? { runs: [] });
+      setPostJobs(result.postJobs ?? []);
       setDebugPlugins(false);
       if (result.generation) acceptGeneration(result.generation);
       setMenu(null);
@@ -470,6 +485,8 @@ function App() {
     chat: Chat;
     job: typeof job;
     titleJob: typeof titleJob;
+    summaryState?: SummaryState;
+    postJobs?: PostJobView[];
     pluginState?: PluginState;
     pluginJob?: PluginJobView | null;
     generation?: GenerationStart;
@@ -586,6 +603,7 @@ function App() {
     const running =
       !!job ||
       !!pluginJob ||
+      postJobs.length > 0 ||
       ["pending", "running"].includes(titleJob?.status ?? "");
     let cancelled = false,
       timer: ReturnType<typeof setTimeout>;
@@ -612,7 +630,59 @@ function App() {
     titleJob?.id,
     titleJob?.status,
     pushUnavailable,
+    postJobs.length,
   ]);
+  useEffect(() => {
+    if (!auth) return;
+    const id = chat?.id;
+    const cleanups: (() => void)[] = [];
+    for (const task of postJobs) {
+      const update = (content: string) => {
+        if (idRef.current !== id) return;
+        if (task.kind === "summary")
+          setSummaryState((prev) => ({
+            ...prev,
+            runs: prev.runs.map((r) =>
+              r.id === task.runId ? { ...r, output: content } : r,
+            ),
+          }));
+        else
+          setPluginState((prev) => ({
+            ...prev,
+            runs: prev.runs.map((r) =>
+              r.id === task.runId ? { ...r, output: content } : r,
+            ),
+          }));
+      };
+      const done = (failure?: string) => {
+        if (failure && idRef.current === id) setError(failure);
+        const latest = latestSync.current;
+        void latest.run(() => latest.refresh(id, true), false);
+      };
+      if (task.transport === "device")
+        connection.startPlugin(task, (output) => update(output.content), done);
+      else if (visible)
+        cleanups.push(
+          observeJob(
+            task.id,
+            false,
+            update,
+            () => done(),
+            () => setPushUnavailable(true),
+          ),
+        );
+    }
+    return () => cleanups.forEach((fn) => fn());
+  }, [auth, visible, chat?.id, postJobs.map((j) => j.id).join(",")]);
+  async function summaryCommand(
+    action: string,
+    body: Record<string, unknown> = {},
+  ) {
+    const id = idRef.current;
+    if (!id) return;
+    await api("/chats/" + id + "/summaries", "POST", { action, ...body });
+    await refresh(id, true);
+  }
   useEffect(() => {
     if (!auth || !pluginJob) return;
     const task = pluginJob,
@@ -881,7 +951,7 @@ function App() {
       await loadNavigation();
     }
   }
-  async function send() {
+  async function send(confirmedPost = false) {
     if (
       !selectedModel ||
       submitting.current ||
@@ -893,6 +963,10 @@ function App() {
       !draftRef.current.trim()
     )
       return;
+    if (!waitingPlugin && postJobs.length && !confirmedPost) {
+      setConfirmPostSend(true);
+      return;
+    }
     submitting.current = true;
     const sent = draftRef.current,
       version = draftVersion.current;
@@ -908,7 +982,7 @@ function App() {
         "POST",
         waitingPlugin
           ? { action: "answer", runId: waitingPlugin.id, content: sent }
-          : { content: sent, debugPlugins },
+          : { content: sent, debugPlugins, confirmPost: confirmedPost },
       );
       acceptGeneration(result);
       if (draftVersion.current === version && idRef.current === id) {
@@ -924,6 +998,10 @@ function App() {
     activeSend.current = task;
     try {
       await task;
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("请确认后继续发送"))
+        setConfirmPostSend(true);
+      else throw e;
     } finally {
       submitting.current = false;
       activeSend.current = null;
@@ -1866,6 +1944,15 @@ function App() {
                             historical={m.id !== lastAssistant && menu !== m.id}
                           />
                         )}
+                        {m.role === "assistant" && (
+                          <ReplySummaryCard
+                            chat={chat!}
+                            messageId={m.id}
+                            state={summaryState}
+                            latest={m.id === lastAssistant}
+                            command={summaryCommand}
+                          />
+                        )}
                         {m.role === "user" && (
                           <PluginTurnCards
                             chatId={chat!.id}
@@ -1876,7 +1963,7 @@ function App() {
                             busy={busy || !!job || !!pluginJob}
                           />
                         )}
-                        {m.role === "assistant" && m.id === lastAssistant && (
+                        {m.role === "assistant" && (
                           <Suggestions
                             state={pluginState}
                             messageId={m.id}
@@ -1974,6 +2061,8 @@ function App() {
             settings={settings}
             providers={providers}
             state={pluginPreviewState.current}
+            summaries={summaryState}
+            summaryCommand={summaryCommand}
             draft={draft}
             debug={debugPlugins}
             setDebug={setDebugPlugins}
@@ -2383,6 +2472,15 @@ function App() {
             </div>
           )}
         </aside>
+      )}
+      {confirmPostSend && (
+        <ConfirmPostSend
+          cancel={() => setConfirmPostSend(false)}
+          confirm={() => {
+            setConfirmPostSend(false);
+            void run(() => send(true));
+          }}
+        />
       )}
       {modal && (
         <div className="modal-backdrop" onClick={() => setModal("")}>

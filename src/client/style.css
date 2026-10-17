@@ -3295,3 +3295,51 @@ main {
   justify-content: space-between;
   gap: 12px;
 }
+
+.summary-setting-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line-color);
+}
+.summary-setting-row small {
+  display: block;
+  margin-top: 4px;
+}
+.summary-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block: 12px;
+}
+.reply-summary {
+  margin: 12px 0 18px;
+  border: 1px solid var(--line-color);
+  border-radius: 14px;
+  background: var(--panel);
+}
+.reply-summary > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.reply-summary > summary small {
+  margin-left: auto;
+}
+.summary-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.summary-stream {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  max-height: 180px;
+  overflow: auto;
+}

@@ -27,6 +27,7 @@ export default defineConfig({
         "request-budget.spec.ts",
         "plugins.spec.ts",
         "plugin-settings.spec.ts",
+        "summaries.spec.ts",
         "auth-security.spec.ts",
       ],
       use: { browserName: "webkit" },

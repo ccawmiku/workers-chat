@@ -1,3 +1,4 @@
+import type { SummaryConfig } from "./summaries";
 import { DEFAULT_TITLE_PROMPT } from "./default-title-prompt";
 import type { PluginBinding, PluginDefinition } from "./plugins";
 export type Role = "user" | "assistant" | "system";
@@ -13,6 +14,7 @@ export type Message = {
   parentId: string | null;
   role: Role;
   content: string;
+  contentVersion?: string;
   reasoning?: string;
   createdAt: number;
   excluded?: boolean;
@@ -30,6 +32,7 @@ export type Message = {
   raw?: Record<string, unknown>;
 };
 export type Chat = {
+  summaryOverrides?: Partial<SummaryConfig>;
   plugins?: PluginBinding[];
   pluginPending?: "running" | "waiting" | "error" | "debug";
   id: string;
@@ -72,6 +75,7 @@ export type Provider = {
   }[];
 };
 export type Settings = {
+  replySummary?: SummaryConfig;
   plugins?: PluginDefinition[];
   defaultModel: ModelRef | null;
   parameters: Parameters;
@@ -200,6 +204,7 @@ export function addMessage(
     content,
     parentId,
     createdAt: Date.now(),
+    contentVersion: uuid(),
     status: "complete",
   };
   chat.messages[msg.id] = msg;
@@ -212,6 +217,7 @@ export function editMessage(chat: Chat, id: string, content: string): Message {
   if (!msg) throw new Error("消息不存在");
   if (msg.role === "assistant") {
     msg.content = content;
+    msg.contentVersion = uuid();
     return msg;
   }
   return addMessage(chat, msg.role, content, msg.parentId);

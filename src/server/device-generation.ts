@@ -4,7 +4,6 @@ import { str } from "./validation";
 import { decrypt, redactError } from "./security";
 import { type Chat, sanitizeUsage } from "../shared/chat";
 import { queueTitle } from "./titles";
-import { queueSuggestions } from "./plugins";
 
 export async function deviceGeneration(
   env: Env,
@@ -76,6 +75,16 @@ export async function deviceGeneration(
   let titleJobId: string | null = null;
   if (status === "complete") titleJobId = await queueTitle(env, job.chat_id);
   if (status === "complete")
-    await queueSuggestions(env, job.chat_id, job.message_id, "device");
+    await Promise.allSettled([
+      env.PROGRESS.getByName("post-suggest-" + job.id).schedulePost(
+        job.id,
+        "suggest",
+        "device",
+      ),
+      env.PROGRESS.getByName("post-summary-" + job.id).schedulePost(
+        job.id,
+        "summary",
+      ),
+    ]);
   return Response.json({ ok: true, titleJobId });
 }

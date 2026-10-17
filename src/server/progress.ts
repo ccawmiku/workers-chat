@@ -1,3 +1,4 @@
+import { queueSummary, runSummary, continueBackfill } from "./summaries";
 import { DurableObject } from "cloudflare:workers";
 import { chunks } from "./store";
 import { runGeneration } from "./generation";
@@ -190,6 +191,16 @@ export class Progress extends DurableObject<Env> {
       )
         .bind(jobId)
         .first<{ config: string }>();
+      if (job && JSON.parse(job.config).kind === "summary") {
+        const result = await runSummary(this.env, jobId, this, controller);
+        const saved = await this.env.DB.prepare(
+          "SELECT chat_id FROM jobs WHERE id=?",
+        )
+          .bind(jobId)
+          .first<{ chat_id: string }>();
+        if (saved) await continueBackfill(this.env, saved.chat_id);
+        return JSON.stringify(result);
+      }
       if (job && JSON.parse(job.config).kind === "plugin")
         return JSON.stringify(
           await runPlugin(this.env, jobId, this, controller),
@@ -203,7 +214,16 @@ export class Progress extends DurableObject<Env> {
           .first<{ chat_id: string; message_id: string }>();
         if (saved)
           try {
-            await queueSuggestions(this.env, saved.chat_id, saved.message_id);
+            await Promise.allSettled([
+              this.env.PROGRESS.getByName("post-summary-" + jobId).schedulePost(
+                jobId,
+                "summary",
+              ),
+              this.env.PROGRESS.getByName("post-suggest-" + jobId).schedulePost(
+                jobId,
+                "suggest",
+              ),
+            ]);
           } catch {
             /* Main response remains saved if a post-plugin cannot start. */
           }
@@ -224,11 +244,27 @@ export class Progress extends DurableObject<Env> {
     if (!job) return null;
     try {
       const title = await queueTitle(this.env, job.chat_id);
-      await queueSuggestions(this.env, job.chat_id, job.message_id);
       return title;
     } catch {
       return null;
     }
+  }
+  async schedulePost(
+    jobId: string,
+    kind: "summary" | "suggest",
+    transport?: "device",
+  ) {
+    const job = await this.env.DB.prepare(
+      "SELECT chat_id,message_id FROM jobs WHERE id=? AND status='complete'",
+    )
+      .bind(jobId)
+      .first<{ chat_id: string; message_id: string }>();
+    if (!job) return null;
+    // Each queue runs in a separate invocation to stay within D1 Free's query
+    // budget, while the parent Workflow waits before notifying observers.
+    return kind === "summary"
+      ? queueSummary(this.env, job.chat_id, job.message_id)
+      : queueSuggestions(this.env, job.chat_id, job.message_id, transport);
   }
   async runTitle(jobId: string) {
     try {

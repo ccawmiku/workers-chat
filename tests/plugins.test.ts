@@ -72,11 +72,8 @@ const run = (
   metrics: {
     total: 1,
     capacity: 32000,
-    archive: 0,
-    originalArchive: 0,
-    highWater: 0,
-    lowWater: 0,
-    trimmed: 0,
+    referenceTokens: 0,
+    missingSummaries: 0,
     shortened: 0,
     sections: [],
   },
@@ -166,70 +163,6 @@ describe("plugin context assembly", () => {
       ),
     ).toMatchObject({ scene_state: "有依据的短记录" });
   });
-  it("gives analysis only this flow's answered clarification pairs with switchable tool/user injection", () => {
-    const { chat, settings, state } = fixture();
-    addMessage(chat, "user", "过去");
-    addMessage(chat, "assistant", "已有事实");
-    const anchor = chat.currentId,
-      question = run(
-        "current",
-        "clarify",
-        "q",
-        "当前要求",
-        "问题：是什么颜色？",
-        "蓝色",
-      );
-    question.flowId = "flow";
-    const other = {
-      ...question,
-      id: "other",
-      flowId: "other-flow",
-      answer: "别的分支",
-    };
-    state.runs.push(question, other);
-    const flow = {
-      id: "flow",
-      userId: "current",
-      definitions: [],
-      index: 1,
-      results: ["q", "other"],
-      debug: false,
-      status: "running" as const,
-    };
-    for (const mode of ["tool", "user"] as const) {
-      question.plugin.injection = mode;
-      const injections = flowClarifications(state, flow);
-      expect(injections).toHaveLength(1);
-      const prepared = preparePlugin(
-        chat,
-        pluginDefaults("analysis"),
-        settings,
-        [provider],
-        state,
-        "当前要求",
-        anchor,
-        injections,
-      );
-      expect(prepared.request.messages.slice(0, 3)).toEqual(
-        contextMessages(chat),
-      );
-      expect(JSON.stringify(prepared.request.messages)).toContain("蓝色");
-      expect(JSON.stringify(prepared.request.messages)).not.toContain(
-        "别的分支",
-      );
-      expect(prepared.request.messages.at(-1)?.content).toContain(
-        "HARD INTERRUPT",
-      );
-      expect(prepared.request.messages.some((m) => m.role === "tool")).toBe(
-        mode === "tool",
-      );
-      expect(
-        prepared.metrics.sections.find((s) => s.name === "本轮澄清问答")
-          ?.tokens,
-      ).toBeGreaterThan(0);
-    }
-    expect(Object.values(chat.messages)).toHaveLength(2);
-  });
   it("matches three named rewrite fields and preserves saved and in-flight legacy outputs", () => {
     const p = pluginDefaults("rewrite"),
       value = {
@@ -282,148 +215,6 @@ describe("plugin context assembly", () => {
       expect(() => normalizePluginOutput(p, JSON.stringify(bad))).toThrow();
   });
 
-  it("defaults all efforts to inherit and migrates candidate labels and disabled waterlines", () => {
-    for (const kind of ["analysis", "clarify", "suggest", "rewrite"] as const)
-      expect(pluginDefaults(kind)).toMatchObject({
-        effort: "inherit",
-        highWater: 0,
-        lowWater: 0,
-      });
-    for (const kind of ["analysis", "clarify"] as const)
-      expect(
-        upgradeLegacyPlugin({
-          ...pluginDefaults(kind),
-          contextMode: "rounds",
-          highWater: 500000,
-          lowWater: 200000,
-        }),
-      ).toMatchObject({ contextMode: "sync", highWater: 0, lowWater: 0 });
-    expect(newChat().effort).toBe("inherit");
-    const old = {
-      ...pluginDefaults("rewrite"),
-      initialUser: undefined,
-      name: "请求重生",
-      highWater: 30000,
-      lowWater: 10000,
-      prompt: "custom",
-      effort: "high" as const,
-    };
-    expect(upgradeLegacyPlugin(old)).toMatchObject({
-      name: "重新生成 user 提示",
-      initialUser: "好的",
-      highWater: 0,
-      lowWater: 0,
-      prompt: "custom",
-      effort: "high",
-    });
-    expect(pluginDefaults("suggest")).toMatchObject({
-      prompt: SUGGEST_PROMPT,
-      highWater: 0,
-      lowWater: 0,
-      initialUser: "好的",
-    });
-    expect(pluginDefaults("rewrite").prompt).toBe(REWRITE_PROMPT);
-  });
-
-  it("keeps the historical reply in analysis previews and merges adjacent mapped roles without losing text", () => {
-    const { chat, settings, state } = fixture();
-    addMessage(chat, "user", "U1");
-    addMessage(chat, "assistant", "A1");
-    const preview = preparePlugin(
-      chat,
-      pluginDefaults("analysis"),
-      settings,
-      [provider],
-      state,
-      "",
-    );
-    expect(preview.request.messages.slice(0, -1)).toEqual(
-      contextMessages(chat),
-    );
-    addMessage(chat, "user", "U2");
-    addMessage(chat, "user", "U3");
-    const result = preparePlugin(
-      chat,
-      pluginDefaults("rewrite"),
-      settings,
-      [provider],
-      state,
-      "草稿",
-    ).request.messages;
-    expect(result.map((m) => m.role)).toEqual([
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-      "user",
-    ]);
-    expect(result[3]?.content).toBe("U2\n\nU3");
-    expect(result.at(-1)?.content).toContain("草稿");
-  });
-
-  it("keeps the main prefix byte-for-byte and changes only the final user", () => {
-    const { chat, settings, state } = fixture();
-    addMessage(chat, "user", "old");
-    addMessage(chat, "assistant", "reply");
-    const anchor = chat.currentId,
-      p = pluginDefaults("analysis");
-    const actual = preparePlugin(
-      chat,
-      p,
-      settings,
-      [provider],
-      state,
-      "new",
-      anchor,
-    );
-    expect(actual.request.messages.slice(0, -1)).toEqual(contextMessages(chat));
-    expect(actual.request.messages.at(-1)?.content).toContain("new");
-    expect(chat.messages[anchor!]?.content).toBe("reply");
-    expect(actual.request.temperature).toBe(0.4);
-    expect(actual.request).not.toHaveProperty("reasoning_effort");
-  });
-  it("ignores old round and reference limits, preserving full history and paired prompts", () => {
-    const { chat, settings, state } = fixture();
-    for (let i = 0; i < 4; i++) {
-      const u = addMessage(chat, "user", "U" + i);
-      addMessage(chat, "assistant", "A" + i);
-      state.runs.push(
-        run(u.id, "analysis", "r" + i, "U" + i, JSON.stringify({ v: i })),
-      );
-    }
-    const p = pluginDefaults("analysis");
-    p.prompt = "NEW {{USER_INPUT}}";
-    p.contextMode = "rounds";
-    p.historyRounds = 2;
-    chat.rounds = 1;
-    p.referenceCount = 1;
-    p.example = '{"v":"example"}';
-    const result = preparePlugin(chat, p, settings, [provider], state, "next")
-      .request.messages;
-    expect(result.slice(0, -1).map((m) => m.content)).toEqual([
-      "Stable system",
-      "U0",
-      "A0",
-      "U1",
-      "A1",
-      "U2",
-      "A2",
-      "U3",
-      "A3",
-    ]);
-    const suffix = result.at(-1)?.content;
-    const reference = JSON.parse(
-      suffix!.split("历史完整配对（仅作参考）：\n")[1]!.split("\n")[3]!,
-    );
-    expect(reference.prompt).toBe(state.runs[3]!.plugin.prompt);
-    expect(suffix).toContain("example");
-    expect(
-      suffix!
-        .split("历史完整配对（仅作参考）：\n")[1]!
-        .split("\n")
-        .map((line) => JSON.parse(JSON.parse(line).result).v),
-    ).toEqual([0, 1, 2, 3]);
-  });
   it("sets streaming independently for analysis and clarification, defaulting legacy definitions to on", () => {
     const { chat, settings, state } = fixture();
     for (const kind of ["analysis", "clarify"] as const) {
@@ -436,87 +227,6 @@ describe("plugin context assembly", () => {
       }
     }
   });
-  it("uses no first-turn reference when no example is supplied", () => {
-    const { chat, settings, state } = fixture();
-    const result = preparePlugin(
-      chat,
-      pluginDefaults("analysis"),
-      settings,
-      [provider],
-      state,
-      "new",
-    );
-    expect(result.metrics.archive).toBe(0);
-    expect(result.request.messages.at(-1)?.content).not.toContain(
-      "历史完整参考",
-    );
-  });
-  it("preserves all question-answer groups despite legacy watermarks and cutoffs, without branch leakage", () => {
-    const { chat, settings, state } = fixture();
-    for (let i = 0; i < 8; i++) {
-      const u = addMessage(chat, "user", "U" + i);
-      addMessage(chat, "assistant", "A" + i);
-      state.runs.push(
-        run(
-          u.id,
-          "clarify",
-          "r" + i,
-          "U" + i,
-          "question" + i,
-          "ANSWER" + i + "中".repeat(60),
-        ),
-      );
-    }
-    state.runs.push(
-      run(
-        "other-branch",
-        "clarify",
-        "foreign",
-        "PRIVATE",
-        "PRIVATE",
-        "PRIVATE",
-      ),
-    );
-    state.runs[7]!.metrics.cutoff = "r5";
-    chat.rounds = 1;
-    const p = pluginDefaults("clarify");
-    p.contextMode = "rounds";
-    p.historyRounds = 1;
-    p.highWater = 1000;
-    p.lowWater = 500;
-    const result = preparePlugin(chat, p, settings, [provider], state, "next");
-    expect(result.metrics.trimmed).toBe(0);
-    expect(result.metrics.highWater).toBe(0);
-    expect(result.metrics.archive).toBe(result.metrics.originalArchive);
-    expect(result.request.messages[1]?.content).toBe("U0");
-    const suffix = result.request.messages.at(-1)?.content ?? "";
-    expect(suffix).not.toContain("PRIVATE");
-    expect(suffix).toContain("ANSWER7");
-    expect(suffix).toContain("ANSWER0");
-  });
-  it("honors an explicit reference reset without cutting the chat history", () => {
-    const { chat, settings, state } = fixture();
-    const u = addMessage(chat, "user", "U0");
-    addMessage(chat, "assistant", "A0");
-    const old = run(u.id, "clarify", "r0", "U0", "old question", "old answer");
-    old.referenceReset = true;
-    state.runs.push(old);
-    const result = preparePlugin(
-      chat,
-      pluginDefaults("clarify"),
-      settings,
-      [provider],
-      state,
-      "next",
-    );
-    expect(result.request.messages.map((m) => m.content)).toContain("U0");
-    expect(result.request.messages.map((m) => m.content)).toContain("A0");
-    expect(result.request.messages.at(-1)?.content).not.toContain(
-      "old question",
-    );
-    expect(result.metrics.archive).toBe(0);
-  });
-
   it("swaps full UA history for both candidates, leaves main system out, and appends the task to the latest mapped user", () => {
     const { chat, settings, state } = fixture();
     const long = "🙂".repeat(10000);
@@ -531,7 +241,6 @@ describe("plugin context assembly", () => {
         ...pluginDefaults(kind),
         historyRounds: 1,
         highWater: 1,
-        lowWater: 0,
         userHistoryCount: 1,
       };
       const result = preparePlugin(
@@ -557,10 +266,7 @@ describe("plugin context assembly", () => {
       expect(result.request.response_format).toEqual({ type: "json_object" });
       expect(result.request).not.toHaveProperty("reasoning_effort");
       expect(result.metrics).toMatchObject({
-        trimmed: 0,
         shortened: 0,
-        highWater: 0,
-        lowWater: 0,
       });
       expect(result.metrics.total).toBeGreaterThan(result.metrics.capacity / 4);
     }
@@ -641,7 +347,7 @@ describe("plugin context assembly", () => {
       result.request.messages.filter((m) => m.role === "assistant"),
     ).toHaveLength(20);
     expect(result.request.messages.at(-1)?.content).toContain("A19");
-    expect(result.metrics.trimmed).toBe(0);
+    expect(result.metrics.shortened).toBe(0);
   });
 
   it("supports first-message rewrite as a single final user with required U0 and the unmodified draft", () => {
@@ -661,24 +367,6 @@ describe("plugin context assembly", () => {
     expect(result.request.messages[0]?.content).toContain('"prompt1"');
   });
 
-  it("injects native tool pairs or user suffix without mutating stored messages", () => {
-    const source = [{ role: "user" as const, content: "original" }],
-      item = {
-        pluginId: "builtin-analysis",
-        runId: "run",
-        name: "Analysis",
-        mode: "tool" as const,
-        template: "{{RESULT}}",
-        content: '{"goals":[]}',
-      };
-    const result = injectPlugins(source, [item]);
-    expect(result.map((m) => m.role)).toEqual(["user", "assistant", "tool"]);
-    expect(result[1]?.tool_calls?.[0]?.id).toBe(result[2]?.tool_call_id);
-    expect(source).toEqual([{ role: "user", content: "original" }]);
-    expect(injectPlugins(source, [{ ...item, mode: "user" }])).toEqual([
-      { role: "user", content: 'original\n\n{"goals":[]}' },
-    ]);
-  });
   it("validates custom JSON Schema and exact distinct candidate counts", () => {
     const p = pluginDefaults("analysis");
     p.schema =

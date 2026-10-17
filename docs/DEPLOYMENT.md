@@ -10,7 +10,7 @@ npm run dev:init
 npm run dev
 ```
 
-本地地址 `http://localhost:5173`。随机本地登录密码位于 `~/.config/workers-chat/local-login.json`；`.dev.vars` 含本地散列和 AES 密钥，两者均不进入 Git。开发 D1 使用 `.cloudflare/state/v3`。`dev:init` 使用 `d1_migrations` 记录并原子应用所有未执行的本地迁移（目前 0001—0003）；后续生产迁移由 `cf d1 migrations apply` 管理，不使用开发初始化脚本。
+本地地址 `http://localhost:5173`。随机本地登录密码位于 `~/.config/workers-chat/local-login.json`；`.dev.vars` 含本地散列和 AES 密钥，两者均不进入 Git。开发 D1 使用 `.cloudflare/state/v3`。`dev:init` 使用 `d1_migrations` 记录并原子应用所有未执行的本地迁移（目前 0001—0005）；后续生产迁移由 `cf d1 migrations apply` 管理，不使用开发初始化脚本。
 
 浏览器测试需要 Chromium 和 WebKit，可运行 `npx playwright install --with-deps chromium webkit` 安装浏览器和系统依赖（Linux 安装系统依赖需要相应权限）。检测到 `/usr/bin/chromium` 时直接使用；仅跑 Chromium 可用 `npm run test:browser -- --project=chromium`。`npm run test:browser` 会启动或复用本地服务器，新增本地测试聊天，并用不含密钥的测试设置替换本地配置。请使用专用开发数据库，勿对生产运行浏览器测试。
 
@@ -61,3 +61,7 @@ npx cf deploy --secrets-file /absolute/path/to/deployment-secrets.json
 - Key 无法解密：检查是否保留了原 `ENCRYPTION_KEY`。丢失它不能从密文恢复上游 Key，需重新配置服务商。
 - 聊天备份：完整树 JSON 可独立导入为新聊天，Markdown 只有当前路线。应用设置在“设置 → 设置备份”单独导出/恢复，可合并或替换，默认不含 API Key；主动包含时再次验证密码并明确提示普通 JSON。不包含登录密码、恢复码和服务端 AES 密钥，需另行保管部署凭证。不含 Key 的恢复仅保留同 ID、相同地址的已有 Key。
 - 数据库恢复：在免费 D1 的实际 Time Travel 保留窗口内按官方恢复流程处理；保留与数据库匹配的加密密钥。不要在已有生产数据库再次手动执行初始化建表 SQL。
+
+## 摘要并行任务迁移（0005）
+
+先用 `cf d1 migrations apply` 应用新增的 `0005.sql`，再发布应用。它将旧的“同聊天只能一个活动任务”唯一索引缩小到前台任务，保留主生成/前置流程互斥，允许摘要与追问同时运行；另加活动后置任务查询索引。没有删聊天、消息或运行结果，不新增付费服务。回滚到旧应用前需先停止/等完后置任务，不在有并行任务时直接恢复旧唯一索引。

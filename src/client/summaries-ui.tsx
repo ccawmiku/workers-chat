@@ -1,0 +1,529 @@
+import React, { useEffect, useState } from "react";
+import {
+  BookOpenText,
+  RotateCcw,
+  Check,
+  X,
+  SlidersHorizontal,
+  AlertCircle,
+} from "lucide-react";
+import {
+  type Chat,
+  type Settings,
+  type Provider,
+  formatTokenCount,
+} from "../shared/chat";
+import {
+  type SummaryConfig,
+  type SummaryState,
+  type SummaryRun,
+  defaultSummaryConfig,
+  summaryConfig,
+  summaryFor,
+  summarySourceKey,
+} from "../shared/summaries";
+import { Dialog } from "./plugins-ui";
+import { ParameterControl, Loading } from "./controls";
+import { MessageUsage } from "./chat-controls";
+export function SummaryEditor({
+  value,
+  providers,
+  close,
+  save,
+  local = false,
+  reset,
+}: {
+  value: SummaryConfig;
+  providers: Provider[];
+  close: () => void;
+  save: (c: SummaryConfig) => Promise<void>;
+  local?: boolean;
+  reset?: () => Promise<void>;
+}) {
+  const [p, setP] = useState(() => structuredClone(value)),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  return (
+    <Dialog
+      title={(local ? "当前聊天" : "全局") + " · 回复摘要"}
+      close={close}
+      wide
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          setBusy(true);
+          void save(p)
+            .then(close)
+            .catch((e) => setError(e.message))
+            .finally(() => setBusy(false));
+        }}
+      >
+        <p className="muted">
+          每条完整回复结束后与追问同时生成。只影响新请求；旧摘要保留，可手动重新生成。
+        </p>
+        <fieldset className="du-fieldset plugin-editor-section">
+          <legend className="du-fieldset-legend">摘要模型</legend>
+          <label>
+            模型
+            <select
+              className="du-select"
+              aria-label="摘要模型"
+              value={p.model ? JSON.stringify(p.model) : ""}
+              onChange={(e) =>
+                setP({
+                  ...p,
+                  model: e.target.value ? JSON.parse(e.target.value) : null,
+                })
+              }
+            >
+              <option value="">
+                自动：优先 Gemini 3.1 Flash Lite，否则当前模型
+              </option>
+              {providers.flatMap((v) =>
+                v.models
+                  .filter((m) => m.enabled)
+                  .map((m) => (
+                    <option
+                      key={v.id + m.id}
+                      value={JSON.stringify({
+                        providerId: v.id,
+                        modelId: m.id,
+                      })}
+                    >
+                      {v.prefix + m.id} · {v.name}
+                    </option>
+                  )),
+              )}
+            </select>
+          </label>
+          <label>
+            思考强度
+            <select
+              className="du-select"
+              aria-label="摘要思考强度"
+              value={p.effort}
+              onChange={(e) =>
+                setP({
+                  ...p,
+                  effort: e.target.value as SummaryConfig["effort"],
+                })
+              }
+            >
+              {[
+                ["inherit", "跟随接口"],
+                ["none", "无"],
+                ["low", "低"],
+                ["medium", "中"],
+                ["high", "高"],
+                ["max", "最高"],
+              ].map(([v, n]) => (
+                <option key={v} value={v}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+          <ParameterControl
+            name="温度"
+            value={p.parameters.temperature}
+            max={2}
+            step={0.05}
+            onChange={(v) => {
+              setP((current) => {
+                const parameters = { ...current.parameters };
+                if (v === undefined) delete parameters.temperature;
+                else parameters.temperature = v;
+                return { ...current, parameters };
+              });
+            }}
+          />
+          <label className="plugin-stream-toggle">
+            流式输出
+            <input
+              className="du-toggle du-toggle-primary du-toggle-sm"
+              type="checkbox"
+              aria-label="摘要流式输出"
+              checked={p.stream}
+              onChange={(e) => {
+                const stream = e.target.checked;
+                setP((current) => ({ ...current, stream }));
+              }}
+            />
+          </label>
+        </fieldset>
+        <label>
+          摘要 system
+          <textarea
+            className="du-textarea"
+            rows={9}
+            aria-label="摘要 system"
+            value={p.system}
+            onChange={(e) => setP({ ...p, system: e.target.value })}
+          />
+        </label>
+        <div className="du-alert" role="note">
+          输出格式固定为 {`{"summary":"摘要文字"}`}；50–100
+          字是目标，超出仅提示，不截断或自动重试。历史 user 最多 500
+          字符，上一轮范例正文最多 2500 字符，均取首尾；本轮 U/A 完整。
+        </div>
+        {error && (
+          <p className="du-alert du-alert-error" role="alert">
+            {error}
+          </p>
+        )}
+        <footer>
+          {reset && (
+            <button
+              className="du-btn du-btn-ghost"
+              type="button"
+              onClick={() =>
+                void reset()
+                  .then(close)
+                  .catch((e) => setError(e.message))
+              }
+            >
+              恢复全局
+            </button>
+          )}
+          <button className="du-btn du-btn-ghost" type="button" onClick={close}>
+            取消
+          </button>
+          <button className="du-btn du-btn-primary" disabled={busy}>
+            {busy ? <Loading small /> : <Check size={15} />}保存
+          </button>
+        </footer>
+      </form>
+    </Dialog>
+  );
+}
+export function GlobalSummarySettings({
+  settings,
+  providers,
+  save,
+}: {
+  settings: Settings;
+  providers: Provider[];
+  save: (s: Settings) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div className="summary-setting-row du-card">
+        <div>
+          <strong>回复摘要</strong>
+          <small className="muted">所有聊天自动生成 · 独立模型与温度</small>
+        </div>
+        <button className="du-btn du-btn-sm" onClick={() => setOpen(true)}>
+          <SlidersHorizontal size={15} />
+          摘要设置
+        </button>
+      </div>
+      {open && (
+        <SummaryEditor
+          value={{ ...defaultSummaryConfig(), ...settings.replySummary }}
+          providers={providers}
+          close={() => setOpen(false)}
+          save={async (replySummary) => save({ ...settings, replySummary })}
+        />
+      )}
+    </>
+  );
+}
+function Usage({ run }: { run: SummaryRun }) {
+  return (
+    <div className="plugin-usage">
+      <MessageUsage
+        message={{
+          id: run.id,
+          parentId: null,
+          role: "assistant",
+          content: "",
+          createdAt: run.createdAt,
+          model: run.model,
+          usage: run.usage,
+          elapsedMs: run.elapsedMs,
+        }}
+      />
+    </div>
+  );
+}
+export type SummaryCommand = (
+  action: string,
+  body?: Record<string, unknown>,
+) => Promise<void>;
+export function ReplySummaryCard({
+  chat,
+  messageId,
+  state,
+  latest,
+  command,
+}: {
+  chat: Chat;
+  messageId: string;
+  state: SummaryState;
+  latest: boolean;
+  command: SummaryCommand;
+}) {
+  const [open, setOpen] = useState(latest),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(""),
+    [compare, setCompare] = useState(false);
+  useEffect(() => setOpen(latest), [latest]);
+  const all = state.runs.filter((r) => r.messageId === messageId),
+    key = summarySourceKey(chat, messageId),
+    valid = all.filter((r) => r.sourceKey === key);
+  const accepted = summaryFor(chat, state, messageId),
+    pending = valid.findLast((r) => r.status === "running"),
+    candidate = valid.findLast((r) => r.status === "candidate"),
+    last = valid.at(-1) ?? all.at(-1);
+  useEffect(() => {
+    if (candidate) setCompare(true);
+  }, [candidate?.id]);
+  const action = async (name: string, body: Record<string, unknown>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await command(name, body);
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "摘要操作失败");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!last) {
+    if (chat.messages[messageId]?.status === "running") return null;
+    return (
+      <details className="plugin-result reply-summary du-collapse">
+        <summary className="du-collapse-title">
+          <BookOpenText size={15} />
+          回复摘要 <small className="muted">未生成</small>
+        </summary>
+        <div className="du-collapse-content">
+          <p className="muted">历史回复不会自动补发摘要请求；可手动生成。</p>
+          {chat.messages[messageId]?.status !== "complete" && (
+            <p className="du-alert du-alert-warning">
+              原回复未完整结束，只会概括已收到的部分。
+            </p>
+          )}
+          <button
+            className="du-btn du-btn-sm"
+            disabled={busy || !chat.messages[messageId]?.content.trim()}
+            onClick={() => void action("regenerate", { messageId })}
+          >
+            {busy ? <Loading small /> : <RotateCcw size={14} />}生成摘要
+          </button>
+          {error && <p role="alert">{error}</p>}
+        </div>
+      </details>
+    );
+  }
+  return (
+    <>
+      <details
+        className="plugin-result reply-summary du-collapse"
+        open={open}
+        onToggle={(e) => setOpen(e.currentTarget.open)}
+      >
+        <summary className="du-collapse-title">
+          <BookOpenText size={15} />
+          <span>回复摘要</span>
+          <small className="muted">
+            {pending
+              ? "生成中"
+              : candidate
+                ? "待确认替换"
+                : accepted
+                  ? "已保存"
+                  : last.status === "error"
+                    ? "生成失败"
+                    : "待重新生成"}
+          </small>
+        </summary>
+        <div className="du-collapse-content">
+          {(pending ?? accepted ?? last).sourceIncomplete && (
+            <p className="du-alert du-alert-warning">
+              原回复未完整结束，这份摘要仅涵盖已收到的部分。
+            </p>
+          )}
+          {pending ? (
+            <>
+              <Loading small />
+              <pre className="summary-stream">{pending.output}</pre>
+            </>
+          ) : accepted ? (
+            <p className="summary-text">{accepted.summary}</p>
+          ) : last.status === "error" ? (
+            <div className="du-alert du-alert-error" role="alert">
+              <AlertCircle size={15} />
+              {last.error}
+            </div>
+          ) : (
+            <p className="muted">原文或上下文已变化，这份摘要不再用于请求。</p>
+          )}
+          {(pending ?? accepted ?? last).warning && (
+            <div className="du-alert du-alert-warning">
+              {(pending ?? accepted ?? last).warning}
+            </div>
+          )}
+          {accepted && last.status === "error" && (
+            <p className="du-alert du-alert-error" role="alert">
+              {last.error}；原摘要仍然保留。
+            </p>
+          )}
+          <Usage run={pending ?? accepted ?? last} />
+          <div className="plugin-actions">
+            <button
+              className="du-btn du-btn-sm"
+              disabled={busy || !!pending}
+              onClick={() => void action("regenerate", { messageId })}
+            >
+              <RotateCcw size={14} />
+              重新生成摘要
+            </button>
+            {pending && (
+              <button
+                className="du-btn du-btn-sm"
+                onClick={() => void action("cancel", { runId: pending.id })}
+              >
+                <X size={14} />
+                停止摘要
+              </button>
+            )}
+            {candidate && (
+              <button
+                className="du-btn du-btn-sm"
+                onClick={() => setCompare(true)}
+              >
+                查看新摘要
+              </button>
+            )}
+            <small className="muted">
+              上下文 {formatTokenCount((pending ?? last).inputTokens)} Token
+            </small>
+          </div>
+          {error && (
+            <p className="du-alert du-alert-error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      </details>
+      {candidate && compare && (
+        <Dialog title="确认替换摘要" close={() => setCompare(false)} wide>
+          <div className="rewrite-compare">
+            <section>
+              <h3>原摘要</h3>
+              <p className="summary-text">
+                {accepted?.summary ?? "暂无有效摘要"}
+              </p>
+            </section>
+            <section>
+              <h3>新摘要</h3>
+              <p className="summary-text">{candidate.summary}</p>
+              {candidate.warning && (
+                <p className="du-alert du-alert-warning">{candidate.warning}</p>
+              )}
+              <Usage run={candidate} />
+            </section>
+          </div>
+          {error && <p role="alert">{error}</p>}
+          <footer>
+            <button
+              className="du-btn du-btn-ghost"
+              disabled={busy}
+              onClick={() =>
+                void action("dismiss", { runId: candidate.id }).then(
+                  (ok) => ok && setCompare(false),
+                )
+              }
+            >
+              保留原摘要
+            </button>
+            <button
+              className="du-btn du-btn-primary"
+              disabled={busy}
+              onClick={() =>
+                void action("accept", { runId: candidate.id }).then(
+                  (ok) => ok && setCompare(false),
+                )
+              }
+            >
+              <Check size={15} />
+              确认替换
+            </button>
+          </footer>
+        </Dialog>
+      )}
+    </>
+  );
+}
+export function SummaryTools({
+  chat,
+  settings,
+  providers,
+  command,
+}: {
+  chat: Chat;
+  settings: Settings;
+  providers: Provider[];
+  command: SummaryCommand;
+}) {
+  const [open, setOpen] = useState(false),
+    [error, setError] = useState("");
+  return (
+    <>
+      <div className="summary-tools">
+        <button className="du-btn du-btn-sm" onClick={() => setOpen(true)}>
+          <SlidersHorizontal size={14} />
+          摘要设置
+        </button>
+        <button
+          className="du-btn du-btn-sm"
+          onClick={() =>
+            void command("backfill").catch((e) => setError(e.message))
+          }
+        >
+          <BookOpenText size={14} />
+          补齐当前分支摘要
+        </button>
+      </div>
+      {error && <p role="alert">{error}</p>}
+      {open && (
+        <SummaryEditor
+          local
+          value={summaryConfig(chat, settings)}
+          providers={providers}
+          close={() => setOpen(false)}
+          save={async (config) => command("configure", { config })}
+          reset={() => command("configure", { config: null })}
+        />
+      )}
+    </>
+  );
+}
+export function ConfirmPostSend({
+  confirm,
+  cancel,
+}: {
+  confirm: () => void;
+  cancel: () => void;
+}) {
+  return (
+    <Dialog title="仍有摘要或追问正在生成" close={cancel}>
+      <p>
+        继续发送下一条消息？原任务会继续，结果仍显示在原回复下；缺摘要时本次请求使用原回复全文。
+      </p>
+      <footer>
+        <button className="du-btn du-btn-ghost" onClick={cancel}>
+          暂不发送
+        </button>
+        <button className="du-btn du-btn-primary" onClick={confirm}>
+          继续发送
+        </button>
+      </footer>
+    </Dialog>
+  );
+}

@@ -1,3 +1,5 @@
+import { GlobalSummarySettings, SummaryTools } from "./summaries-ui";
+import type { SummaryState } from "../shared/summaries";
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import Markdown from "react-markdown";
@@ -83,7 +85,7 @@ function PluginMarkdown({ children }: { children: string }) {
     </div>
   );
 }
-function Dialog({
+export function Dialog({
   title,
   close,
   children,
@@ -296,7 +298,9 @@ export function PluginEditor({
         </fieldset>
         <fieldset className="du-fieldset plugin-editor-section">
           <legend className="du-fieldset-legend">上下文与输出</legend>
-          <p className="muted">发送当前分支完整历史，不按轮数或水位裁剪。</p>
+          <p className="muted">
+            前置插件使用摘要历史与近期原文；追问和重写保留各自的 UA 对调规则。
+          </p>
           {(p.kind === "analysis" || p.kind === "clarify") && (
             <>
               <label className="plugin-stream-toggle">
@@ -309,22 +313,34 @@ export function PluginEditor({
                   onChange={(e) => update({ stream: e.target.checked })}
                 />
               </label>
-              <div className="plugin-fields">
-                <label>
-                  注入方式
-                  <select
-                    className="du-select"
-                    aria-label="插件注入方式"
-                    value={p.injection}
-                    onChange={(e) =>
-                      update({ injection: e.target.value as "tool" | "user" })
-                    }
-                  >
-                    <option value="tool">Tool Call 结果</option>
-                    <option value="user">附加到当前 user</option>
-                  </select>
-                </label>
-              </div>
+              <label>
+                独立 system（可选）
+                <textarea
+                  className="du-textarea"
+                  aria-label="插件独立 system"
+                  value={p.system}
+                  rows={3}
+                  onChange={(e) => update({ system: e.target.value })}
+                />
+              </label>
+              <label>
+                最近原始 UA 轮数
+                <input
+                  className="du-input du-input-sm"
+                  type="number"
+                  min={0}
+                  step={1}
+                  aria-label="最近原始 UA 轮数"
+                  value={p.rawRounds}
+                  onChange={(e) =>
+                    update({ rawRounds: Number(e.target.value) })
+                  }
+                />
+              </label>
+              <small>
+                所有 U 与 A 摘要固定保留；尾部补充最近 N
+                轮原话。缺摘要回退全文。仅使用 Tool Call 注入。
+              </small>
               <label>
                 注入模板
                 <textarea
@@ -339,7 +355,7 @@ export function PluginEditor({
               </label>
               <small>
                 {p.kind === "clarify" &&
-                  "提问和回答用于后续 JSON 分析与主回复；默认 Tool Call，也可附加到 user。"}
+                  "提问和回答用于后续 JSON 分析与主回复；通过 Tool Call 传递。"}
                 {
                   "支持 {{RESULT}}、{{PLUGIN_NAME}}、{{USER_INPUT}}。不改变保存的正文。"
                 }
@@ -466,6 +482,11 @@ export function GlobalPlugins({
   };
   return (
     <>
+      <GlobalSummarySettings
+        settings={settings}
+        providers={providers}
+        save={save}
+      />
       <h3>插件默认配置</h3>
       <p className="muted">
         四种内置能力支持多个配置实例。聊天内开关和覆盖设置在发送框左下角；这里的修改不会覆盖已有结果。
@@ -599,26 +620,14 @@ function ContextDetails({
               />
             </div>
             <div className="du-stat">
-              <div className="du-stat-title">历史档案</div>
-              <div className="du-stat-value">{k(m.archive)}</div>
-              <div className="du-stat-desc">
-                {m.highWater > 0
-                  ? `${k(m.highWater)} 时裁到 ${k(m.lowWater)}`
-                  : "完整保留，不裁剪"}
-              </div>
-              {m.highWater > 0 && (
-                <progress
-                  className="du-progress du-progress-info"
-                  max={m.highWater}
-                  value={m.archive}
-                  aria-label="插件历史水位"
-                />
-              )}
+              <div className="du-stat-title">插件历史参考</div>
+              <div className="du-stat-value">{k(m.referenceTokens ?? 0)}</div>
+              <div className="du-stat-desc">不重复携带旧 prompt 或原 user</div>
             </div>
           </div>
           <p className="muted">
-            档案原始 {k(m.originalArchive)} · 已移除 {m.trimmed} 组 · 已截短{" "}
-            {m.shortened} 条历史回复。仅影响发送视图，原始记录保留。
+            缺摘要回退 {m.missingSummaries ?? 0} 条 · 摘取 {m.shortened ?? 0}{" "}
+            条历史回复。原始记录保留。
           </p>
           <table className="du-table du-table-sm">
             <tbody>
@@ -821,6 +830,8 @@ export function PluginBar({
   settings,
   providers,
   state,
+  summaries,
+  summaryCommand,
   draft,
   debug,
   setDebug,
@@ -833,6 +844,8 @@ export function PluginBar({
   settings: Settings;
   providers: Provider[];
   state: PluginState;
+  summaries: SummaryState;
+  summaryCommand: import("./summaries-ui").SummaryCommand;
   draft: string;
   debug: boolean;
   setDebug: (v: boolean) => void;
@@ -849,9 +862,13 @@ export function PluginBar({
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent) => {
+      // Configuration dialogs render in a portal outside the picker DOM.
+      // Keep the picker mounted while interacting with its child dialog.
+      if ((event.target as Element)?.closest?.(".plugin-modal")) return;
       if (!entryRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const escape = (event: KeyboardEvent) => {
+      if (document.querySelector(".plugin-modal")) return;
       if (event.key === "Escape") {
         setOpen(false);
         entryRef.current?.querySelector("button")?.focus();
@@ -870,15 +887,30 @@ export function PluginBar({
   const [previews, setPreviews] = useState<
     Map<string, ReturnType<typeof preparePlugin> | null>
   >(new Map());
-  const previewInputs = useRef({ chat, settings, providers, state, draft });
-  previewInputs.current = { chat, settings, providers, state, draft };
+  const previewInputs = useRef({
+    chat,
+    settings,
+    providers,
+    state,
+    draft,
+    summaries,
+  });
+  previewInputs.current = {
+    chat,
+    settings,
+    providers,
+    state,
+    draft,
+    summaries,
+  };
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (previewTimer.current) return;
     // Coalesce typing and streaming paints; previews never perform a request.
     previewTimer.current = setTimeout(() => {
       previewTimer.current = null;
-      const { chat, settings, providers, state, draft } = previewInputs.current;
+      const { chat, settings, providers, state, draft, summaries } =
+        previewInputs.current;
       const ids = new Set(chat ? route(chat).map((m) => m.id) : []);
       const flow = state.flows.findLast(
         (f) =>
@@ -916,6 +948,7 @@ export function PluginBar({
               p.kind === "analysis" && flow
                 ? flowClarifications(state, flow)
                 : [],
+              summaries,
             ),
           ] as const;
         } catch {
@@ -924,7 +957,7 @@ export function PluginBar({
       });
       setPreviews(new Map(values));
     }, 200);
-  }, [chat, settings, providers, state, draft]);
+  }, [chat, settings, providers, state, draft, summaries]);
   useEffect(
     () => () => {
       if (previewTimer.current) clearTimeout(previewTimer.current);
@@ -995,9 +1028,8 @@ export function PluginBar({
                   max={metrics?.capacity ?? 1}
                   value={Math.min(metrics?.total ?? 0, metrics?.capacity ?? 1)}
                 />
-                {metrics && (metrics.trimmed > 0 || metrics.shortened > 0) && (
+                {metrics && metrics.shortened > 0 && (
                   <small>
-                    {metrics.trimmed ? `裁 ${metrics.trimmed} 组 ` : ""}
                     {metrics.shortened ? `截 ${metrics.shortened} 条` : ""}
                   </small>
                 )}
@@ -1088,6 +1120,14 @@ export function PluginBar({
                     </div>
                   );
                 })}
+                {chat && (
+                  <SummaryTools
+                    chat={chat}
+                    settings={settings}
+                    providers={providers}
+                    command={summaryCommand}
+                  />
+                )}
                 <label className="toggle">
                   仅调试前置插件
                   <input

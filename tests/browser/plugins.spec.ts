@@ -83,9 +83,10 @@ for (const mobile of [false, true])
         if (last.includes("JSON Schema：")) {
           kind = "analysis";
           content = JSON.stringify({
-            goals: ["故事"],
-            constraints: ["简短"],
-            plan: ["开始"],
+            character_thoughts: "none",
+            scene_state: "none",
+            action_state: "none",
+            knowledge_boundaries: "none",
           });
         } else if (last.includes("提出一批具体、必要的澄清问题")) {
           kind = "clarify";
@@ -183,16 +184,34 @@ for (const mobile of [false, true])
         exact: true,
       }),
     ).toHaveCount(0);
-    await page
-      .getByRole("button", { name: "上移 提问澄清", exact: true })
-      .click();
     await expect(
-      page.getByRole("button", { name: "上移 提问澄清", exact: true }),
-    ).toBeDisabled();
-    await page
-      .getByRole("button", { name: "下移 提问澄清", exact: true })
-      .click();
+      page.getByRole("button", { name: /^(上移|下移) / }),
+    ).toHaveCount(0);
     await page.getByRole("button", { name: "关闭插件列表" }).click();
+    await expect(page.locator(".plugin-chips .plugin-chip")).toHaveCount(4);
+    const placement = await page
+      .locator(".composer-area")
+      .evaluate((wrapper) => {
+        const bar = wrapper
+            .querySelector(".plugin-bar")!
+            .getBoundingClientRect(),
+          composer = wrapper
+            .querySelector(".composer")!
+            .getBoundingClientRect(),
+          plugin = wrapper
+            .querySelector(".plugin-menu-button")!
+            .getBoundingClientRect(),
+          rewrite = wrapper
+            .querySelector(".composer-rewrite-entry button")!
+            .getBoundingClientRect();
+        return {
+          above: bar.bottom <= composer.top,
+          gap: rewrite.left - plugin.right,
+        };
+      });
+    expect(placement.above).toBe(true);
+    expect(placement.gap).toBeGreaterThanOrEqual(0);
+    expect(placement.gap).toBeLessThan(16);
     let previewAPIs = 0;
     const counter = (r: any) => {
       if (r.url().includes("/api/") && !r.url().endsWith("/draft"))
@@ -256,7 +275,7 @@ for (const mobile of [false, true])
       await page.evaluate(() =>
         (window as any).pluginLedger.map((x: any) => x.kind),
       ),
-    ).toEqual(["analysis", "clarify"]);
+    ).toEqual(["clarify"]);
     await page.screenshot({
       path: `test-results/plugins-${mobile ? "phone" : "desktop"}.png`,
     });
@@ -317,8 +336,21 @@ for (const mobile of [false, true])
         (window as any).pluginLedger.map((x: any) => x.kind),
       ),
     ).toEqual(
-      mobile ? ["main", "suggest"] : ["analysis", "clarify", "main", "suggest"],
+      mobile
+        ? ["analysis", "main", "suggest"]
+        : ["clarify", "analysis", "main", "suggest"],
     );
+    const analysisCall = await page.evaluate(() =>
+      (window as any).pluginLedger.find((l: any) => l.kind === "analysis"),
+    );
+    expect(
+      analysisCall.messages.filter((m: any) => m.role === "tool"),
+    ).toHaveLength(1);
+    expect(JSON.stringify(analysisCall.messages)).toContain("轻松幽默");
+    expect(JSON.stringify(analysisCall.messages)).toContain("哪种风格");
+    await expect(page.locator(".plugin-chips")).not.toContainText("预计");
+    for (const value of await page.locator(".plugin-chip b").allTextContents())
+      expect(value).toMatch(/^\d+\.\dk$/);
     await page.getByLabel("消息", { exact: true }).fill("保留的旧草稿");
     await page
       .getByRole("button", { name: "再给我一个例子", exact: false })
@@ -331,7 +363,7 @@ for (const mobile of [false, true])
       "保留的旧草稿",
     );
     const rewriteButton = page
-      .locator(".rewrite-actions")
+      .locator(".composer-rewrite-entry")
       .getByRole("button", { name: "重新生成 user 提示", exact: true });
     await rewriteButton.click();
     await expect(rewriteButton.locator(".du-loading")).toBeVisible();

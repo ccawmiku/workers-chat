@@ -19,6 +19,7 @@ import {
   preparePlugin,
   normalizePluginOutput,
   flowInjections,
+  flowClarifications,
 } from "../shared/plugins";
 import { type Document, Store, HttpError, summary } from "./store";
 import { type Job, startGeneration, generationStart } from "./generation";
@@ -280,6 +281,9 @@ async function enqueue(
       stateDoc.value,
       input,
       anchorId,
+      p.kind === "analysis" && flow
+        ? flowClarifications(stateDoc.value, flow)
+        : [],
     );
   const id = crypto.randomUUID(),
     run: PluginRun = {

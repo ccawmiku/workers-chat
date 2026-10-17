@@ -105,9 +105,7 @@ export function FloatingPanel({
 }
 
 function compact(value: number) {
-  if (value < 1000) return String(value);
-  const divisor = value >= 1000000 ? 1000000 : 1000;
-  return Number((value / divisor).toFixed(1)) + (divisor === 1000 ? "k" : "M");
+  return (value / 1000).toFixed(1) + "k";
 }
 
 export function ContextUsage({

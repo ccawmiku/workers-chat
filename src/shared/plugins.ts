@@ -1,5 +1,11 @@
 import { Validator, type Schema } from "@cfworker/json-schema";
 import {
+  ANALYSIS_PROMPT,
+  ANALYSIS_SCHEMA,
+  LEGACY_ANALYSIS_PROMPT,
+  LEGACY_ANALYSIS_SCHEMA,
+} from "./analysis-defaults";
+import {
   type Chat,
   type ModelRef,
   type Parameters,
@@ -152,6 +158,22 @@ export const SUGGEST_PROMPT =
 const LEGACY_SUGGEST_PROMPT =
   '你在预测用户下一轮会怎么说。根据历史用户的用词、长度、口吻和最近对话，以用户第一人称给出 {{COUNT}} 条不同的下一轮发言候选。不要替助手提问，不要回答候选。只输出 JSON：{"suggestions":["候选内容"]}，数组必须恰好 {{COUNT}} 条。';
 export function upgradeLegacyPlugin(p: PluginDefinition): PluginDefinition {
+  if (
+    p.kind === "analysis" &&
+    [LEGACY_ANALYSIS_PROMPT, ANALYSIS_PROMPT].includes(p.prompt)
+  ) {
+    try {
+      const schema = JSON.stringify(JSON.parse(p.schema));
+      if (
+        [ANALYSIS_SCHEMA, LEGACY_ANALYSIS_SCHEMA].some(
+          (s) => JSON.stringify(JSON.parse(s)) === schema,
+        )
+      )
+        return { ...p, prompt: ANALYSIS_PROMPT, schema: ANALYSIS_SCHEMA };
+    } catch {
+      /* Preserve custom or invalid schemas for the existing editor to report. */
+    }
+  }
   if (p.kind === "suggest" && p.prompt === LEGACY_SUGGEST_PROMPT)
     return { ...p, prompt: SUGGEST_PROMPT };
   if (p.kind !== "rewrite") return p;
@@ -210,26 +232,10 @@ export function pluginDefaults(
             : 10000,
     suggestions: 3,
     example: "",
-    schema:
-      kind === "analysis"
-        ? JSON.stringify(
-            {
-              type: "object",
-              properties: {
-                goals: { type: "array", items: { type: "string" } },
-                constraints: { type: "array", items: { type: "string" } },
-                plan: { type: "array", items: { type: "string" } },
-              },
-              required: ["goals", "constraints", "plan"],
-              additionalProperties: true,
-            },
-            null,
-            2,
-          )
-        : "",
+    schema: kind === "analysis" ? ANALYSIS_SCHEMA : "",
     prompt:
       kind === "analysis"
-        ? "结合聊天历史和最新用户要求，分析目标、约束和执行计划。只输出符合给定 JSON Schema 的 JSON，不输出正文。参考示例和历史配对保持一致，但以当前要求为准。\n最新要求：\n{{USER_INPUT}}"
+        ? ANALYSIS_PROMPT
         : kind === "clarify"
           ? "结合历史和最新用户的写作要求，提出一批具体、必要的澄清问题。使用自然语言编号提问，便于用户一次回答。参考历史用户选择，避免反复询问已经明确的偏好。不生成正文，不自行回答问题。\n本次写作要求：\n{{USER_INPUT}}"
           : kind === "suggest"
@@ -238,7 +244,7 @@ export function pluginDefaults(
   };
 }
 export const defaultPlugins = () =>
-  (["analysis", "clarify", "suggest", "rewrite"] as PluginKind[]).map((kind) =>
+  (["clarify", "analysis", "suggest", "rewrite"] as PluginKind[]).map((kind) =>
     pluginDefaults(kind),
   );
 export const isBuiltinPlugin = (p: Pick<PluginDefinition, "id" | "kind">) =>
@@ -249,24 +255,36 @@ export function withBuiltinPlugins(list: PluginDefinition[]) {
     ...defaultPlugins().filter((p) => !list.some((v) => v.id === p.id)),
   ];
 }
+export function orderPlugins<T extends { kind: PluginKind }>(
+  plugins: T[],
+): T[] {
+  const order: PluginKind[] = ["clarify", "analysis", "suggest", "rewrite"];
+  return plugins.toSorted(
+    (a, b) => order.indexOf(a.kind) - order.indexOf(b.kind),
+  );
+}
 export const definitions = (settings: Settings) =>
-  withBuiltinPlugins(settings.plugins ?? []).map(upgradeLegacyPlugin);
+  orderPlugins(
+    withBuiltinPlugins(settings.plugins ?? []).map(upgradeLegacyPlugin),
+  );
 export function enabledPlugins(chat: Chat, settings: Settings) {
-  return (chat.plugins ?? [])
-    .filter((p) => p.enabled)
-    .flatMap((binding) => {
-      const base = definitions(settings).find((p) => p.id === binding.id);
-      return base
-        ? [
-            upgradeLegacyPlugin({
-              ...base,
-              ...binding.overrides,
-              id: base.id,
-              kind: base.kind,
-            }),
-          ]
-        : [];
-    });
+  return orderPlugins(
+    (chat.plugins ?? [])
+      .filter((p) => p.enabled)
+      .flatMap((binding) => {
+        const base = definitions(settings).find((p) => p.id === binding.id);
+        return base
+          ? [
+              upgradeLegacyPlugin({
+                ...base,
+                ...binding.overrides,
+                id: base.id,
+                kind: base.kind,
+              }),
+            ]
+          : [];
+      }),
+  );
 }
 export function readPluginJSON(text: string, schemaText?: string) {
   const cleaned = text
@@ -383,6 +401,7 @@ export function preparePlugin(
   state: PluginState,
   input: string,
   anchorId: string | null = chat.currentId,
+  clarifications: PluginInjection[] = [],
 ) {
   const path = route(chat, anchorId),
     ids = new Set(path.map((m) => m.id));
@@ -424,6 +443,14 @@ export function preparePlugin(
     messages = contextMessages(source, input || " ");
     messages.pop();
     section("共同历史", messages);
+    if (p.kind === "analysis" && clarifications.length) {
+      const start = messages.length;
+      messages = injectPlugins(
+        [...messages, { role: "user", content: input }],
+        clarifications,
+      );
+      section("本轮澄清问答", messages.slice(start));
+    }
     let references = previous
       .filter((r) =>
         p.kind === "analysis"
@@ -633,12 +660,14 @@ export function flowInjections(
   return flow.results.flatMap((id) => {
     const run = state.runs.find((r) => r.id === id);
     if (!run || !["complete", "answered"].includes(run.status)) return [];
+    const configuration =
+      flow.definitions.find((p) => p.id === run.plugin.id) ?? run.plugin;
     return [
       {
         pluginId: run.plugin.id,
         name: run.plugin.name,
-        mode: run.plugin.injection,
-        template: run.plugin.injectionTemplate,
+        mode: configuration.injection,
+        template: configuration.injectionTemplate,
         runId: run.id,
         content:
           run.plugin.kind === "clarify"
@@ -647,4 +676,20 @@ export function flowInjections(
       },
     ];
   });
+}
+export function flowClarifications(
+  state: PluginState,
+  flow: PluginFlow,
+): PluginInjection[] {
+  const ids = new Set(
+    state.runs
+      .filter(
+        (r) =>
+          r.flowId === flow.id &&
+          r.plugin.kind === "clarify" &&
+          r.status === "answered",
+      )
+      .map((r) => r.id),
+  );
+  return flowInjections(state, flow).filter((i) => ids.has(i.runId));
 }

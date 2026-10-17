@@ -1044,15 +1044,23 @@ function App() {
     await ensureComposerChat();
     await pluginCommand("configure", { plugins });
   }
-  function rewriteButtons(content: string, messageId?: string) {
+  function rewriteButtons(
+    content: string,
+    messageId?: string,
+    iconOnly = false,
+  ) {
     if (!chat) return null;
     return enabledPlugins(chat, settings)
       .filter((p) => p.kind === "rewrite")
       .map((p) => (
         <button
           key={p.id}
-          className="du-btn du-btn-ghost du-btn-sm"
+          className={
+            "du-btn du-btn-ghost du-btn-sm " +
+            (iconOnly ? "du-btn-square icon-button" : "")
+          }
           aria-label={p.name}
+          title={p.name}
           disabled={
             !!job ||
             !!pluginJob ||
@@ -1086,7 +1094,7 @@ function App() {
           ) : (
             <WandSparkles size={16} />
           )}
-          {p.name}
+          {!iconOnly && p.name}
         </button>
       ));
   }
@@ -1955,6 +1963,19 @@ function App() {
               </button>
             </div>
           )}
+          <PluginBar
+            entryTarget={pluginEntry}
+            chat={chat}
+            settings={settings}
+            providers={providers}
+            state={pluginPreviewState.current}
+            draft={draft}
+            debug={debugPlugins}
+            setDebug={setDebugPlugins}
+            configure={configurePlugins}
+            command={pluginCommand}
+            busy={busy || !!job || !!pluginJob}
+          />
           <div
             className={
               "composer " +
@@ -2004,6 +2025,9 @@ function App() {
             </div>
             <div className="composer-controls">
               <div className="composer-plugin-entry" ref={setPluginEntry} />
+              <div className="composer-rewrite-entry">
+                {rewriteButtons(draft, undefined, true)}
+              </div>
               <div className="composer-spacer" />
               <div className="composer-model-settings">
                 <ContextUsage used={estimate} capacity={capacity} />
@@ -2128,19 +2152,7 @@ function App() {
               )}
             </div>
           </div>
-          <PluginBar
-            entryTarget={pluginEntry}
-            chat={chat}
-            settings={settings}
-            providers={providers}
-            state={pluginPreviewState.current}
-            draft={draft}
-            debug={debugPlugins}
-            setDebug={setDebugPlugins}
-            configure={configurePlugins}
-            command={pluginCommand}
-            busy={busy || !!job || !!pluginJob}
-          />
+
           {pluginJob && connection.pluginUnsaved(pluginJob.id) && (
             <button
               className="du-btn du-btn-xs"
@@ -2194,14 +2206,6 @@ function App() {
           {estimate > capacity && (
             <p className="context-warning">超出所设上下文预算，仍可发送。</p>
           )}
-          {chat &&
-            enabledPlugins(chat, settings).some(
-              (p) => p.kind === "rewrite",
-            ) && (
-              <div className="rewrite-actions" aria-label="user 提示工具">
-                {rewriteButtons(draft)}
-              </div>
-            )}
         </div>
         {chat && (
           <ConversationTimeline

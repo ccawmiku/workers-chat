@@ -18,8 +18,16 @@ import {
   SUGGEST_PROMPT,
   extractRewritePrompt,
   definitions,
+  enabledPlugins,
+  flowClarifications,
   type PluginRun,
 } from "../src/shared/plugins";
+import {
+  ANALYSIS_PROMPT,
+  ANALYSIS_SCHEMA,
+  LEGACY_ANALYSIS_PROMPT,
+  LEGACY_ANALYSIS_SCHEMA,
+} from "../src/shared/analysis-defaults";
 const provider: Provider = {
   id: "p",
   name: "Test",
@@ -73,11 +81,149 @@ describe("plugin context assembly", () => {
     const s = defaultSettings();
     s.plugins = [];
     expect(definitions(s).map((p) => p.id)).toEqual([
-      "builtin-analysis",
       "builtin-clarify",
+      "builtin-analysis",
       "builtin-suggest",
       "builtin-rewrite",
     ]);
+  });
+  it("uses fixed clarification-before-analysis order even for previously reordered bindings", () => {
+    const { chat, settings } = fixture();
+    chat.plugins = ["rewrite", "analysis", "suggest", "clarify"].map(
+      (kind) => ({ id: "builtin-" + kind, enabled: true }),
+    );
+    expect(enabledPlugins(chat, settings).map((p) => p.kind)).toEqual([
+      "clarify",
+      "analysis",
+      "suggest",
+      "rewrite",
+    ]);
+  });
+  it("upgrades the old default analysis pair while preserving customized prompts and schemas", () => {
+    const old = {
+      ...pluginDefaults("analysis"),
+      prompt: LEGACY_ANALYSIS_PROMPT,
+      schema: LEGACY_ANALYSIS_SCHEMA,
+    };
+    expect(upgradeLegacyPlugin(old)).toMatchObject({
+      prompt: ANALYSIS_PROMPT,
+      schema: ANALYSIS_SCHEMA,
+    });
+    expect(upgradeLegacyPlugin({ ...old, prompt: "custom" })).toMatchObject({
+      prompt: "custom",
+      schema: LEGACY_ANALYSIS_SCHEMA,
+    });
+    expect(
+      upgradeLegacyPlugin({
+        ...old,
+        schema: '{"type":"object","required":["ABC"]}',
+      }).schema,
+    ).toContain("ABC");
+  });
+  it("validates narrative fields and none without discarding factual records for approximate model word counts", () => {
+    const p = pluginDefaults("analysis"),
+      none = {
+        character_thoughts: "none",
+        scene_state: "none",
+        action_state: "none",
+        knowledge_boundaries: "none",
+      };
+    expect(JSON.parse(normalizePluginOutput(p, JSON.stringify(none)))).toEqual(
+      none,
+    );
+    const full = {
+      character_thoughts: [
+        { character: "甲", thought: "我".repeat(150) },
+        { character: "乙", thought: "none" },
+      ],
+      scene_state: "景".repeat(200),
+      action_state: "动".repeat(150),
+      knowledge_boundaries: "知".repeat(50),
+    };
+    expect(JSON.parse(normalizePluginOutput(p, JSON.stringify(full)))).toEqual(
+      full,
+    );
+    for (const bad of [
+      { ...none, scene_state: "" },
+      { ...none, action_state: " " },
+      { ...none, character_thoughts: [] },
+      { ...none, knowledge_boundaries: null },
+    ])
+      expect(() => normalizePluginOutput(p, JSON.stringify(bad))).toThrow(
+        "结构",
+      );
+    expect(
+      JSON.parse(
+        normalizePluginOutput(
+          p,
+          JSON.stringify({ ...none, scene_state: "有依据的短记录" }),
+        ),
+      ),
+    ).toMatchObject({ scene_state: "有依据的短记录" });
+  });
+  it("gives analysis only this flow's answered clarification pairs with switchable tool/user injection", () => {
+    const { chat, settings, state } = fixture();
+    addMessage(chat, "user", "过去");
+    addMessage(chat, "assistant", "已有事实");
+    const anchor = chat.currentId,
+      question = run(
+        "current",
+        "clarify",
+        "q",
+        "当前要求",
+        "问题：是什么颜色？",
+        "蓝色",
+      );
+    question.flowId = "flow";
+    const other = {
+      ...question,
+      id: "other",
+      flowId: "other-flow",
+      answer: "别的分支",
+    };
+    state.runs.push(question, other);
+    const flow = {
+      id: "flow",
+      userId: "current",
+      definitions: [],
+      index: 1,
+      results: ["q", "other"],
+      debug: false,
+      status: "running" as const,
+    };
+    for (const mode of ["tool", "user"] as const) {
+      question.plugin.injection = mode;
+      const injections = flowClarifications(state, flow);
+      expect(injections).toHaveLength(1);
+      const prepared = preparePlugin(
+        chat,
+        pluginDefaults("analysis"),
+        settings,
+        [provider],
+        state,
+        "当前要求",
+        anchor,
+        injections,
+      );
+      expect(prepared.request.messages.slice(0, 3)).toEqual(
+        contextMessages(chat),
+      );
+      expect(JSON.stringify(prepared.request.messages)).toContain("蓝色");
+      expect(JSON.stringify(prepared.request.messages)).not.toContain(
+        "别的分支",
+      );
+      expect(prepared.request.messages.at(-1)?.content).toContain(
+        "HARD INTERRUPT",
+      );
+      expect(prepared.request.messages.some((m) => m.role === "tool")).toBe(
+        mode === "tool",
+      );
+      expect(
+        prepared.metrics.sections.find((s) => s.name === "本轮澄清问答")
+          ?.tokens,
+      ).toBeGreaterThan(0);
+    }
+    expect(Object.values(chat.messages)).toHaveLength(2);
   });
   it("extracts rewrite JSON and rejects malformed, expanded and meta instruction results", () => {
     const p = pluginDefaults("rewrite");
@@ -230,9 +376,10 @@ describe("plugin context assembly", () => {
       "A3",
     ]);
     const suffix = result.at(-1)?.content;
-    expect(suffix).toContain(
-      state.runs[3]!.plugin.prompt.replaceAll("\n", "\\n"),
+    const reference = JSON.parse(
+      suffix!.split("历史完整配对（仅作参考）：\n")[1]!,
     );
+    expect(reference.prompt).toBe(state.runs[3]!.plugin.prompt);
     expect(suffix).toContain("example");
     expect(suffix).not.toContain('"v":2');
   });

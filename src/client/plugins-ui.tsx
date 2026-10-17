@@ -5,8 +5,6 @@ import remarkGfm from "remark-gfm";
 import {
   Blocks,
   SlidersHorizontal,
-  ArrowUp,
-  ArrowDown,
   Plus,
   Copy,
   Trash2,
@@ -42,6 +40,7 @@ import {
   normalizePluginOutput,
   extractRewritePrompt,
   isBuiltinPlugin,
+  flowClarifications,
 } from "../shared/plugins";
 import {
   IconButton,
@@ -56,8 +55,7 @@ type Command = (
   body?: Record<string, unknown>,
 ) => Promise<void>;
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
-const k = (n: number) =>
-  (n / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 }) + "k";
+const k = (n: number) => (n / 1000).toFixed(1) + "k";
 function PluginUsage({ run }: { run: PluginRun }) {
   return (
     <div className="plugin-usage">
@@ -347,6 +345,8 @@ export function PluginEditor({
                 />
               </label>
               <small>
+                {p.kind === "clarify" &&
+                  "提问和回答用于后续 JSON 分析与主回复；默认 Tool Call，也可附加到 user。"}
                 {
                   "支持 {{RESULT}}、{{PLUGIN_NAME}}、{{USER_INPUT}}。不改变保存的正文。"
                 }
@@ -478,7 +478,7 @@ export function GlobalPlugins({
     <>
       <h3>插件默认配置</h3>
       <p className="muted">
-        四种内置能力支持多个配置实例。聊天内开关、顺序和覆盖设置在发送框左下角；这里的修改不会覆盖已有结果。
+        四种内置能力支持多个配置实例。聊天内开关和覆盖设置在发送框左下角；这里的修改不会覆盖已有结果。
       </p>
       <ul className="plugin-global-list du-list" aria-label="插件默认配置">
         {list.map((p) => (
@@ -595,7 +595,7 @@ function ContextDetails({
               <div className="du-stat-value">
                 {k(m.total)}／{k(m.capacity)}
               </div>
-              <div className="du-stat-desc">输入为预计值；上游用量单独展示</div>
+              <div className="du-stat-desc">上游用量单独展示</div>
               <progress
                 className={
                   "du-progress " +
@@ -635,7 +635,9 @@ function ContextDetails({
               {m.sections.map((s, index) => (
                 <tr key={index}>
                   <td>{s.name}</td>
-                  <td>{s.tokens.toLocaleString()} Token</td>
+                  <td title={s.tokens.toLocaleString() + " Token"}>
+                    {k(s.tokens)} Token
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -765,10 +767,7 @@ function ContextMessagePicker({
           ) : selected !== null && messages[selected] ? (
             <>
               {selected + 1}. {badge(messages[selected]!.role)} ·{" "}
-              {estimateTokens(
-                messages[selected]!.content ?? "",
-              ).toLocaleString()}{" "}
-              Token
+              {k(estimateTokens(messages[selected]!.content ?? ""))} Token
             </>
           ) : (
             `选择一条查看完整内容（共 ${messages.length} 条）`
@@ -817,7 +816,7 @@ function ContextMessagePicker({
               <span>{i + 1}.</span>
               {badge(msg.role)}
               <span className="muted">
-                {estimateTokens(msg.content ?? "").toLocaleString()} Token
+                {k(estimateTokens(msg.content ?? ""))} Token
               </span>
             </button>
           </li>
@@ -891,6 +890,11 @@ export function PluginBar({
       previewTimer.current = null;
       const { chat, settings, providers, state, draft } = previewInputs.current;
       const ids = new Set(chat ? route(chat).map((m) => m.id) : []);
+      const flow = state.flows.findLast(
+        (f) =>
+          ids.has(f.userId) &&
+          ["running", "waiting", "error", "debug"].includes(f.status),
+      );
       const values = (chat ? enabledPlugins(chat, settings) : []).map((p) => {
         try {
           const active = state.runs.findLast(
@@ -908,8 +912,20 @@ export function PluginBar({
               settings,
               providers,
               state,
-              active?.input ?? (p.kind === "suggest" ? "" : draft),
-              active ? (active.contextAnchorId ?? null) : chat!.currentId,
+              active?.input ??
+                ((p.kind === "analysis" || p.kind === "clarify") && flow
+                  ? chat!.messages[flow.userId]!.content
+                  : p.kind === "suggest"
+                    ? ""
+                    : draft),
+              active
+                ? (active.contextAnchorId ?? null)
+                : (p.kind === "analysis" || p.kind === "clarify") && flow
+                  ? chat!.messages[flow.userId]!.parentId
+                  : chat!.currentId,
+              p.kind === "analysis" && flow
+                ? flowClarifications(state, flow)
+                : [],
             ),
           ] as const;
         } catch {
@@ -944,21 +960,6 @@ export function PluginBar({
         ? bindings.map((b) => (b.id === id ? { ...b, enabled } : b))
         : [...bindings, { id, enabled }],
     );
-  const sortable = bindings.filter((b) =>
-    list.some(
-      (p) => p.id === b.id && (p.kind === "analysis" || p.kind === "clarify"),
-    ),
-  );
-  const move = (id: string, delta: number) => {
-    const ordered = [...bindings],
-      position = sortable.findIndex((b) => b.id === id),
-      target = sortable[position + delta],
-      i = ordered.findIndex((b) => b.id === id),
-      j = target ? ordered.findIndex((b) => b.id === target.id) : -1;
-    if (i < 0 || j < 0 || j >= ordered.length) return;
-    [ordered[i], ordered[j]] = [ordered[j]!, ordered[i]!];
-    void persist(ordered).catch(() => {});
-  };
   const activeRun = (id: string) =>
     state.runs.findLast(
       (r) =>
@@ -992,7 +993,7 @@ export function PluginBar({
               >
                 <span>
                   <span className="plugin-chip-name">{p.name}</span>
-                  <b>{metrics ? "预计 " + k(metrics.total) : "未选模型"}</b>
+                  <b>{metrics ? k(metrics.total) : "未选模型"}</b>
                 </span>
                 <progress
                   className={
@@ -1046,21 +1047,14 @@ export function PluginBar({
                   </IconButton>
                 </div>
                 <p className="muted">
-                  仅前置注入插件按顺序运行；追问和重新生成 user 提示独立触发。
+                  提问澄清 → JSON 分析 → 主回答。追问和 user 重写独立触发。
                 </p>
-                {[
-                  ...bindings
-                    .map((b) => list.find((p) => p.id === b.id))
-                    .filter((p): p is PluginDefinition => !!p),
-                  ...list.filter((p) => !bindings.some((b) => b.id === p.id)),
-                ].map((p) => {
+                {list.map((p) => {
                   const binding = bindings.find((b) => b.id === p.id),
                     merged = upgradeLegacyPlugin({
                       ...p,
                       ...binding?.overrides,
-                    }),
-                    canSort = p.kind === "analysis" || p.kind === "clarify",
-                    sortIndex = sortable.findIndex((b) => b.id === p.id);
+                    });
                   return (
                     <div className="plugin-picker-row" key={p.id}>
                       <span>
@@ -1080,28 +1074,6 @@ export function PluginBar({
                           }}
                         >
                           <Play size={14} />
-                        </IconButton>
-                      )}
-                      {canSort && (
-                        <IconButton
-                          label={"上移 " + p.name}
-                          onClick={() => move(p.id, -1)}
-                          disabled={busy || sortIndex <= 0}
-                        >
-                          <ArrowUp size={14} />
-                        </IconButton>
-                      )}
-                      {canSort && (
-                        <IconButton
-                          label={"下移 " + p.name}
-                          onClick={() => move(p.id, 1)}
-                          disabled={
-                            busy ||
-                            sortIndex < 0 ||
-                            sortIndex === sortable.length - 1
-                          }
-                        >
-                          <ArrowDown size={14} />
                         </IconButton>
                       )}
                       <IconButton

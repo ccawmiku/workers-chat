@@ -2664,7 +2664,7 @@ main {
   align-items: center;
   gap: 8px;
   max-width: var(--content-width);
-  margin: 7px auto 0;
+  margin: 0 auto 8px;
   min-width: 0;
   font-size: 12px;
 }
@@ -2916,15 +2916,13 @@ main {
   margin: 8px 0 12px;
   text-align: left;
 }
-.rewrite-actions {
+.composer-rewrite-entry {
   display: flex;
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-top: 8px;
+  align-items: center;
+  gap: 2px;
 }
-.rewrite-actions .du-btn {
-  color: var(--accent);
+.composer-rewrite-entry:empty {
+  display: none;
 }
 .plugin-dialog pre {
   white-space: pre-wrap;
@@ -3206,7 +3204,8 @@ main {
     width: min(420px, calc(100vw - 48px));
   }
   .plugin-bar {
-    margin-top: 6px;
+    margin-top: 0;
+    margin-bottom: 6px;
   }
   .plugin-chip {
     min-width: 100px;

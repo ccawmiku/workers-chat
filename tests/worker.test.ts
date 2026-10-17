@@ -1507,12 +1507,9 @@ describe("workerd HTTP + D1 + Workflows", () => {
     });
     let s = await wait((s) => s.chat.pluginPending === "waiting");
     expect(Object.values(s.chat.messages)).toHaveLength(1);
-    expect(s.pluginState.runs.map((r) => r.status)).toEqual([
-      "complete",
-      "waiting",
-    ]);
-    expect(upstreamCalls.length - before).toBe(2);
-    const question = s.pluginState.runs[1]!;
+    expect(s.pluginState.runs.map((r) => r.status)).toEqual(["waiting"]);
+    expect(upstreamCalls.length - before).toBe(1);
+    const question = s.pluginState.runs[0]!;
     await value("/chats/" + chat.id + "/plugins", "POST", {
       action: "answer",
       runId: question.id,
@@ -1531,6 +1528,15 @@ describe("workerd HTTP + D1 + Workflows", () => {
       "assistant",
     ]);
     expect(upstreamCalls.length - before).toBe(4);
+    const analysis = upstreamCalls[before + 1]!.messages as {
+      role: string;
+      content: string;
+    }[];
+    expect(analysis.filter((m) => m.role === "tool")).toHaveLength(1);
+    expect(JSON.stringify(analysis)).toContain("轻松幽默");
+    expect(JSON.stringify(analysis)).toContain(
+      question.output.replaceAll("\n", "\\n"),
+    );
     const main = upstreamCalls[before + 2]!.messages as {
       role: string;
       content: string;
@@ -1817,7 +1823,8 @@ describe("workerd HTTP + D1 + Workflows", () => {
       {
         sequence: 1,
         status: "complete",
-        content: '{"goals":[],"constraints":[],"plan":[]}',
+        content:
+          '{"character_thoughts":"none","scene_state":"none","action_state":"none","knowledge_boundaries":"none"}',
       },
       true,
       "https://chat.test",
@@ -1895,6 +1902,20 @@ describe("workerd HTTP + D1 + Workflows", () => {
         !s.job && !s.pluginJob && Object.values(s.chat.messages).length === 2,
     );
     const originalAssistant = s.chat.currentId!;
+    const analysisRun = s.pluginState.runs.find(
+      (r) => r.plugin.kind === "analysis" && r.status === "complete",
+    )!;
+    const analysisRequest = await value<{
+      messages: { role: string; content: string }[];
+    }>("/chats/" + chat.id + "/plugins", "POST", {
+      action: "request",
+      runId: analysisRun.id,
+    });
+    expect(analysisRequest.messages.some((m) => m.role === "tool")).toBe(false);
+    expect(JSON.stringify(analysisRequest.messages)).toContain("旧偏好");
+    expect(JSON.stringify(analysisRequest.messages)).toContain(
+      originalRun.output.replaceAll("\n", "\\n"),
+    );
     expect(
       (
         upstreamCalls.at(-1)?.messages as { role: string; content: string }[]
@@ -1958,7 +1979,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
   }, 20000);
   it("does not retry failed plugins automatically, stops partial output and survives beyond 30 seconds without a page", async () => {
     const p = {
-      ...defaultPlugins()[0]!,
+      ...defaultPlugins().find((p) => p.kind === "analysis")!,
       prompt: "[PLUGIN_TEST_analysis]\nReturn JSON",
       schema: '{"type":"object","required":["ABC"]}',
     };
@@ -2029,8 +2050,8 @@ describe("workerd HTTP + D1 + Workflows", () => {
       plugins: [],
     });
     expect(next.plugins?.map((p) => p.id)).toEqual([
-      "builtin-analysis",
       "builtin-clarify",
+      "builtin-analysis",
       "builtin-suggest",
       "builtin-rewrite",
     ]);

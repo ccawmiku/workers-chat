@@ -4,6 +4,8 @@ import { database } from "./database.config.ts";
 const workerDefinition = defineWorker({
   name: "workers-chat",
   domains: ["chat.yaemiko.lol"],
+  workersDev: true,
+  previewUrls: false,
   compatibilityDate: "2026-10-15",
   entrypoint,
   assets: {

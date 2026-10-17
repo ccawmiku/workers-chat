@@ -1,4 +1,9 @@
-import { GlobalSummarySettings, SummaryTools } from "./summaries-ui";
+import { UsageBar } from "./usage-bar";
+import {
+  GlobalSummarySettings,
+  SummaryTools,
+  SummaryContextChip,
+} from "./summaries-ui";
 import type { SummaryState } from "../shared/summaries";
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -26,7 +31,12 @@ import {
   Folder,
 } from "lucide-react";
 import type { Chat, Provider, Settings, Message } from "../shared/chat";
-import { route, estimateTokens, formatTokenCount } from "../shared/chat";
+import {
+  route,
+  estimateTokens,
+  formatTokenCount,
+  cacheHitRate,
+} from "../shared/chat";
 import {
   type PluginDefinition,
   type PluginBinding,
@@ -62,6 +72,7 @@ function PluginUsage({ run }: { run: PluginRun }) {
   return (
     <div className="plugin-usage">
       <MessageUsage
+        showBar
         message={{
           id: run.id,
           parentId: null,
@@ -618,6 +629,15 @@ function ContextDetails({
                 value={Math.min(m.total, m.capacity)}
                 aria-label="插件上下文用量"
               />
+              <UsageBar
+                usage={usageRun?.usage}
+                fallback={{
+                  input: m.total,
+                  thinking: 0,
+                  output: 0,
+                  total: m.total,
+                }}
+              />
             </div>
             <div className="du-stat">
               <div className="du-stat-title">插件历史参考</div>
@@ -710,7 +730,7 @@ function ContextDetails({
     </Dialog>
   );
 }
-function ContextMessagePicker({
+export function ContextMessagePicker({
   messages,
   selected,
   select,
@@ -1000,6 +1020,13 @@ export function PluginBar({
       >
         <div className="plugin-chips">
           {selected.map((p) => {
+            const usageRun = state.runs.findLast(
+              (r) =>
+                r.plugin.id === p.id &&
+                !!r.anchorId &&
+                route(chat!).some((m) => m.id === r.anchorId) &&
+                r.usage,
+            );
             const run = activeRun(p.id),
               metrics = run?.metrics ?? previews.get(p.id)?.metrics;
             return (
@@ -1028,6 +1055,24 @@ export function PluginBar({
                   max={metrics?.capacity ?? 1}
                   value={Math.min(metrics?.total ?? 0, metrics?.capacity ?? 1)}
                 />
+                <UsageBar
+                  usage={usageRun?.usage}
+                  fallback={
+                    metrics
+                      ? {
+                          input: metrics.total,
+                          thinking: 0,
+                          output: 0,
+                          total: metrics.total,
+                        }
+                      : undefined
+                  }
+                />
+                {cacheHitRate(usageRun?.usage?.cache_hit_rate) && (
+                  <small>
+                    缓存 {cacheHitRate(usageRun?.usage?.cache_hit_rate)}
+                  </small>
+                )}
                 {metrics && metrics.shortened > 0 && (
                   <small>
                     {metrics.shortened ? `截 ${metrics.shortened} 条` : ""}
@@ -1036,6 +1081,14 @@ export function PluginBar({
               </button>
             );
           })}
+          {chat && (
+            <SummaryContextChip
+              chat={chat}
+              settings={settings}
+              providers={providers}
+              state={summaries}
+            />
+          )}
         </div>
       </div>
       {entryTarget &&
@@ -1237,7 +1290,8 @@ function ResultCard({
           ) : (
             <Blocks size={16} />
           )}{" "}
-          {run.plugin.cardTitle || run.plugin.name}
+          {upgradeLegacyPlugin(run.plugin).cardTitle ||
+            upgradeLegacyPlugin(run.plugin).name}
         </span>
         <small>
           {run.status === "running" ? (
@@ -1621,7 +1675,7 @@ export function RewriteReview({
   const candidate = selected === null ? "" : (candidates[selected] ?? "");
   return (
     <Dialog
-      title="重新生成 user 提示 · 对比"
+      title="重写提示 · 对比"
       close={() => void command("dismiss", { runId: run.id }).catch(() => {})}
       wide
     >

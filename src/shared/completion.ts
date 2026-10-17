@@ -1,4 +1,48 @@
-import { sanitizeUsage } from "./chat";
+import { mergeUsage } from "./chat";
+export function responseUsage(
+  headers: Headers,
+  body?: unknown,
+  previous?: unknown,
+) {
+  let usage = mergeUsage(previous, undefined);
+  for (const name of [
+    "x-cache-hit-rate",
+    "cache-hit-rate",
+    "x-cache-hit-ratio",
+  ]) {
+    const value = headers.get(name);
+    if (value !== null && usage?.cache_hit_rate === undefined) {
+      const next = mergeUsage(usage, { cache_hit_rate: value });
+      if (next?.cache_hit_rate !== undefined) {
+        usage = next;
+        break;
+      }
+    }
+  }
+  const data =
+    body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  usage = mergeUsage(usage, data);
+  usage = mergeUsage(usage, data.usage);
+  return usage;
+}
+/** Most SSE frames contain only text: avoid sanitizing and copying stats for each token. */
+export function hasReportedUsage(value: unknown) {
+  if (!value || typeof value !== "object") return false;
+  return [
+    "usage",
+    "cache_hit_rate",
+    "cacheHitRate",
+    "cache_hit_ratio",
+    "prompt_tokens",
+    "input_tokens",
+    "completion_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cached_tokens",
+    "reasoning_tokens",
+    "thinking_tokens",
+  ].some((key) => key in value);
+}
 export type CompletionOutput = {
   content: string;
   reasoning: string;
@@ -49,6 +93,7 @@ export async function readCompletion(
     throw Error(
       `上游 HTTP ${response.status}：${await readResponseText(response, signal, 8192)}`,
     );
+  output.usage = responseUsage(response.headers, undefined, output.usage);
   if (!stream) {
     const data = JSON.parse(await readResponseText(response, signal));
     const message = data.choices?.[0]?.message;
@@ -56,7 +101,7 @@ export async function readCompletion(
     output.content +=
       typeof message.content === "string" ? message.content : "";
     output.reasoning = message.reasoning_content ?? message.reasoning ?? "";
-    output.usage = sanitizeUsage(data.usage);
+    output.usage = responseUsage(response.headers, data, output.usage);
     onUpdate();
     return;
   }
@@ -96,7 +141,8 @@ export async function readCompletion(
         ? delta.reasoning_content
         : delta?.reasoning,
     );
-    if (event.usage) output.usage = sanitizeUsage(event.usage);
+    if (hasReportedUsage(event))
+      output.usage = responseUsage(response.headers, event, output.usage);
     if (choice?.finish_reason) finished = true;
     onUpdate();
   };

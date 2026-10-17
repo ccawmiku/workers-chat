@@ -190,7 +190,7 @@ for (const mobile of [false, true])
       "JSON 分析",
       "提问澄清",
       "追问建议",
-      "重新生成 user 提示",
+      "重写提示",
     ]) {
       await page.getByLabel("启用 " + name, { exact: true }).check();
       await expect(
@@ -202,7 +202,7 @@ for (const mobile of [false, true])
     ).toHaveCount(0);
     await expect(
       page.getByRole("button", {
-        name: "上移 重新生成 user 提示",
+        name: "上移 重写提示",
         exact: true,
       }),
     ).toHaveCount(0);
@@ -210,7 +210,7 @@ for (const mobile of [false, true])
       page.getByRole("button", { name: /^(上移|下移) / }),
     ).toHaveCount(0);
     await page.getByRole("button", { name: "关闭插件列表" }).click();
-    await expect(page.locator(".plugin-chips .plugin-chip")).toHaveCount(4);
+    await expect(page.locator(".plugin-chips .plugin-chip")).toHaveCount(5);
     const placement = await page
       .locator(".composer-area")
       .evaluate((wrapper) => {
@@ -403,7 +403,7 @@ for (const mobile of [false, true])
     expect(JSON.stringify(analysisCall.messages)).toContain("哪种风格");
     await expect(page.locator(".plugin-chips")).not.toContainText("预计");
     for (const value of await page.locator(".plugin-chip b").allTextContents())
-      expect(value).toMatch(/^(?:\d+|\d+\.\dk)$/);
+      expect(value).toMatch(/^(?:\d+|\d+\.\dk|待回复)$/);
     await page.getByLabel("消息", { exact: true }).fill("保留的旧草稿");
     await page
       .getByRole("button", { name: "再给我一个例子", exact: false })
@@ -417,17 +417,17 @@ for (const mobile of [false, true])
     );
     const rewriteButton = page
       .locator(".composer-rewrite-entry")
-      .getByRole("button", { name: "重新生成 user 提示", exact: true });
+      .getByRole("button", { name: "重写提示", exact: true });
     await rewriteButton.click();
     await expect(rewriteButton.locator(".du-loading")).toBeVisible();
     await expect(
       page.getByRole("dialog", {
-        name: "重新生成 user 提示 · 对比",
+        name: "重写提示 · 对比",
         exact: true,
       }),
     ).toBeVisible();
     let comparison = page.getByRole("dialog", {
-      name: "重新生成 user 提示 · 对比",
+      name: "重写提示 · 对比",
       exact: true,
     });
     await expect(comparison.locator(".plugin-usage")).toContainText(
@@ -537,7 +537,7 @@ for (const mobile of [false, true])
       exact: true,
     });
     await messageEditor
-      .getByRole("button", { name: "重新生成 user 提示", exact: true })
+      .getByRole("button", { name: "重写提示", exact: true })
       .click();
     await expect(messageEditor.locator(".du-loading")).toBeVisible();
     await expect(comparison).toBeVisible();

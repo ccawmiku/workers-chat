@@ -2438,9 +2438,23 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(candidate.warning).toContain("未自动截断");
     expect(summaryFor(s.chat, s.summaryState, messageId)?.id).toBe(old.id);
     await value("/chats/" + c.id + "/summaries", "POST", {
-      action: "dismiss",
-      runId: candidate.id,
+      action: "discard-candidates",
+      runIds: [candidate.id, old.id, "not-a-real-run"],
     });
+    expect(
+      (
+        await request("/chats/" + c.id + "/summaries", "POST", {
+          action: "accept",
+          runId: candidate.id,
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      await value("/chats/" + c.id + "/summaries", "POST", {
+        action: "discard-candidates",
+        runIds: [candidate.id],
+      }),
+    ).toEqual({ ok: true });
     s = await value("/chats/" + c.id);
     expect(summaryFor(s.chat, s.summaryState, messageId)?.id).toBe(old.id);
     summaryControls.output = '{"summary":"确认后的摘要"}';

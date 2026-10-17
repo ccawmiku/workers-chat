@@ -67,13 +67,22 @@ export async function postView(env: Env, chat: Chat, foreground?: PluginState) {
       });
     }
   }
+  // The foreground snapshot was read before the jobs query. A suggestion may
+  // have finished in between: do not return "no jobs" with that stale running row.
+  const finishedBetweenReads = !!foreground?.runs.some(
+    (r) =>
+      r.plugin.kind === "suggest" &&
+      r.status === "running" &&
+      !jobs.some((j) => j.message_id === r.id),
+  );
   return {
     summaryState: changed
       ? (await summaryState(env, chat.id)).value
       : summaryDoc.value,
     postJobs,
-    postPluginState: changed
-      ? (await pluginState(env, chat.id)).value
-      : plugins.value,
+    postPluginState:
+      changed || finishedBetweenReads
+        ? (await pluginState(env, chat.id)).value
+        : plugins.value,
   };
 }

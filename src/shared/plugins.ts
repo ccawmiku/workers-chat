@@ -1,3 +1,4 @@
+import { CLARIFY_PROMPT } from "./clarify-defaults";
 import {
   candidateTask,
   swappedHistory,
@@ -74,6 +75,7 @@ export type PluginRequest = {
   model: string;
   messages: APIMessage[];
   stream: boolean;
+  stream_options?: { include_usage: true };
   response_format?: { type: "json_object" };
   reasoning_effort?: string;
 } & Parameters;
@@ -150,7 +152,7 @@ const names: Record<PluginKind, string> = {
   analysis: "JSON 分析",
   clarify: "提问澄清",
   suggest: "追问建议",
-  rewrite: "重新生成 user 提示",
+  rewrite: "重写提示",
 };
 export const REWRITE_PROMPT = "";
 export const SUGGEST_PROMPT = "";
@@ -183,7 +185,7 @@ export function pluginDefaults(
       kind === "analysis"
         ? ANALYSIS_PROMPT
         : kind === "clarify"
-          ? "结合历史和最新用户的写作要求，提出一批具体、必要的澄清问题。使用自然语言编号提问，便于用户一次回答。参考历史用户选择，避免反复询问已经明确的偏好。不生成正文，不自行回答问题。\n本次写作要求：\n{{USER_INPUT}}"
+          ? CLARIFY_PROMPT
           : kind === "suggest"
             ? SUGGEST_PROMPT
             : REWRITE_PROMPT,
@@ -332,7 +334,7 @@ export function extractRewritePrompt(text: string): string {
     }),
   );
   const prompt = (result as { prompt: string }).prompt.trim();
-  if (!prompt) throw Error("重新生成 user 提示的 prompt 不能为空");
+  if (!prompt) throw Error("重写提示的 prompt 不能为空");
   return prompt;
 }
 function render(template: string, values: Record<string, string>) {
@@ -520,6 +522,7 @@ export function preparePlugin(
       : {}),
     ...(p.effort !== "inherit" ? { reasoning_effort: p.effort } : {}),
   };
+  if (request.stream) request.stream_options = { include_usage: true };
   return { request, metrics, provider, modelRef: ref };
 }
 export type PluginInjection = {

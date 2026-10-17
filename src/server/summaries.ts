@@ -387,6 +387,39 @@ export async function summaryEndpoint(
     return { ok: true };
   }
   const state = await summaryState(env, chat.id);
+  if (action === "discard-candidates") {
+    if (
+      !Array.isArray(body.runIds) ||
+      body.runIds.length > 1000 ||
+      body.runIds.some((id) => typeof id !== "string" || id.length > 128)
+    )
+      throw new HttpError(400, "摘要候选列表无效");
+    const ids = new Set(body.runIds);
+    const dropped = state.value.runs
+      .filter((r) => r.status === "candidate" && ids.has(r.id))
+      .map((r) => r.id);
+    if (dropped.length) {
+      const remove = new Set(dropped);
+      let removed: string[] = [];
+      await updateState(
+        env,
+        chat.id,
+        (s) => {
+          removed = s.runs
+            .filter((r) => r.status === "candidate" && remove.has(r.id))
+            .map((r) => r.id);
+          const finalIds = new Set(removed);
+          s.runs = s.runs.filter((r) => !finalIds.has(r.id));
+        },
+        () => [
+          env.DB.prepare(
+            "DELETE FROM documents WHERE id IN (SELECT value FROM json_each(?))",
+          ).bind(JSON.stringify(removed.map(taskId))),
+        ],
+      );
+    }
+    return { ok: true };
+  }
   const run =
     typeof body.runId === "string"
       ? state.value.runs.find((r) => r.id === body.runId)

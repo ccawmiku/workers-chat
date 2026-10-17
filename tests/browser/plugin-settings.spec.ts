@@ -147,10 +147,10 @@ for (const mobile of [false, true])
     await editor.getByRole("button", { name: "保存", exact: true }).click();
     await expect(editor).toHaveCount(0);
     await list
-      .getByRole("button", { name: "编辑插件 重新生成 user 提示", exact: true })
+      .getByRole("button", { name: "编辑插件 重写提示", exact: true })
       .click();
     editor = page.getByRole("dialog", {
-      name: "全局 · 重新生成 user 提示",
+      name: "全局 · 重写提示",
       exact: true,
     });
     await expect(
@@ -171,10 +171,10 @@ for (const mobile of [false, true])
     await editor.getByLabel("开头 user（U0）", { exact: true }).fill("开始吧");
     await editor.getByRole("button", { name: "保存", exact: true }).click();
     await list
-      .getByRole("button", { name: "编辑插件 重新生成 user 提示", exact: true })
+      .getByRole("button", { name: "编辑插件 重写提示", exact: true })
       .click();
     editor = page.getByRole("dialog", {
-      name: "全局 · 重新生成 user 提示",
+      name: "全局 · 重写提示",
       exact: true,
     });
     await expect(

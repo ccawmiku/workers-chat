@@ -240,6 +240,9 @@ export function prepareSummary(
     model: ref.modelId,
     messages,
     stream: config.stream,
+    ...(config.stream
+      ? { stream_options: { include_usage: true as const } }
+      : {}),
     response_format: { type: "json_object" },
     ...settings.parameters,
     ...model.parameters,

@@ -97,6 +97,7 @@ for (const mobile of [false, true])
         usage: {
           input_tokens: 18929,
           output_tokens: 424,
+          completion_tokens_details: { reasoning_tokens: 100 },
           total_tokens: 19353,
           cache_hit_rate: "85.8%",
         },
@@ -104,7 +105,8 @@ for (const mobile of [false, true])
     };
     let pending = false,
       rejectOnce = true,
-      confirmed = false;
+      confirmed = false,
+      backfilled = false;
     const decorate = (snapshot: any) => ({
       ...snapshot,
       summaryState: state,
@@ -134,6 +136,18 @@ for (const mobile of [false, true])
       "**/api/chats/" + chat.id + "/summaries",
       async (route) => {
         const b = route.request().postDataJSON();
+        if (b.action === "request")
+          return route.fulfill({
+            json: {
+              model: "summary-fixture",
+              stream: true,
+              messages: [
+                { role: "system", content: "summary system" },
+                { role: "user", content: "summary context snapshot" },
+              ],
+            },
+          });
+        if (b.action === "backfill") backfilled = true;
         if (b.action === "configure") return route.fallback();
         if (b.action === "regenerate") {
           const old = state.runs.findLast(
@@ -147,7 +161,12 @@ for (const mobile of [false, true])
             summary: "待确认的新摘要",
             output: '{"summary":"待确认的新摘要"}',
           });
+          return route.fulfill({ json: { jobId: state.runs.at(-1)!.id } });
         }
+        if (b.action === "discard-candidates")
+          state.runs = state.runs.filter(
+            (r) => r.status !== "candidate" || !b.runIds.includes(r.id),
+          );
         if (b.action === "accept") {
           if (rejectOnce) {
             rejectOnce = false;
@@ -176,6 +195,59 @@ for (const mobile of [false, true])
     await expect(latest).toContainText("输入 18.9k");
     await expect(latest).toContainText("输出 424");
     await expect(latest).toContainText("缓存率 85.8%");
+    const composition = latest.locator(".plugin-usage .usage-stack");
+    await expect(composition.locator(".usage-segment")).toHaveCount(3);
+    expect(
+      await composition
+        .locator(".usage-segment")
+        .evaluateAll((segments) =>
+          segments.map((s) => Number(s.getAttribute("data-tokens"))),
+        ),
+    ).toEqual([18929, 100, 324]);
+    await expect(
+      page.getByRole("button", { name: "回复摘要上下文", exact: true }),
+    ).toContainText("18.9k");
+    await page
+      .getByRole("button", { name: "回复摘要上下文", exact: true })
+      .click();
+    const context = page.getByRole("dialog", {
+      name: "回复摘要 · 上下文",
+      exact: true,
+    });
+    await expect(context).toContainText("缓存率 85.8%");
+    await context
+      .getByRole("button", { name: "选择插件上下文消息", exact: true })
+      .click();
+    await context
+      .getByRole("list", { name: "上下文消息类型", exact: true })
+      .getByRole("button")
+      .last()
+      .click();
+    await expect(context.locator(".plugin-request-preview")).toHaveText(
+      "summary context snapshot",
+    );
+    await context
+      .getByRole("button", { name: "关闭插件窗口", exact: true })
+      .click();
+    const actions = page.locator(".message-actions");
+    await expect(actions.locator(".usage-stack.compact")).toHaveCount(4);
+    expect(
+      await actions
+        .last()
+        .locator("button[aria-label='删除消息']")
+        .evaluate((e) =>
+          e.nextElementSibling?.classList.contains("usage-stack"),
+        ),
+    ).toBe(true);
+    await page
+      .getByRole("button", { name: "当前聊天设置", exact: true })
+      .click();
+    await page
+      .locator(".panel-content")
+      .getByRole("button", { name: "补齐本分支全部摘要", exact: true })
+      .click();
+    await expect.poll(() => backfilled).toBe(true);
+    await page.getByRole("button", { name: "返回聊天", exact: true }).click();
     await latest
       .getByRole("button", { name: "重新生成摘要", exact: true })
       .click();
@@ -197,10 +269,19 @@ for (const mobile of [false, true])
       .click();
     dialog = page.getByRole("dialog", { name: "确认替换摘要", exact: true });
     await expect(dialog).toBeVisible();
-    await dialog
-      .getByRole("button", { name: "保留原摘要", exact: true })
-      .click();
-    await expect(dialog).toHaveCount(0);
+    const abandoned = state.runs.findLast((r) => r.status === "candidate")!.id;
+    await page.reload();
+    await expect(page.locator(".reply-summary")).toHaveCount(2);
+    await expect(
+      page.getByRole("dialog", { name: "确认替换摘要", exact: true }),
+    ).toHaveCount(0);
+    await expect
+      .poll(() => state.runs.some((r) => r.id === abandoned))
+      .toBe(false);
+    await expect(latest.locator(".summary-text")).toHaveText("待确认的新摘要");
+    await expect(
+      latest.getByRole("button", { name: "查看新摘要", exact: true }),
+    ).toHaveCount(0);
     await page.getByRole("button", { name: "插件", exact: true }).click();
     await page.getByRole("button", { name: "摘要设置", exact: true }).click();
     const settings = page.getByRole("dialog", {

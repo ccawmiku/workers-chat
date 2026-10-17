@@ -1,3 +1,4 @@
+import { responseUsage, hasReportedUsage } from "../shared/completion";
 import type { DirectTask, GenerationStart } from "../shared/direct";
 import {
   type Chat,
@@ -7,7 +8,6 @@ import {
   route,
   contextMessages,
   addMessage,
-  sanitizeUsage,
 } from "../shared/chat";
 import {
   Store,
@@ -342,6 +342,7 @@ export async function runGeneration(
       throw new Error(
         `上游 HTTP ${response.status}：${redactError(await limitedText(response, 8192, controller.signal), key)}`,
       );
+    usage = responseUsage(response.headers, undefined, usage);
     if (config.options.stream) {
       if (!response.body) throw new Error("上游没有返回响应流");
       const reader = response.body.getReader(),
@@ -387,7 +388,8 @@ export async function runGeneration(
         reasoning +=
           choice?.delta?.reasoning_content ?? choice?.delta?.reasoning ?? "";
         progress.publish(content, reasoning);
-        if (event.usage) usage = sanitizeUsage(event.usage);
+        if (hasReportedUsage(event))
+          usage = responseUsage(response.headers, event, usage);
         if (choice?.finish_reason) finished = true;
       };
       try {
@@ -445,7 +447,7 @@ export async function runGeneration(
       if (!message) throw new Error("上游没有返回回答");
       content += message.content ?? "";
       reasoning = message.reasoning_content ?? "";
-      usage = sanitizeUsage(result.usage);
+      usage = responseUsage(response.headers, result, usage);
     }
     complete = true;
   } catch (e) {

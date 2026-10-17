@@ -3,6 +3,7 @@ import * as entrypoint from "./src/server/index.ts" with { type: "cf-worker" };
 import { database } from "./database.config.ts";
 const workerDefinition = defineWorker({
   name: "workers-chat",
+  domains: ["chat.yaemiko.lol"],
   compatibilityDate: "2026-10-15",
   entrypoint,
   assets: {

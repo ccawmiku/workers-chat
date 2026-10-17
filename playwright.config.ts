@@ -28,6 +28,7 @@ export default defineConfig({
         "plugins.spec.ts",
         "plugin-settings.spec.ts",
         "summaries.spec.ts",
+        "appearance.spec.ts",
         "auth-security.spec.ts",
       ],
       use: { browserName: "webkit" },

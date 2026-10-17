@@ -381,6 +381,9 @@ export function requestPreview(
     model: model.modelId,
     messages,
     stream: chat.stream,
+    ...(chat.stream
+      ? { stream_options: { include_usage: true as const } }
+      : {}),
     ...settings.parameters,
     ...modelSettings.parameters,
     ...chat.parameters,
@@ -449,12 +452,19 @@ export function sanitizeUsage(
     "input_tokens",
     "output_tokens",
     "cached_tokens",
+    "reasoning_tokens",
+    "thinking_tokens",
   ]) {
     const n = source[key];
     if (typeof n === "number" && Number.isFinite(n) && n >= 0) out[key] = n;
   }
-  const rate = cacheHitRate(source.cache_hit_rate);
+  const rate = cacheHitRate(
+    source.cache_hit_rate ?? source.cacheHitRate ?? source.cache_hit_ratio,
+  );
   if (rate !== undefined) out.cache_hit_rate = rate;
+  if (typeof source.output_tokens_includes_reasoning === "boolean")
+    out.output_tokens_includes_reasoning =
+      source.output_tokens_includes_reasoning;
   for (const key of [
     "prompt_tokens_details",
     "completion_tokens_details",
@@ -482,4 +492,24 @@ export function sanitizeUsage(
     }
   }
   return Object.keys(out).length ? out : undefined;
+}
+/** Usage often arrives in multiple SSE frames; later partial frames must not erase earlier cache data. */
+export function mergeUsage(previous: unknown, next: unknown) {
+  const a = sanitizeUsage(previous),
+    b = sanitizeUsage(next);
+  if (!a) return b;
+  if (!b) return a;
+  const merged = { ...a, ...b };
+  for (const key of [
+    "prompt_tokens_details",
+    "completion_tokens_details",
+    "input_tokens_details",
+    "output_tokens_details",
+  ])
+    if (a[key] || b[key])
+      merged[key] = {
+        ...((a[key] as object) ?? {}),
+        ...((b[key] as object) ?? {}),
+      };
+  return merged;
 }

@@ -219,7 +219,7 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
   await page.getByRole("button", { name: "账户菜单", exact: true }).click();
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "外观", exact: true }).click();
-  await page.getByLabel("主题", { exact: true }).selectOption("dark");
+  await page.getByRole("button", { name: "深色", exact: true }).click();
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.screenshot({ path: "docs/screenshots/desktop-dark.png" });
   await page
@@ -251,7 +251,7 @@ test("desktop/mobile login, import, branch navigation and cloud draft", async ({
   await page.getByRole("button", { name: "账户菜单", exact: true }).click();
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "外观", exact: true }).click();
-  await page.getByLabel("主题", { exact: true }).selectOption("light");
+  await page.getByRole("button", { name: "浅色", exact: true }).click();
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.screenshot({ path: "docs/screenshots/desktop-light.png" });
   await page.setViewportSize({ width: 390, height: 844 });

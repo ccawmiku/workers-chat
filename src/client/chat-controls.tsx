@@ -1,3 +1,4 @@
+import { UsageBar } from "./usage-bar";
 import React, { useState, useRef } from "react";
 import {
   type Chat,
@@ -364,9 +365,11 @@ function object(value: unknown): Record<string, unknown> {
 export function MessageUsage({
   message,
   historical = false,
+  showBar = false,
 }: {
   message: Message;
   historical?: boolean;
+  showBar?: boolean;
 }) {
   const usage = message.usage ?? {},
     outputDetails = object(
@@ -379,7 +382,12 @@ export function MessageUsage({
     ["总计", count(usage.total_tokens)],
   ];
   return (
-    <div className={"message-meta " + (historical ? "historical" : "")}>
+    <div
+      className={
+        "message-meta " +
+        (historical && !cacheHitRate(usage.cache_hit_rate) ? "historical" : "")
+      }
+    >
       <span>{message.model?.modelId ?? String(message.raw?.model ?? "")}</span>
       {message.elapsedMs !== undefined && (
         <span> · {(message.elapsedMs / 1000).toFixed(1)} 秒</span>
@@ -393,6 +401,7 @@ export function MessageUsage({
           </span>
         ))}
       {rows.some((r) => r[1] !== undefined) && <span> Token</span>}
+      {showBar && <UsageBar usage={usage} />}
       {cacheHitRate(usage.cache_hit_rate) !== undefined && (
         <span> · 缓存率 {cacheHitRate(usage.cache_hit_rate)}</span>
       )}

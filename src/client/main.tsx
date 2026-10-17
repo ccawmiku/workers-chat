@@ -1,4 +1,11 @@
 import {
+  AppearanceSettings,
+  readAppearance,
+  applyAppearance,
+  type Appearance,
+} from "./appearance";
+import { MessageTokenBar } from "./usage-bar";
+import {
   ReplySummaryCard,
   SummaryTools,
   ConfirmPostSend,
@@ -151,6 +158,49 @@ function App() {
     readLoginNotice,
   );
   const [summaryState, setSummaryState] = useState<SummaryState>({ runs: [] });
+  // Replacement candidates belong to this page visit. Accepted summaries remain durable.
+  const ownedSummaryCandidates = useRef(new Set<string>()),
+    pendingSummaryReviews = useRef(new Set<string>()),
+    discardedSummaryCandidates = useRef(new Set<string>());
+  const adoptSummaries = useCallback(
+    (chatId: string, incoming: SummaryState) => {
+      for (const r of incoming.runs)
+        if (
+          r.status === "candidate" &&
+          pendingSummaryReviews.current.has(r.messageId)
+        )
+          ownedSummaryCandidates.current.add(r.id);
+      const abandoned = incoming.runs.filter(
+        (r) =>
+          r.status === "candidate" && !ownedSummaryCandidates.current.has(r.id),
+      );
+      setSummaryState(
+        abandoned.length
+          ? {
+              runs: incoming.runs.filter(
+                (r) =>
+                  r.status !== "candidate" ||
+                  ownedSummaryCandidates.current.has(r.id),
+              ),
+            }
+          : incoming,
+      );
+      const ids = abandoned
+        .map((r) => r.id)
+        .filter((id) => !discardedSummaryCandidates.current.has(id));
+      if (ids.length) {
+        for (const id of ids) discardedSummaryCandidates.current.add(id);
+        for (let start = 0; start < ids.length; start += 256)
+          void api(`/chats/${chatId}/summaries`, "POST", {
+            action: "discard-candidates",
+            runIds: ids.slice(start, start + 256),
+          }).catch(() => {
+            /* Hidden locally; a new page visit will retry cleanup. */
+          });
+      }
+    },
+    [],
+  );
   const [postJobs, setPostJobs] = useState<PostJobView[]>([]);
   const [confirmPostSend, setConfirmPostSend] = useState(false);
   const [pluginEntry, setPluginEntry] = useState<HTMLDivElement | null>(null);
@@ -344,7 +394,7 @@ function App() {
     );
     pluginPreviewState.current = result.pluginState ?? emptyPluginState();
     setPluginJob(result.pluginJob ?? null);
-    setSummaryState(result.summaryState ?? { runs: [] });
+    adoptSummaries(id, result.summaryState ?? { runs: [] });
     setPostJobs(result.postJobs ?? []);
     if (result.generation) acceptGeneration(result.generation);
     if (
@@ -412,7 +462,7 @@ function App() {
       );
       pluginPreviewState.current = result.pluginState ?? emptyPluginState();
       setPluginJob(result.pluginJob ?? null);
-      setSummaryState(result.summaryState ?? { runs: [] });
+      adoptSummaries(id, result.summaryState ?? { runs: [] });
       setPostJobs(result.postJobs ?? []);
       setDebugPlugins(false);
       if (result.generation) acceptGeneration(result.generation);
@@ -572,13 +622,7 @@ function App() {
   useEffect(() => {
     localStorage.setItem("appearance", JSON.stringify(appearance));
     const media = matchMedia("(prefers-color-scheme: dark)");
-    const apply = () =>
-      (document.documentElement.dataset.theme =
-        appearance.theme === "system"
-          ? media.matches
-            ? "dark"
-            : "light"
-          : appearance.theme);
+    const apply = () => applyAppearance(appearance, media.matches);
     apply();
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
@@ -680,7 +724,22 @@ function App() {
   ) {
     const id = idRef.current;
     if (!id) return;
-    await api("/chats/" + id + "/summaries", "POST", { action, ...body });
+    const reviewMessage =
+      action === "regenerate" && typeof body.messageId === "string"
+        ? body.messageId
+        : undefined;
+    if (reviewMessage) pendingSummaryReviews.current.add(reviewMessage);
+    try {
+      const result = await api<{ jobId?: string }>(
+        "/chats/" + id + "/summaries",
+        "POST",
+        { action, ...body },
+      );
+      if (reviewMessage && result.jobId)
+        ownedSummaryCandidates.current.add(result.jobId);
+    } finally {
+      if (reviewMessage) pendingSummaryReviews.current.delete(reviewMessage);
+    }
     await refresh(id, true);
   }
   useEffect(() => {
@@ -1897,6 +1956,7 @@ function App() {
                           >
                             <Trash2 size={15} />
                           </IconButton>
+                          <MessageTokenBar message={m} />
                           {siblings.length > 1 && (
                             <div className="versions">
                               <IconButton
@@ -2380,6 +2440,13 @@ function App() {
                   }
                 />
               </label>
+              <h3>回复摘要</h3>
+              <SummaryTools
+                chat={chat}
+                settings={settings}
+                providers={providers}
+                command={summaryCommand}
+              />
               <h3>生成参数</h3>
               {(["temperature", "top_p", "top_k"] as const).map((key) => (
                 <ParameterControl
@@ -2508,6 +2575,7 @@ function App() {
             </div>
             {modal === "settings" ? (
               <SettingsPanel
+                close={() => setModal("")}
                 initialTab={settingsTab}
                 providers={providers}
                 settings={settings}
@@ -2918,68 +2986,8 @@ function Login({
     </div>
   );
 }
-type Appearance = {
-  densityVersion: number;
-  theme: string;
-  font: number;
-  width: number;
-  line: number;
-  collapse: boolean;
-  enter: boolean;
-};
-function readAppearance(): Appearance {
-  const defaults: Appearance = {
-    densityVersion: 2,
-    theme: "system",
-    font: 16,
-    width: 800,
-    line: 1.6,
-    collapse: true,
-    enter: true,
-  };
-  try {
-    const raw: unknown = JSON.parse(
-      localStorage.getItem("appearance") ?? "null",
-    );
-    if (!raw || typeof raw !== "object") return defaults;
-    const value = raw as Record<string, unknown>;
-    const legacyDefaultLine =
-      value.densityVersion !== 2 && (value.line === 1.8 || value.line === 1.75);
-    return {
-      densityVersion: 2,
-      theme:
-        typeof value.theme === "string" &&
-        ["system", "dark", "light"].includes(value.theme)
-          ? value.theme
-          : defaults.theme,
-      font:
-        typeof value.font === "number" && value.font >= 13 && value.font <= 24
-          ? value.font
-          : defaults.font,
-      width:
-        typeof value.width === "number" &&
-        value.width >= 600 &&
-        value.width <= 1200
-          ? value.width
-          : defaults.width,
-      line: legacyDefaultLine
-        ? defaults.line
-        : typeof value.line === "number" &&
-            value.line >= 1.3 &&
-            value.line <= 2.4
-          ? value.line
-          : defaults.line,
-      collapse:
-        typeof value.collapse === "boolean"
-          ? value.collapse
-          : defaults.collapse,
-      enter: typeof value.enter === "boolean" ? value.enter : defaults.enter,
-    };
-  } catch {
-    return defaults;
-  }
-}
 function SettingsPanel({
+  close,
   initialTab,
   providers,
   settings,
@@ -2992,6 +3000,7 @@ function SettingsPanel({
   onExportTrash,
   onImportChats,
 }: {
+  close: () => void;
   initialTab: string;
   providers: ProviderView[];
   settings: Settings;
@@ -3005,6 +3014,7 @@ function SettingsPanel({
   onImportChats: () => void;
 }) {
   const connection = useDeviceConnection();
+  const [navSearch, setNavSearch] = useState("");
   const [tab, setTab] = useState(initialTab),
     [filter, setFilter] = useState(""),
     [sessions, setSessions] = useState<
@@ -3032,7 +3042,22 @@ function SettingsPanel({
     );
   return (
     <div className="settings-body">
-      <nav className="du-menu settings-menu">
+      <nav className="du-menu settings-menu" aria-label="设置导航">
+        <button className="du-btn du-btn-ghost settings-return" onClick={close}>
+          <ChevronLeft size={17} />
+          返回应用
+        </button>
+        <label className="du-input du-input-sm settings-search">
+          <Search size={15} />
+          <input
+            className="du-input"
+            aria-label="搜索设置"
+            placeholder="搜索设置"
+            value={navSearch}
+            onChange={(e) => setNavSearch(e.target.value)}
+          />
+        </label>
+        <small className="muted settings-nav-caption">设置</small>
         {(
           [
             ["connection", "连接", <Cable size={17} aria-hidden="true" />],
@@ -3059,18 +3084,22 @@ function SettingsPanel({
             ["security", "账号与设备", <Shield size={17} aria-hidden="true" />],
             ["about", "关于", <Info size={17} aria-hidden="true" />],
           ] as const
-        ).map(([key, title, icon]) => (
-          <button
-            className={
-              "du-btn du-btn-ghost du-btn-sm " + (tab === key ? "selected" : "")
-            }
-            key={key}
-            onClick={() => setTab(key!)}
-          >
-            {icon}
-            {title}
-          </button>
-        ))}
+        )
+          .filter(([, title]) => title.includes(navSearch.trim()))
+          .map(([key, title, icon]) => (
+            <button
+              className={
+                "du-btn du-btn-ghost du-btn-sm " +
+                (tab === key ? "selected" : "")
+              }
+              key={key}
+              aria-current={tab === key ? "page" : undefined}
+              onClick={() => setTab(key!)}
+            >
+              {icon}
+              {title}
+            </button>
+          ))}
       </nav>
       <div className="settings-content">
         {tab === "plugins" && (
@@ -3393,91 +3422,7 @@ function SettingsPanel({
           </>
         )}
         {tab === "appearance" && (
-          <>
-            <h3>外观</h3>
-            <p className="muted">仅保存在此设备。</p>
-            <label>
-              主题
-              <select
-                className="du-select du-select-sm"
-                aria-label="主题"
-                value={appearance.theme}
-                onChange={(e) =>
-                  setAppearance({ ...appearance, theme: e.target.value })
-                }
-              >
-                <option value="system">跟随系统</option>
-                <option value="dark">暗色</option>
-                <option value="light">浅色</option>
-              </select>
-            </label>
-            <label>
-              字号 {appearance.font}px
-              <input
-                className="du-range du-range-primary du-range-sm"
-                type="range"
-                min={13}
-                max={24}
-                value={appearance.font}
-                onChange={(e) =>
-                  setAppearance({ ...appearance, font: Number(e.target.value) })
-                }
-              />
-            </label>
-            <label>
-              内容宽度 {appearance.width}px
-              <input
-                className="du-range du-range-primary du-range-sm"
-                type="range"
-                min={600}
-                max={1200}
-                step={20}
-                value={appearance.width}
-                onChange={(e) =>
-                  setAppearance({
-                    ...appearance,
-                    width: Number(e.target.value),
-                  })
-                }
-              />
-            </label>
-            <label>
-              行间距 {appearance.line}
-              <input
-                className="du-range du-range-primary du-range-sm"
-                type="range"
-                min={1.3}
-                max={2.4}
-                step={0.1}
-                value={appearance.line}
-                onChange={(e) =>
-                  setAppearance({ ...appearance, line: Number(e.target.value) })
-                }
-              />
-            </label>
-            <label className="toggle">
-              折叠超长消息
-              <input
-                className="du-toggle du-toggle-primary du-toggle-sm"
-                type="checkbox"
-                checked={appearance.collapse}
-                onChange={(e) =>
-                  setAppearance({ ...appearance, collapse: e.target.checked })
-                }
-              />
-            </label>
-            <label className="toggle">
-              电脑按 Enter 发送
-              <input
-                className="du-toggle du-toggle-primary du-toggle-sm"
-                type="checkbox"
-                checked={appearance.enter}
-                onChange={(e) =>
-                  setAppearance({ ...appearance, enter: e.target.checked })
-                }
-              />
-            </label>
-          </>
+          <AppearanceSettings value={appearance} onChange={setAppearance} />
         )}
         {tab === "security" && (
           <>

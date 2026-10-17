@@ -1,4 +1,7 @@
-import React, { useEffect, useState } from "react";
+import { UsageBar } from "./usage-bar";
+import { api } from "./api";
+import React, { useEffect, useState, useMemo } from "react";
+import type { PluginRequest } from "../shared/plugins";
 import {
   BookOpenText,
   RotateCcw,
@@ -12,6 +15,9 @@ import {
   type Settings,
   type Provider,
   formatTokenCount,
+  route,
+  estimateTokens,
+  cacheHitRate,
 } from "../shared/chat";
 import {
   type SummaryConfig,
@@ -21,8 +27,9 @@ import {
   summaryConfig,
   summaryFor,
   summarySourceKey,
+  prepareSummary,
 } from "../shared/summaries";
-import { Dialog } from "./plugins-ui";
+import { Dialog, ContextMessagePicker } from "./plugins-ui";
 import { ParameterControl, Loading } from "./controls";
 import { MessageUsage } from "./chat-controls";
 export function SummaryEditor({
@@ -234,6 +241,7 @@ function Usage({ run }: { run: SummaryRun }) {
   return (
     <div className="plugin-usage">
       <MessageUsage
+        showBar
         message={{
           id: run.id,
           parentId: null,
@@ -472,7 +480,8 @@ export function SummaryTools({
   command: SummaryCommand;
 }) {
   const [open, setOpen] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [filling, setFilling] = useState(false);
   return (
     <>
       <div className="summary-tools">
@@ -482,12 +491,17 @@ export function SummaryTools({
         </button>
         <button
           className="du-btn du-btn-sm"
-          onClick={() =>
-            void command("backfill").catch((e) => setError(e.message))
-          }
+          disabled={filling}
+          onClick={() => {
+            setFilling(true);
+            setError("");
+            void command("backfill")
+              .catch((e) => setError(e.message))
+              .finally(() => setFilling(false));
+          }}
         >
-          <BookOpenText size={14} />
-          补齐当前分支摘要
+          {filling ? <Loading small /> : <BookOpenText size={14} />}
+          补齐本分支全部摘要
         </button>
       </div>
       {error && <p role="alert">{error}</p>}
@@ -500,6 +514,157 @@ export function SummaryTools({
           save={async (config) => command("configure", { config })}
           reset={() => command("configure", { config: null })}
         />
+      )}
+    </>
+  );
+}
+export function SummaryContextChip({
+  chat,
+  settings,
+  providers,
+  state,
+}: {
+  chat: Chat;
+  settings: Settings;
+  providers: Provider[];
+  state: SummaryState;
+}) {
+  const [open, setOpen] = useState(false),
+    [selected, setSelected] = useState<number | null>(null),
+    [snapshot, setSnapshot] = useState<PluginRequest | null>(null),
+    [loading, setLoading] = useState(false),
+    [error, setError] = useState("");
+  const message = route(chat).findLast(
+    (m) => m.role === "assistant" && m.status !== "running" && m.content.trim(),
+  );
+  const run = message
+    ? state.runs.findLast(
+        (r) =>
+          r.messageId === message.id &&
+          r.sourceKey === summarySourceKey(chat, message.id),
+      )
+    : undefined;
+  const prepared = useMemo(() => {
+    try {
+      return message
+        ? prepareSummary(chat, message.id, state, settings, providers)
+        : null;
+    } catch {
+      return null;
+    }
+  }, [chat, message?.id, state, settings, providers]);
+  useEffect(() => {
+    setSnapshot(null);
+    setSelected(null);
+    setError("");
+    if (!open || !run) return;
+    let stopped = false;
+    setLoading(true);
+    void api<PluginRequest | null>(`/chats/${chat.id}/summaries`, "POST", {
+      action: "request",
+      runId: run.id,
+    })
+      .then((v) => {
+        if (!stopped) setSnapshot(v?.messages ? v : null);
+      })
+      .catch((e) => {
+        if (!stopped) setError(e.message);
+      })
+      .finally(() => {
+        if (!stopped) setLoading(false);
+      });
+    return () => {
+      stopped = true;
+    };
+  }, [open, run?.id, chat.id]);
+  const request = snapshot ?? prepared?.request,
+    messages = request?.messages ?? [],
+    tokens =
+      run?.inputTokens ??
+      messages.reduce((n, m) => n + estimateTokens(m.content ?? ""), 0),
+    ref = run?.model ?? prepared?.modelRef,
+    capacity =
+      providers
+        .find((p) => p.id === ref?.providerId)
+        ?.models.find((m) => m.id === ref?.modelId)?.capacity ?? 1048576;
+  return (
+    <>
+      <button
+        className="du-btn du-btn-ghost du-btn-sm plugin-chip summary-context-chip"
+        aria-label="回复摘要上下文"
+        onClick={() => setOpen(true)}
+      >
+        <span>
+          <span className="plugin-chip-name">回复摘要</span>
+          <b>{message ? formatTokenCount(tokens) : "待回复"}</b>
+        </span>
+        <progress
+          className="du-progress du-progress-primary"
+          max={capacity}
+          value={Math.min(tokens, capacity)}
+        />
+        <UsageBar
+          usage={run?.usage}
+          fallback={
+            tokens
+              ? { input: tokens, thinking: 0, output: 0, total: tokens }
+              : undefined
+          }
+        />
+        {cacheHitRate(run?.usage?.cache_hit_rate) && (
+          <small>缓存 {cacheHitRate(run?.usage?.cache_hit_rate)}</small>
+        )}
+      </button>
+      {open && (
+        <Dialog title="回复摘要 · 上下文" close={() => setOpen(false)} wide>
+          <p className="muted">
+            {snapshot
+              ? "本次请求快照"
+              : run
+                ? "请求快照不可用时显示当前组装内容"
+                : "按当前分支组装的请求内容"}
+          </p>
+          <div className="du-stats plugin-context-stats">
+            <div className="du-stat">
+              <div className="du-stat-title">输入 / 模型容量</div>
+              <div className="du-stat-value">
+                {formatTokenCount(tokens)} / {formatTokenCount(capacity)}
+              </div>
+              <progress
+                className="du-progress du-progress-primary"
+                value={Math.min(tokens, capacity)}
+                max={capacity}
+              />
+              <UsageBar
+                usage={run?.usage}
+                fallback={
+                  tokens
+                    ? { input: tokens, thinking: 0, output: 0, total: tokens }
+                    : undefined
+                }
+              />
+            </div>
+          </div>
+          {run && <Usage run={run} />}
+          <p className="muted">
+            历史要求摘录 + 历史摘要 → 上一轮原文与摘要范例 →
+            本轮完整问答。首轮不添加范例。
+          </p>
+          {loading && <Loading small />}
+          {error && <p role="alert">{error}</p>}
+          <ContextMessagePicker
+            messages={messages}
+            selected={selected}
+            select={setSelected}
+            disabled={!messages.length || loading}
+          />
+          {selected !== null && messages[selected] && (
+            <pre className="plugin-request-preview">
+              {messages[selected]!.content}
+            </pre>
+          )}
+          {!message && <p className="muted">完整回复结束后生成摘要。</p>}
+        </Dialog>
       )}
     </>
   );

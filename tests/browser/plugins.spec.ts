@@ -420,6 +420,15 @@ for (const mobile of [false, true])
     await comparison
       .getByRole("radio", { name: "候选 1", exact: true })
       .check();
+    const choiceGeometry = await comparison.locator(".rewrite-candidate").first().evaluate(el => {
+      const radio=el.querySelector("input")!,text=el.querySelector("span")!;
+      const r=radio.getBoundingClientRect(),t=text.getBoundingClientRect();
+      return { horizontal:r.right<=t.left, aligned:Math.abs(r.top-t.top)<5, round:parseFloat(getComputedStyle(radio).borderRadius)>=r.width/2 };
+    });
+    expect(choiceGeometry.horizontal).toBe(true);
+    expect(choiceGeometry.aligned).toBe(true);
+    expect(choiceGeometry.round).toBe(true);
+    await page.screenshot({path:`test-results/rewrite-choice-${mobile?"phone":"desktop"}.png`});
     await expect(page.getByLabel("新用户请求", { exact: true })).toHaveValue(
       "请保留旧草稿",
     );

@@ -78,7 +78,7 @@ select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-input:not(.du-input):not(.du-toggle):not(.du-checkbox):not(.du-range),
+input:not(.du-input):not(.du-toggle):not(.du-checkbox):not(.du-radio):not(.du-range),
 textarea:not(.du-textarea),
 select:not(.du-select) {
   background: var(--panel);
@@ -3057,7 +3057,7 @@ main {
   margin-top: 16px;
 }
 .rewrite-compare textarea {
-  min-height: 40dvh;
+  min-height: clamp(96px, 18dvh, 160px);
 }
 .plugin-turn-cards {
   margin-top: 12px;
@@ -3217,7 +3217,7 @@ main {
     font-size: 11px;
   }
   .rewrite-compare textarea {
-    min-height: 25dvh;
+    min-height: 96px;
   }
   .plugin-picker-row > span {
     font-size: 13px;
@@ -3230,13 +3230,17 @@ main {
 .rewrite-candidates {
   gap: 8px;
   margin-block: 12px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
 }
-.rewrite-candidate {
+.plugin-dialog label.rewrite-candidate {
   display: flex;
   flex-direction: row;
   align-items: flex-start;
   gap: 12px;
   padding: 12px;
+  margin: 0;
   border: 1px solid var(--line-color);
   cursor: pointer;
 }

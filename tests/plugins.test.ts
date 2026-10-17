@@ -225,33 +225,74 @@ describe("plugin context assembly", () => {
     }
     expect(Object.values(chat.messages)).toHaveLength(2);
   });
-  it("validates three distinct rewrites without the removed hard length ceiling and reads saved legacy runs", () => {
-    const p = pluginDefaults("rewrite");
-    const rewrites = ["请继续。", "接着写下去。", "继续后面的内容。"];
+  it("matches three named rewrite fields and preserves saved and in-flight legacy outputs", () => {
+    const p = pluginDefaults("rewrite"),
+      value = {
+        prompt1: "请继续。",
+        prompt2: "接着写下去。",
+        prompt3: "继续后面的内容。",
+      };
+    expect(
+      JSON.parse(normalizePluginOutput(p, JSON.stringify(value), "继续")),
+    ).toEqual(value);
+    expect(
+      extractRewriteCandidates(
+        JSON.stringify({
+          prompt3: value.prompt3,
+          prompt1: value.prompt1,
+          prompt2: value.prompt2,
+        }),
+      ),
+    ).toEqual(Object.values(value));
+    const array = { rewrites: Object.values(value) };
+    expect(extractRewriteCandidates(JSON.stringify(array))).toEqual(
+      Object.values(value),
+    );
     expect(
       JSON.parse(
-        normalizePluginOutput(p, JSON.stringify({ rewrites }), "继续"),
+        normalizePluginOutput(
+          { ...p, rewriteFormat: undefined },
+          JSON.stringify(array),
+        ),
       ),
-    ).toEqual({ rewrites });
-    expect(extractRewriteCandidates(JSON.stringify({ rewrites }))).toEqual(
-      rewrites,
-    );
+    ).toEqual(array);
     expect(extractRewriteCandidates('{"prompt":"旧结果"}')).toEqual(["旧结果"]);
     expect(extractRewritePrompt('{"prompt":"旧结果"}')).toBe("旧结果");
-    expect(JSON.parse(normalizePluginOutput({ ...p, initialUser: undefined }, '{"prompt":"旧结果"}'))).toEqual({ prompt: "旧结果" });
-    for (const value of [
-      { prompt: "继续" },
-      { rewrites: ["A", "A", "B"] },
-      { rewrites: ["A", " B ", "B"] },
-      { rewrites: ["A", "B", " "] },
-      { rewrites: ["A", "B"] },
+    expect(
+      JSON.parse(
+        normalizePluginOutput(
+          { ...p, rewriteFormat: undefined, initialUser: undefined },
+          '{"prompt":"旧结果"}',
+        ),
+      ),
+    ).toEqual({ prompt: "旧结果" });
+    for (const bad of [
+      array,
+      { prompt1: "A", prompt2: "B" },
+      { ...value, prompt3: " " },
+      { ...value, prompt2: value.prompt1 },
+      { ...value, prompt2: ["B"] },
+      { ...value, extra: true },
     ])
-      expect(() => normalizePluginOutput(p, JSON.stringify(value))).toThrow();
+      expect(() => normalizePluginOutput(p, JSON.stringify(bad))).toThrow();
   });
 
   it("defaults all efforts to inherit and migrates candidate labels and disabled waterlines", () => {
     for (const kind of ["analysis", "clarify", "suggest", "rewrite"] as const)
-      expect(pluginDefaults(kind).effort).toBe("inherit");
+      expect(pluginDefaults(kind)).toMatchObject({
+        effort: "inherit",
+        highWater: 0,
+        lowWater: 0,
+      });
+    for (const kind of ["analysis", "clarify"] as const)
+      expect(
+        upgradeLegacyPlugin({
+          ...pluginDefaults(kind),
+          contextMode: "rounds",
+          highWater: 500000,
+          lowWater: 200000,
+        }),
+      ).toMatchObject({ contextMode: "sync", highWater: 0, lowWater: 0 });
     expect(newChat().effort).toBe("inherit");
     const old = {
       ...pluginDefaults("rewrite"),
@@ -336,7 +377,7 @@ describe("plugin context assembly", () => {
     expect(actual.request.temperature).toBe(0.4);
     expect(actual.request).not.toHaveProperty("reasoning_effort");
   });
-  it("selects complete recent rounds and keeps the paired old prompt after config edits", () => {
+  it("ignores old round and reference limits, preserving full history and paired prompts", () => {
     const { chat, settings, state } = fixture();
     for (let i = 0; i < 4; i++) {
       const u = addMessage(chat, "user", "U" + i);
@@ -349,11 +390,17 @@ describe("plugin context assembly", () => {
     p.prompt = "NEW {{USER_INPUT}}";
     p.contextMode = "rounds";
     p.historyRounds = 2;
+    chat.rounds = 1;
+    p.referenceCount = 1;
     p.example = '{"v":"example"}';
     const result = preparePlugin(chat, p, settings, [provider], state, "next")
       .request.messages;
     expect(result.slice(0, -1).map((m) => m.content)).toEqual([
       "Stable system",
+      "U0",
+      "A0",
+      "U1",
+      "A1",
       "U2",
       "A2",
       "U3",
@@ -361,11 +408,28 @@ describe("plugin context assembly", () => {
     ]);
     const suffix = result.at(-1)?.content;
     const reference = JSON.parse(
-      suffix!.split("历史完整配对（仅作参考）：\n")[1]!,
+      suffix!.split("历史完整配对（仅作参考）：\n")[1]!.split("\n")[3]!,
     );
     expect(reference.prompt).toBe(state.runs[3]!.plugin.prompt);
     expect(suffix).toContain("example");
-    expect(suffix).not.toContain('"v":2');
+    expect(
+      suffix!
+        .split("历史完整配对（仅作参考）：\n")[1]!
+        .split("\n")
+        .map((line) => JSON.parse(JSON.parse(line).result).v),
+    ).toEqual([0, 1, 2, 3]);
+  });
+  it("sets streaming independently for analysis and clarification, defaulting legacy definitions to on", () => {
+    const { chat, settings, state } = fixture();
+    for (const kind of ["analysis", "clarify"] as const) {
+      for (const stream of [true, false, undefined]) {
+        const p = { ...pluginDefaults(kind), stream };
+        expect(
+          preparePlugin(chat, p, settings, [provider], state, "next").request
+            .stream,
+        ).toBe(stream !== false);
+      }
+    }
   });
   it("uses no first-turn reference when no example is supplied", () => {
     const { chat, settings, state } = fixture();
@@ -382,7 +446,7 @@ describe("plugin context assembly", () => {
       "历史完整参考",
     );
   });
-  it("trims complete question-answer groups and never leaks another branch or plugin", () => {
+  it("preserves all question-answer groups despite legacy watermarks and cutoffs, without branch leakage", () => {
     const { chat, settings, state } = fixture();
     for (let i = 0; i < 8; i++) {
       const u = addMessage(chat, "user", "U" + i);
@@ -408,17 +472,46 @@ describe("plugin context assembly", () => {
         "PRIVATE",
       ),
     );
+    state.runs[7]!.metrics.cutoff = "r5";
+    chat.rounds = 1;
     const p = pluginDefaults("clarify");
+    p.contextMode = "rounds";
+    p.historyRounds = 1;
     p.highWater = 1000;
     p.lowWater = 500;
     const result = preparePlugin(chat, p, settings, [provider], state, "next");
-    expect(result.metrics.trimmed).toBeGreaterThan(0);
-    expect(result.metrics.archive).toBeLessThanOrEqual(500);
+    expect(result.metrics.trimmed).toBe(0);
+    expect(result.metrics.highWater).toBe(0);
+    expect(result.metrics.archive).toBe(result.metrics.originalArchive);
+    expect(result.request.messages[1]?.content).toBe("U0");
     const suffix = result.request.messages.at(-1)?.content ?? "";
     expect(suffix).not.toContain("PRIVATE");
     expect(suffix).toContain("ANSWER7");
-    expect(suffix).not.toContain("ANSWER0");
+    expect(suffix).toContain("ANSWER0");
   });
+  it("honors an explicit reference reset without cutting the chat history", () => {
+    const { chat, settings, state } = fixture();
+    const u = addMessage(chat, "user", "U0");
+    addMessage(chat, "assistant", "A0");
+    const old = run(u.id, "clarify", "r0", "U0", "old question", "old answer");
+    old.referenceReset = true;
+    state.runs.push(old);
+    const result = preparePlugin(
+      chat,
+      pluginDefaults("clarify"),
+      settings,
+      [provider],
+      state,
+      "next",
+    );
+    expect(result.request.messages.map((m) => m.content)).toContain("U0");
+    expect(result.request.messages.map((m) => m.content)).toContain("A0");
+    expect(result.request.messages.at(-1)?.content).not.toContain(
+      "old question",
+    );
+    expect(result.metrics.archive).toBe(0);
+  });
+
   it("swaps full UA history for both candidates, leaves main system out, and appends the task to the latest mapped user", () => {
     const { chat, settings, state } = fixture();
     const long = "🙂".repeat(10000);
@@ -512,7 +605,7 @@ describe("plugin context assembly", () => {
     expect(result.request.messages).toHaveLength(1);
     expect(result.request.messages[0]?.content).toContain(draft);
     expect(result.request.messages[0]?.content).toMatch(/^好的\n\n/);
-    expect(result.request.messages[0]?.content).toContain('"rewrites"');
+    expect(result.request.messages[0]?.content).toContain('"prompt1"');
   });
 
   it("injects native tool pairs or user suffix without mutating stored messages", () => {

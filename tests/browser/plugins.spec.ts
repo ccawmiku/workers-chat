@@ -23,50 +23,58 @@ for (const mobile of [false, true])
     await page.getByLabel("访问密码", { exact: true }).fill(password);
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.locator(".new-chat").waitFor({ state: "attached" });
-    const id = await page.evaluate(async (plugins) => {
-      const providerId = crypto.randomUUID();
-      const api = async (path: string, method = "GET", body?: unknown) => {
-        const r = await fetch("/api" + path, {
-          method,
-          headers: { "Content-Type": "application/json" },
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        });
-        if (!r.ok) throw Error("fixture " + path + " " + r.status);
-        return r.json() as Promise<any>;
-      };
-      await api("/settings/import", "POST", {
-        mode: "replace",
-        data: {
-          format: "workers-chat.settings",
-          version: 1,
-          settings: {
-            defaultModel: { providerId, modelId: "plugin-model" },
-            plugins,
-          },
-          providers: [
-            {
-              id: providerId,
-              name: "插件合成接口",
-              baseUrl: "https://plugin-fixture.invalid/v1",
-              prefix: "FX/",
-              models: [
-                {
-                  id: "plugin-model",
-                  enabled: true,
-                  capacity: 1048576,
-                  parameters: {},
-                },
-              ],
+    const id = await page.evaluate(
+      async (plugins) => {
+        const providerId = crypto.randomUUID();
+        const api = async (path: string, method = "GET", body?: unknown) => {
+          const r = await fetch("/api" + path, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          });
+          if (!r.ok) throw Error("fixture " + path + " " + r.status);
+          return r.json() as Promise<any>;
+        };
+        await api("/settings/import", "POST", {
+          mode: "replace",
+          data: {
+            format: "workers-chat.settings",
+            version: 1,
+            settings: {
+              defaultModel: { providerId, modelId: "plugin-model" },
+              plugins,
             },
-          ],
-        },
-      });
-      const chat = await api("/chats", "POST", {});
-      await api("/chats/" + chat.id, "PATCH", { title: "四插件实际界面测试" });
-      localStorage.setItem("lastChat", chat.id);
-      localStorage.setItem("device-direct", "true");
-      return chat.id;
-    }, defaultPlugins());
+            providers: [
+              {
+                id: providerId,
+                name: "插件合成接口",
+                baseUrl: "https://plugin-fixture.invalid/v1",
+                prefix: "FX/",
+                models: [
+                  {
+                    id: "plugin-model",
+                    enabled: true,
+                    capacity: 1048576,
+                    parameters: {},
+                  },
+                ],
+              },
+            ],
+          },
+        });
+        const chat = await api("/chats", "POST", {});
+        await api("/chats/" + chat.id, "PATCH", {
+          title: "四插件实际界面测试",
+        });
+        localStorage.setItem("lastChat", chat.id);
+        localStorage.setItem("device-direct", "true");
+        return chat.id;
+      },
+      defaultPlugins().map((p) => ({
+        ...p,
+        stream: mobile || !["analysis", "clarify"].includes(p.kind),
+      })),
+    );
     await page.addInitScript(() => {
       const original = window.fetch.bind(window),
         ledger: { kind: string; messages: unknown[] }[] = [];
@@ -96,19 +104,26 @@ for (const mobile of [false, true])
           content = JSON.stringify({
             suggestions: ["再给我一个例子", "换成更简短的版本", "加入新的场景"],
           });
-        } else if (last.includes('"rewrites"')) {
+        } else if (last.includes('"prompt1"')) {
           kind = "rewrite";
           content = JSON.stringify({
-            rewrites: [
-              ledger.some((l) => l.kind === "rewrite")
-                ? "保留旧草稿"
-                : "请保留旧草稿",
-              "我原来的草稿保留",
-              "旧草稿不要动",
-            ],
+            prompt1: ledger.some((l) => l.kind === "rewrite")
+              ? "保留旧草稿"
+              : "请保留旧草稿",
+            prompt2: "我原来的草稿保留",
+            prompt3: "旧草稿不要动",
           });
         }
         ledger.push({ kind, messages });
+        if (!body.stream)
+          return Response.json({
+            choices: [{ message: { content }, finish_reason: "stop" }],
+            usage: {
+              input_tokens: 1500,
+              output_tokens: 424,
+              cache_hit_rate: "80.0%",
+            },
+          });
         return new Response(
           new ReadableStream({
             start(c) {
@@ -296,8 +311,13 @@ for (const mobile of [false, true])
     await page.getByLabel("消息", { exact: true }).fill("**轻松幽默**");
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "通过并继续", exact: true }),
+      page.getByRole("button", { name: "确认并继续", exact: true }),
     ).toBeVisible();
+    await expect(
+      page
+        .getByRole("button", { name: "编辑 JSON", exact: true })
+        .evaluate((el) => el.nextElementSibling?.textContent),
+    ).resolves.toBe("确认并继续");
     await expect(page.locator(".composer.plugin-reply")).toHaveCount(0);
     await expect(page.locator(".message.assistant")).toHaveCount(0);
     await expect(
@@ -305,17 +325,17 @@ for (const mobile of [false, true])
     ).toContainText("缓存率 80.0%");
     await page.reload();
     await expect(
-      page.getByRole("button", { name: "通过并继续", exact: true }),
+      page.getByRole("button", { name: "确认并继续", exact: true }),
     ).toBeVisible();
     expect(await page.evaluate(() => (window as any).pluginLedger)).toEqual([]);
     await page
       .getByRole("button", { name: "重新生成 JSON", exact: true })
       .click();
     await expect(
-      page.getByRole("button", { name: "通过并继续", exact: true }),
+      page.getByRole("button", { name: "确认并继续", exact: true }),
     ).toBeVisible();
     await expect(page.locator(".message.assistant")).toHaveCount(0);
-    await page.getByRole("button", { name: "通过并继续", exact: true }).click();
+    await page.getByRole("button", { name: "确认并继续", exact: true }).click();
     await expect(page.locator(".message.assistant .markdown")).toContainText(
       "主回答已结合",
     );
@@ -414,51 +434,85 @@ for (const mobile of [false, true])
       "缓存率 22%",
     );
     await expect(comparison.getByRole("radio")).toHaveCount(3);
+    await expect(comparison.locator(".rewrite-candidate-text")).toHaveCount(3);
+    const columns = await comparison
+      .locator(".rewrite-selection")
+      .evaluate((el) => {
+        const original = el
+            .querySelector(".rewrite-original")!
+            .getBoundingClientRect(),
+          candidates = el
+            .querySelector(".rewrite-candidates")!
+            .getBoundingClientRect();
+        return {
+          side: original.right <= candidates.left,
+          stack: original.bottom <= candidates.top,
+        };
+      });
+    expect(mobile ? columns.stack : columns.side).toBe(true);
     await expect(
       comparison.getByRole("button", { name: "确认替换", exact: true }),
     ).toBeDisabled();
     await comparison
       .getByRole("radio", { name: "候选 1", exact: true })
       .check();
-    const choiceGeometry = await comparison.locator(".rewrite-candidate").first().evaluate(el => {
-      const radio=el.querySelector("input")!,text=el.querySelector("span")!;
-      const r=radio.getBoundingClientRect(),t=text.getBoundingClientRect();
-      return { horizontal:r.right<=t.left, aligned:Math.abs(r.top-t.top)<5, round:parseFloat(getComputedStyle(radio).borderRadius)>=r.width/2 };
-    });
+    const choiceGeometry = await comparison
+      .locator(".rewrite-candidate")
+      .first()
+      .evaluate((el) => {
+        const radio = el.querySelector("input")!,
+          text = el.querySelector(".rewrite-candidate-heading span")!;
+        const r = radio.getBoundingClientRect(),
+          t = text.getBoundingClientRect();
+        return {
+          horizontal: r.right <= t.left,
+          aligned: Math.abs(r.top - t.top) < 5,
+          round:
+            parseFloat(getComputedStyle(radio).borderRadius) >= r.width / 2,
+        };
+      });
     expect(choiceGeometry.horizontal).toBe(true);
     expect(choiceGeometry.aligned).toBe(true);
     expect(choiceGeometry.round).toBe(true);
-    await page.screenshot({path:`test-results/rewrite-choice-${mobile?"phone":"desktop"}.png`});
-    await expect(page.getByLabel("新用户请求", { exact: true })).toHaveValue(
-      "请保留旧草稿",
-    );
+    await page.screenshot({
+      path: `test-results/rewrite-choice-${mobile ? "phone" : "desktop"}.png`,
+    });
+    await expect(
+      comparison.locator(
+        ".rewrite-candidate:has(input:checked) .rewrite-candidate-text",
+      ),
+    ).toHaveText("请保留旧草稿");
     const regenerate = comparison.getByRole("button", {
       name: "重新生成结果",
       exact: true,
     });
     await regenerate.click();
     await expect(regenerate.locator(".du-loading")).toBeVisible();
-    await expect(
-      comparison.getByLabel("新用户请求", { exact: true }),
-    ).toHaveValue("");
+    await expect(comparison.getByRole("radio", { checked: true })).toHaveCount(
+      0,
+    );
     await expect(
       comparison.getByRole("button", { name: "确认替换", exact: true }),
     ).toBeDisabled();
     await comparison
       .getByRole("radio", { name: "候选 1", exact: true })
       .check();
-    await expect(page.getByLabel("新用户请求", { exact: true })).toHaveValue(
-      "保留旧草稿",
-    );
+    await expect(
+      comparison.locator(
+        ".rewrite-candidate:has(input:checked) .rewrite-candidate-text",
+      ),
+    ).toHaveText("保留旧草稿");
     await comparison
       .getByRole("radio", { name: "候选 2", exact: true })
       .check();
     await expect(comparison.getByRole("radio", { checked: true })).toHaveCount(
       1,
     );
-    await expect(page.getByLabel("新用户请求", { exact: true })).toHaveValue(
-      "我原来的草稿保留",
-    );
+    await expect(
+      comparison.locator(
+        ".rewrite-candidate:has(input:checked) .rewrite-candidate-text",
+      ),
+    ).toHaveText("我原来的草稿保留");
     await page.getByRole("button", { name: "确认替换", exact: true }).click();
     await expect(page.getByLabel("消息", { exact: true })).toHaveValue(
       "我原来的草稿保留",
@@ -494,8 +548,10 @@ for (const mobile of [false, true])
       .getByRole("radio", { name: "候选 1", exact: true })
       .check();
     await expect(
-      comparison.getByLabel("新用户请求", { exact: true }),
-    ).toHaveValue("保留旧草稿");
+      comparison.locator(
+        ".rewrite-candidate:has(input:checked) .rewrite-candidate-text",
+      ),
+    ).toHaveText("保留旧草稿");
     const editedCall = await page.evaluate(() =>
       (window as any).pluginLedger.at(-1),
     );

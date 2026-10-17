@@ -138,36 +138,17 @@ export function PluginEditor({
     [saving, setSaving] = useState(false);
   const update = (patch: Partial<PluginDefinition>) =>
     setP((old) => ({ ...old, ...patch }));
-  const number = (
-    key:
-      | "historyRounds"
-      | "referenceCount"
-      | "userHistoryCount"
-      | "highWater"
-      | "lowWater"
-      | "suggestions",
-    label: string,
-    min = 0,
-  ) => (
+  const number = (key: "suggestions", label: string, min = 0) => (
     <label>
       {label}
       <input
         className="du-input du-input-sm"
         aria-label={label}
         type="number"
-        min={key === "highWater" || key === "lowWater" ? min / 1000 : min}
-        value={
-          key === "highWater" || key === "lowWater" ? p[key] / 1000 : p[key]
-        }
-        step={key === "highWater" || key === "lowWater" ? 0.001 : 1}
-        onChange={(e) =>
-          update({
-            [key]:
-              key === "highWater" || key === "lowWater"
-                ? Math.round(Number(e.target.value) * 1000)
-                : Number(e.target.value),
-          })
-        }
+        min={min}
+        value={p[key]}
+        step={1}
+        onChange={(e) => update({ [key]: Number(e.target.value) })}
       />
     </label>
   );
@@ -315,26 +296,20 @@ export function PluginEditor({
         </fieldset>
         <fieldset className="du-fieldset plugin-editor-section">
           <legend className="du-fieldset-legend">上下文与输出</legend>
+          <p className="muted">发送当前分支完整历史，不按轮数或水位裁剪。</p>
           {(p.kind === "analysis" || p.kind === "clarify") && (
             <>
+              <label className="plugin-stream-toggle">
+                <span>流式输出</span>
+                <input
+                  className="du-toggle du-toggle-primary du-toggle-sm"
+                  type="checkbox"
+                  aria-label="插件流式输出"
+                  checked={p.stream !== false}
+                  onChange={(e) => update({ stream: e.target.checked })}
+                />
+              </label>
               <div className="plugin-fields">
-                <label>
-                  历史范围
-                  <select
-                    className="du-select"
-                    aria-label="插件历史范围"
-                    value={p.contextMode}
-                    onChange={(e) =>
-                      update({
-                        contextMode: e.target.value as "sync" | "rounds",
-                      })
-                    }
-                  >
-                    <option value="sync">完全同步主聊天上下文</option>
-                    <option value="rounds">最近 N 轮完整问答</option>
-                  </select>
-                </label>
-                {number("historyRounds", "历史问答轮数", 1)}
                 <label>
                   注入方式
                   <select
@@ -393,19 +368,18 @@ export function PluginEditor({
                   onChange={(e) => update({ schema: e.target.value })}
                 />
               </label>
-              {number("referenceCount", "保留完整参考配对数")}
             </>
           )}
-          {(p.kind === "suggest" || p.kind === "rewrite") && (
+          {p.kind === "suggest" && (
             <div className="plugin-fields">
               {number("suggestions", "候选条数", 1)}
             </div>
           )}
-          {p.kind === "clarify" && (
-            <div className="plugin-fields">
-              {number("highWater", "高水位（k Token）", 1)}
-              {number("lowWater", "裁后目标（k Token）")}
-            </div>
+          {p.kind === "rewrite" && (
+            <small>
+              固定生成 prompt1、prompt2、prompt3
+              三个独立候选；单选一个后确认替换。
+            </small>
           )}
         </fieldset>
         <details className="du-collapse du-collapse-arrow">
@@ -630,7 +604,7 @@ function ContextDetails({
               <div className="du-stat-desc">
                 {m.highWater > 0
                   ? `${k(m.highWater)} 时裁到 ${k(m.lowWater)}`
-                  : "· 按完整配对数保留"}
+                  : "完整保留，不裁剪"}
               </div>
               {m.highWater > 0 && (
                 <progress
@@ -1298,18 +1272,6 @@ function ResultCard({
               </button>
             </>
           )}
-          {run.plugin.kind === "analysis" &&
-            run.status === "waiting" &&
-            active && (
-              <button
-                className="du-btn du-btn-primary du-btn-sm"
-                disabled={busy || saving}
-                onClick={() => void act("approve-analysis").catch(() => {})}
-              >
-                <Check size={14} />
-                通过并继续
-              </button>
-            )}
           {run.status === "candidate" && active && (
             <>
               <button
@@ -1364,6 +1326,18 @@ function ResultCard({
               编辑 JSON
             </button>
           )}
+          {run.plugin.kind === "analysis" &&
+            run.status === "waiting" &&
+            active && (
+              <button
+                className="du-btn du-btn-primary du-btn-sm"
+                disabled={busy || saving}
+                onClick={() => void act("approve-analysis").catch(() => {})}
+              >
+                <Check size={14} />
+                确认并继续
+              </button>
+            )}
           {run.status === "answered" && (
             <button
               className="du-btn du-btn-sm"
@@ -1617,25 +1591,8 @@ export function RewriteReview({
           {failure}
         </div>
       )}
-      <fieldset className="du-fieldset rewrite-candidates">
-        <legend className="du-fieldset-legend">选择一个候选</legend>
-        {candidates.map((text, index) => (
-          <label className="du-card rewrite-candidate" key={index}>
-            <input
-              className="du-radio du-radio-primary du-radio-sm"
-              type="radio"
-              name={"rewrite-" + run.id}
-              aria-label={"候选 " + (index + 1)}
-              checked={selected === index}
-              onChange={() => setSelected(index)}
-              disabled={busy || starting || regenerating}
-            />
-            <span>{text}</span>
-          </label>
-        ))}
-      </fieldset>
-      <div className="rewrite-compare">
-        <label>
+      <div className="rewrite-compare rewrite-selection">
+        <label className="rewrite-original">
           原内容
           <textarea
             className="du-textarea"
@@ -1644,16 +1601,26 @@ export function RewriteReview({
             readOnly
           />
         </label>
-        <label>
-          新内容
-          <textarea
-            className="du-textarea"
-            aria-label="新用户请求"
-            value={candidate}
-            readOnly
-            placeholder="先选择一个候选"
-          />
-        </label>
+        <fieldset className="du-fieldset rewrite-candidates">
+          <legend className="du-fieldset-legend">选择一个候选</legend>
+          {candidates.map((text, index) => (
+            <label className="du-card rewrite-candidate" key={index}>
+              <span className="rewrite-candidate-heading">
+                <input
+                  className="du-radio du-radio-primary du-radio-sm"
+                  type="radio"
+                  name={"rewrite-" + run.id}
+                  aria-label={"候选 " + (index + 1)}
+                  checked={selected === index}
+                  onChange={() => setSelected(index)}
+                  disabled={busy || starting || regenerating}
+                />
+                <span>{"prompt" + (index + 1)}</span>
+              </span>
+              <span className="rewrite-candidate-text">{text}</span>
+            </label>
+          ))}
+        </fieldset>
       </div>
       {run.input !== current && (
         <p className="muted">

@@ -96,12 +96,19 @@ for (const mobile of [false, true])
     });
     await expect(
       editor.getByLabel("高水位（k Token）", { exact: true }),
-    ).toHaveValue("500");
+    ).toHaveCount(0);
     await expect(
-      editor.getByLabel("裁后目标（k Token）", { exact: true }),
-    ).toHaveValue("200");
-    await editor.getByLabel("高水位（k Token）", { exact: true }).fill("600");
-    await editor.getByLabel("裁后目标（k Token）", { exact: true }).fill("250");
+      editor.getByLabel("插件历史范围", { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      editor.getByText("发送当前分支完整历史，不按轮数或水位裁剪。", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      editor.getByLabel("插件流式输出", { exact: true }),
+    ).toBeChecked();
+    await editor.getByLabel("插件流式输出", { exact: true }).uncheck();
     await editor.getByRole("button", { name: "保存", exact: true }).click();
     await expect(editor).toHaveCount(0);
     const saved = await page.evaluate(
@@ -109,7 +116,32 @@ for (const mobile of [false, true])
     );
     expect(
       saved.plugins.find((p: any) => p.id === "builtin-clarify"),
-    ).toMatchObject({ highWater: 600000, lowWater: 250000 });
+    ).toMatchObject({
+      highWater: 0,
+      lowWater: 0,
+      contextMode: "sync",
+      stream: false,
+    });
+    await list
+      .getByRole("button", { name: "编辑插件 提问澄清", exact: true })
+      .click();
+    await expect(
+      editor.getByLabel("插件流式输出", { exact: true }),
+    ).not.toBeChecked();
+    await editor.getByRole("button", { name: "取消", exact: true }).click();
+    await list
+      .getByRole("button", { name: "编辑插件 JSON 分析", exact: true })
+      .click();
+    editor = page.getByRole("dialog", {
+      name: "全局 · JSON 分析",
+      exact: true,
+    });
+    await expect(
+      editor.getByLabel("插件流式输出", { exact: true }),
+    ).toBeChecked();
+    await editor.getByLabel("插件流式输出", { exact: true }).uncheck();
+    await editor.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(editor).toHaveCount(0);
     await list
       .getByRole("button", { name: "编辑插件 重新生成 user 提示", exact: true })
       .click();

@@ -672,7 +672,7 @@ export async function runPlugin(
       body: JSON.stringify(task.request),
       signal,
     });
-    await readCompletion(response, true, signal, output, () => {
+    await readCompletion(response, task.request.stream, signal, output, () => {
       progress.publish(output.content, output.reasoning);
       if (Date.now() - last > 2000) {
         progress.checkpoint(output.content, output.reasoning);
@@ -832,7 +832,7 @@ export async function pluginEndpoint(
         item.plugin.id === body.pluginId &&
         route(chat).some((m) => m.id === item.anchorId)
       )
-        item.metrics.cutoff = item.id;
+        item.referenceReset = true;
     await saveState(env, chat.id, state);
     return { ok: true };
   }

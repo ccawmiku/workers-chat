@@ -180,8 +180,17 @@ beforeAll(async () => {
                       : pluginMarker.startsWith("[PLUGIN_TEST_suggest]")
                         ? '{"suggestions":["用户下一句一","用户下一句二","用户下一句三"]}'
                         : pluginMarker.startsWith("[PLUGIN_TEST_rewrite]")
-                          ? '{"rewrites":["重生后的用户要求","换个说法的要求","另一条用户要求"]}'
+                          ? '{"prompt1":"重生后的用户要求","prompt2":"换个说法的要求","prompt3":"另一条用户要求"}'
                           : "1. 请问你希望采用什么风格？";
+                if (!payload.stream)
+                  return MFResponse.json({
+                    choices: [{ message: { content }, finish_reason: "stop" }],
+                    usage: {
+                      input_tokens: 1500,
+                      output_tokens: 424,
+                      cache_hit_rate: "80%",
+                    },
+                  });
                 if (controls.mode === "plugin-slow") {
                   const delay = controls.delay,
                     encode = new TextEncoder();
@@ -1471,6 +1480,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     controls.delay = 0;
     const list = defaultPlugins().map((p) => ({
       ...p,
+      stream: !["analysis", "clarify"].includes(p.kind),
       prompt: `[PLUGIN_TEST_${p.kind}]\n${p.prompt}`,
       ...(p.kind === "analysis"
         ? {
@@ -1510,6 +1520,8 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(Object.values(s.chat.messages)).toHaveLength(1);
     expect(s.pluginState.runs.map((r) => r.status)).toEqual(["waiting"]);
     expect(upstreamCalls.length - before).toBe(1);
+    expect(upstreamCalls.at(-1)?.stream).toBe(false);
+    expect(s.pluginState.runs[0]?.usage?.cache_hit_rate).toBe("80%");
     const question = s.pluginState.runs[0]!;
     await value("/chats/" + chat.id + "/plugins", "POST", {
       action: "answer",
@@ -1523,6 +1535,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
           (r) => r.plugin.kind === "analysis" && r.status === "waiting",
         ),
     );
+    expect(upstreamCalls.at(-1)?.stream).toBe(false);
     const firstAnalysis = s.pluginState.runs.find(
       (r) => r.plugin.kind === "analysis",
     )!;
@@ -1626,7 +1639,9 @@ describe("workerd HTTP + D1 + Workflows", () => {
     );
     expect(Object.values(s.chat.messages)).toHaveLength(2);
     expect(JSON.parse(s.pluginState.runs.at(-1)!.output)).toEqual({
-      rewrites: ["重生后的用户要求", "换个说法的要求", "另一条用户要求"],
+      prompt1: "重生后的用户要求",
+      prompt2: "换个说法的要求",
+      prompt3: "另一条用户要求",
     });
     const duplicate = await value<Chat>(
         "/chats/" + chat.id + "/duplicate",
@@ -1876,7 +1891,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
         sequence: 1,
         status: "complete",
         content:
-          '{"rewrites":["new request","another request","third request"]}',
+          '{"prompt1":"new request","prompt2":"another request","prompt3":"third request"}',
       },
       true,
       "https://chat.test",

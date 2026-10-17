@@ -438,12 +438,18 @@ export function DeviceConnectionProvider({
             signal,
           );
           let last = 0;
-          await readCompletion(response, true, signal, entry.output, () => {
-            if (Date.now() - last > 60) {
-              last = Date.now();
-              update({ ...entry.output });
-            }
-          });
+          await readCompletion(
+            response,
+            direct.request.stream,
+            signal,
+            entry.output,
+            () => {
+              if (Date.now() - last > 60) {
+                last = Date.now();
+                update({ ...entry.output });
+              }
+            },
+          );
         } catch (error) {
           status = entry.controller.signal.aborted ? "stopped" : "error";
           failure = redactUpstreamError(

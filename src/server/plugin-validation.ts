@@ -54,11 +54,9 @@ export function validatedPlugins(value: unknown): PluginDefinition[] {
       } catch {
         throw new HttpError(400, "JSON Schema 必须是对象或布尔值");
       }
-    const highWater = num("highWater", 0, 2000000),
-      lowWater = num("lowWater", 0, 2000000);
-    if (highWater > 0 && lowWater >= highWater)
-      throw new HttpError(400, "低水位必须小于高水位");
     const initialUser = str(p.initialUser ?? "好的", 100000);
+    if (p.stream !== undefined && typeof p.stream !== "boolean")
+      throw new HttpError(400, "插件流式开关无效");
     if (["suggest", "rewrite"].includes(String(kind)) && !initialUser.trim())
       throw new HttpError(400, "开头 user 消息不能为空");
     return {
@@ -69,19 +67,21 @@ export function validatedPlugins(value: unknown): PluginDefinition[] {
       model: modelRef(p.model),
       parameters: parameters(p.parameters),
       effort: p.effort as PluginDefinition["effort"],
+      stream: p.stream !== false,
       prompt: str(p.prompt, 100000),
       schema,
       example: str(p.example, 100000),
       injection: p.injection as "tool" | "user",
       injectionTemplate: str(p.injectionTemplate, 10000),
-      contextMode: p.contextMode as "sync" | "rounds",
+      contextMode: "sync",
       historyRounds: num("historyRounds", 1, 1000),
       referenceCount: num("referenceCount", 0, 1000),
       userHistoryCount: num("userHistoryCount", 0, 100000),
-      suggestions: num("suggestions", 1, 10),
+      suggestions: kind === "rewrite" ? 3 : num("suggestions", 1, 10),
+      ...(kind === "rewrite" ? { rewriteFormat: "fields" as const } : {}),
       ...(["suggest", "rewrite"].includes(String(kind)) ? { initialUser } : {}),
-      highWater,
-      lowWater,
+      highWater: 0,
+      lowWater: 0,
     };
   });
 }

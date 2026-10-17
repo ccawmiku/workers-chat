@@ -37,6 +37,7 @@ export type PluginDefinition = {
   model: ModelRef | null;
   parameters: Parameters;
   effort: Effort;
+  stream?: boolean;
   prompt: string;
   schema: string;
   example: string;
@@ -51,6 +52,7 @@ export type PluginDefinition = {
   lowWater: number;
   suggestions: number;
   initialUser?: string;
+  rewriteFormat?: "fields";
 };
 export type PluginBinding = {
   id: string;
@@ -117,6 +119,7 @@ export type PluginRun = {
   metrics: PluginMetrics;
   replaces?: string;
   dismissed?: boolean;
+  referenceReset?: true;
 };
 export type PluginFlow = {
   id: string;
@@ -163,6 +166,7 @@ const LEGACY_SUGGEST_PROMPT =
 export const REWRITE_PROMPT = "";
 export const SUGGEST_PROMPT = "";
 export function upgradeLegacyPlugin(p: PluginDefinition): PluginDefinition {
+  p = { ...p, contextMode: "sync", highWater: 0, lowWater: 0 };
   if (
     p.kind === "analysis" &&
     [LEGACY_ANALYSIS_PROMPT, ANALYSIS_PROMPT].includes(p.prompt)
@@ -194,6 +198,9 @@ export function upgradeLegacyPlugin(p: PluginDefinition): PluginDefinition {
       initialUser: p.initialUser ?? "好的",
       highWater: 0,
       lowWater: 0,
+      ...(p.kind === "rewrite"
+        ? { rewriteFormat: "fields" as const, suggestions: 3 }
+        : {}),
       ...(oldDefault
         ? {
             prompt: "",
@@ -218,6 +225,7 @@ export function pluginDefaults(
       ? { temperature: 0.7 }
       : {},
     effort: "inherit",
+    stream: true,
     cardTitle: names[kind],
     injection: "tool",
     injectionTemplate:
@@ -226,9 +234,10 @@ export function pluginDefaults(
     historyRounds: kind === "rewrite" ? 50 : 5,
     referenceCount: 1,
     userHistoryCount: 0,
-    highWater: kind === "clarify" ? 500000 : 0,
-    lowWater: kind === "clarify" ? 200000 : 0,
+    highWater: 0,
+    lowWater: 0,
     suggestions: 3,
+    ...(kind === "rewrite" ? { rewriteFormat: "fields" as const } : {}),
     ...(["suggest", "rewrite"].includes(kind) ? { initialUser: "好的" } : {}),
     example: "",
     schema: kind === "analysis" ? ANALYSIS_SCHEMA : "",
@@ -323,6 +332,8 @@ export function normalizePluginOutput(
   if (!text.trim()) throw Error("插件返回内容为空");
   if (p.kind === "analysis")
     return JSON.stringify(readPluginJSON(text, p.schema), null, 2);
+  if (p.kind === "rewrite" && p.rewriteFormat === "fields")
+    return JSON.stringify(readRewriteFields(text), null, 2);
   // An already-running job keeps the output contract captured before deployment.
   if (p.kind === "rewrite" && p.initialUser === undefined)
     return JSON.stringify({ prompt: extractRewritePrompt(text) }, null, 2);
@@ -356,7 +367,15 @@ export function extractRewriteCandidates(text: string): string[] {
   const value = readPluginJSON(text) as {
     rewrites?: unknown;
     prompt?: unknown;
+    prompt1?: unknown;
+    prompt2?: unknown;
+    prompt3?: unknown;
   };
+  if (
+    value &&
+    ["prompt1", "prompt2", "prompt3"].some((key) => Object.hasOwn(value, key))
+  )
+    return Object.values(readRewriteFields(text));
   if (
     Array.isArray(value?.rewrites) &&
     value.rewrites.length &&
@@ -365,6 +384,33 @@ export function extractRewriteCandidates(text: string): string[] {
     return value.rewrites.map((v) => (v as string).trim());
   // Existing saved runs can still be inspected without regenerating them.
   return [extractRewritePrompt(text)];
+}
+function readRewriteFields(
+  text: string,
+): Record<"prompt1" | "prompt2" | "prompt3", string> {
+  const keys = ["prompt1", "prompt2", "prompt3"] as const;
+  const value = readPluginJSON(
+    text,
+    JSON.stringify({
+      type: "object",
+      required: keys,
+      additionalProperties: false,
+      properties: Object.fromEntries(
+        keys.map((key) => [
+          key,
+          { type: "string", minLength: 1, pattern: "\\S" },
+        ]),
+      ),
+    }),
+  ) as Record<(typeof keys)[number], string>;
+  const result = {
+    prompt1: value.prompt1.trim(),
+    prompt2: value.prompt2.trim(),
+    prompt3: value.prompt3.trim(),
+  };
+  if (new Set(Object.values(result)).size !== 3)
+    throw Error("候选内容重复，请换一组");
+  return result;
 }
 export function extractRewritePrompt(text: string): string {
   const result = readPluginJSON(
@@ -416,8 +462,8 @@ export function preparePlugin(
     capacity: model.capacity,
     archive: 0,
     originalArchive: 0,
-    highWater: p.highWater,
-    lowWater: p.lowWater,
+    highWater: 0,
+    lowWater: 0,
     trimmed: 0,
     shortened: 0,
     sections: [],
@@ -434,12 +480,9 @@ export function preparePlugin(
       ids.has(r.anchorId) &&
       ["complete", "answered"].includes(r.status),
   );
-  const earlierCutoff = previous.toReversed().find((r) => r.metrics.cutoff)
-    ?.metrics.cutoff;
   let messages: APIMessage[] = [];
   if (p.kind === "analysis" || p.kind === "clarify") {
-    const source = { ...chat, currentId: anchorId };
-    if (p.contextMode === "rounds") source.rounds = p.historyRounds + 1;
+    const source = { ...chat, currentId: anchorId, rounds: undefined };
     // A pending plugin task occupies a final user slot even for an empty preview draft.
     messages = contextMessages(source, input || " ");
     messages.pop();
@@ -452,7 +495,10 @@ export function preparePlugin(
       );
       section("本轮澄清问答", messages.slice(start));
     }
-    let references = previous
+    // Explicit user resets remain available; legacy automatic waterline cutoffs are ignored.
+    const resetIndex = previous.findLastIndex((r) => r.referenceReset);
+    const references = previous
+      .slice(resetIndex + 1)
       .filter((r) =>
         p.kind === "analysis"
           ? r.status === "complete"
@@ -468,26 +514,11 @@ export function preparePlugin(
             : { question: r.output, answer: r.answer }),
         }),
       }));
-    if (p.kind === "analysis")
-      references =
-        p.referenceCount > 0 ? references.slice(-p.referenceCount) : [];
     metrics.originalArchive = references.reduce(
       (n, r) => n + estimateTokens(r.text),
       0,
     );
-    const cutoffIndex = references.findIndex((r) => r.id === earlierCutoff);
-    metrics.trimmed = Math.max(0, cutoffIndex + 1);
-    if (cutoffIndex >= 0) references = references.slice(cutoffIndex + 1);
-    let tokens = references.reduce((n, r) => n + estimateTokens(r.text), 0);
-    metrics.cutoff = earlierCutoff;
-    if (p.highWater > 0 && tokens >= p.highWater)
-      while (references.length && tokens > p.lowWater) {
-        const first = references.shift()!;
-        tokens -= estimateTokens(first.text);
-        metrics.cutoff = first.id;
-        metrics.trimmed++;
-      }
-    metrics.archive = tokens;
+    metrics.archive = metrics.originalArchive;
     let suffix = render(p.prompt, {
       USER_INPUT: input,
       COUNT: String(p.suggestions),
@@ -529,7 +560,8 @@ export function preparePlugin(
   const request: PluginRequest = {
     model: ref.modelId,
     messages,
-    stream: true,
+    stream:
+      p.kind === "analysis" || p.kind === "clarify" ? p.stream !== false : true,
     ...settings.parameters,
     ...model.parameters,
     ...p.parameters,

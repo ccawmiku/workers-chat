@@ -58,6 +58,9 @@ export function validatedPlugins(value: unknown): PluginDefinition[] {
       lowWater = num("lowWater", 0, 2000000);
     if (highWater > 0 && lowWater >= highWater)
       throw new HttpError(400, "低水位必须小于高水位");
+    const initialUser = str(p.initialUser ?? "好的", 100000);
+    if (["suggest", "rewrite"].includes(String(kind)) && !initialUser.trim())
+      throw new HttpError(400, "开头 user 消息不能为空");
     return {
       id,
       kind: kind as PluginDefinition["kind"],
@@ -76,6 +79,7 @@ export function validatedPlugins(value: unknown): PluginDefinition[] {
       referenceCount: num("referenceCount", 0, 1000),
       userHistoryCount: num("userHistoryCount", 0, 100000),
       suggestions: num("suggestions", 1, 10),
+      ...(["suggest", "rewrite"].includes(String(kind)) ? { initialUser } : {}),
       highWater,
       lowWater,
     };

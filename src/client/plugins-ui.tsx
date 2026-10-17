@@ -24,7 +24,7 @@ import {
   Folder,
 } from "lucide-react";
 import type { Chat, Provider, Settings, Message } from "../shared/chat";
-import { route, estimateTokens } from "../shared/chat";
+import { route, estimateTokens, formatTokenCount } from "../shared/chat";
 import {
   type PluginDefinition,
   type PluginBinding,
@@ -38,7 +38,7 @@ import {
   preparePlugin,
   upgradeLegacyPlugin,
   normalizePluginOutput,
-  extractRewritePrompt,
+  extractRewriteCandidates,
   isBuiltinPlugin,
   flowClarifications,
 } from "../shared/plugins";
@@ -55,7 +55,7 @@ type Command = (
   body?: Record<string, unknown>,
 ) => Promise<void>;
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
-const k = (n: number) => (n / 1000).toFixed(1) + "k";
+const k = formatTokenCount;
 function PluginUsage({ run }: { run: PluginRun }) {
   return (
     <div className="plugin-usage">
@@ -273,7 +273,9 @@ export function PluginEditor({
         <fieldset className="du-fieldset plugin-editor-section">
           <legend className="du-fieldset-legend">任务指令</legend>
           <label>
-            任务提示词
+            {p.kind === "suggest" || p.kind === "rewrite"
+              ? "独立 system 提示词（可选）"
+              : "任务提示词"}
             <textarea
               className="du-textarea"
               aria-label="插件任务提示词"
@@ -287,12 +289,28 @@ export function PluginEditor({
               "支持 {{USER_INPUT}} 和 {{COUNT}}。当前请求、示例与参考由上下文组装器分别追加。"
             }
           </small>
-          {p.kind === "rewrite" && (
-            <div className="du-alert" role="note">
-              输出格式固定为 {`{"prompt":"新的 user 请求"}`}
-              。只忠实改述原请求，不新增内容；原文长度校验按提取后的 prompt
-              计算。
-            </div>
+          {(p.kind === "rewrite" || p.kind === "suggest") && (
+            <>
+              <div className="du-alert" role="note">
+                历史 UA 对调，保留当前分支全部文字，不继承主聊天
+                system。此处留空则不发送 system；末尾自动附加简短任务与 JSON
+                格式要求。
+              </div>
+              <label>
+                开头 user（U0）
+                <textarea
+                  className="du-textarea"
+                  aria-label="开头 user（U0）"
+                  rows={2}
+                  value={p.initialUser ?? "好的"}
+                  required
+                  onChange={(e) => update({ initialUser: e.target.value })}
+                />
+              </label>
+              <small>
+                始终保留，默认“好的”，不能为空；只改变插件请求，不写入聊天。
+              </small>
+            </>
           )}
         </fieldset>
         <fieldset className="du-fieldset plugin-editor-section">
@@ -380,12 +398,10 @@ export function PluginEditor({
           )}
           {(p.kind === "suggest" || p.kind === "rewrite") && (
             <div className="plugin-fields">
-              {number("userHistoryCount", "历史 user 条数（0 为全部）")}
-              {number("historyRounds", "最近完整问答对数", 1)}
-              {p.kind === "suggest" && number("suggestions", "候选条数", 1)}
+              {number("suggestions", "候选条数", 1)}
             </div>
           )}
-          {p.kind !== "analysis" && (
+          {p.kind === "clarify" && (
             <div className="plugin-fields">
               {number("highWater", "高水位（k Token）", 1)}
               {number("lowWater", "裁后目标（k Token）")}
@@ -1213,11 +1229,19 @@ function ResultCard({
           {run.status === "running" ? (
             <Loading small />
           ) : run.status === "waiting" ? (
-            "等待回答"
+            question ? (
+              "等待回答"
+            ) : (
+              "等待确认"
+            )
           ) : run.status === "answered" ? (
             "已回答"
           ) : run.status === "candidate" ? (
-            "新问题预览"
+            question ? (
+              "新问题预览"
+            ) : (
+              "新结果预览"
+            )
           ) : run.status === "error" ? (
             "失败"
           ) : run.status === "skipped" ? (
@@ -1255,10 +1279,14 @@ function ResultCard({
               <button
                 className="du-btn du-btn-sm"
                 disabled={busy}
-                onClick={() => void act("regenerate-question").catch(() => {})}
+                onClick={() =>
+                  void act(
+                    question ? "regenerate-question" : "regenerate-analysis",
+                  ).catch(() => {})
+                }
               >
                 <RotateCcw size={14} />
-                重新生成问题
+                {question ? "重新生成问题" : "重新生成 JSON"}
               </button>
               <button
                 className="du-btn du-btn-sm"
@@ -1270,6 +1298,18 @@ function ResultCard({
               </button>
             </>
           )}
+          {run.plugin.kind === "analysis" &&
+            run.status === "waiting" &&
+            active && (
+              <button
+                className="du-btn du-btn-primary du-btn-sm"
+                disabled={busy || saving}
+                onClick={() => void act("approve-analysis").catch(() => {})}
+              >
+                <Check size={14} />
+                通过并继续
+              </button>
+            )}
           {run.status === "candidate" && active && (
             <>
               <button
@@ -1560,15 +1600,11 @@ export function RewriteReview({
   regenerating: boolean;
   failure?: string;
 }) {
-  const [candidate, setCandidate] = useState(() => {
-      try {
-        return extractRewritePrompt(run.output);
-      } catch {
-        return run.output;
-      }
-    }),
+  const [selected, setSelected] = useState<number | null>(null),
     [error, setError] = useState(""),
     [starting, setStarting] = useState(false);
+  const candidates = extractRewriteCandidates(run.output);
+  const candidate = selected === null ? "" : (candidates[selected] ?? "");
   return (
     <Dialog
       title="重新生成 user 提示 · 对比"
@@ -1581,6 +1617,23 @@ export function RewriteReview({
           {failure}
         </div>
       )}
+      <fieldset className="du-fieldset rewrite-candidates">
+        <legend className="du-fieldset-legend">选择一个候选</legend>
+        {candidates.map((text, index) => (
+          <label className="du-card rewrite-candidate" key={index}>
+            <input
+              className="du-radio du-radio-primary du-radio-sm"
+              type="radio"
+              name={"rewrite-" + run.id}
+              aria-label={"候选 " + (index + 1)}
+              checked={selected === index}
+              onChange={() => setSelected(index)}
+              disabled={busy || starting || regenerating}
+            />
+            <span>{text}</span>
+          </label>
+        ))}
+      </fieldset>
       <div className="rewrite-compare">
         <label>
           原内容
@@ -1597,7 +1650,8 @@ export function RewriteReview({
             className="du-textarea"
             aria-label="新用户请求"
             value={candidate}
-            onChange={(e) => setCandidate(e.target.value)}
+            readOnly
+            placeholder="先选择一个候选"
           />
         </label>
       </div>

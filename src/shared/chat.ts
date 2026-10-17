@@ -114,7 +114,7 @@ export function newChat(
     currentId: null,
     messages: {},
     model,
-    effort: "max",
+    effort: "inherit",
     parameters: {},
     stream: true,
     system: [],
@@ -404,6 +404,12 @@ export function markdownExport(chat: Chat) {
       )
       .join("\n\n")
   );
+}
+
+export function formatTokenCount(value: number): string {
+  return value < 1000
+    ? String(Math.round(value))
+    : (value / 1000).toFixed(1) + "k";
 }
 
 // Preserve explicit upstream percentages; never invent a rate from token counts.

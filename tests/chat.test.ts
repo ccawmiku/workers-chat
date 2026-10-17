@@ -160,7 +160,7 @@ describe("message tree", () => {
     ]);
     expect(result.provider.id).toBe("two");
     expect(result.request.model).toBe("same-model");
-    expect(result.request.reasoning_effort).toBe("max");
+    expect(result.request).not.toHaveProperty("reasoning_effort");
     expect(result.request).toMatchObject({ temperature: 1, top_p: 0.9 });
     expect(result.request.messages).toEqual([
       { role: "user", content: "hi" },
@@ -386,5 +386,19 @@ it("keeps explicit cache hit rates and top-level cache counts without inventing 
   expect(sanitizeUsage({ input_tokens: 10, cached_tokens: 8 })).toEqual({
     input_tokens: 10,
     cached_tokens: 8,
+  });
+});
+
+describe("compact token counts", () => {
+  it("shows integers below 1k and one decimal k from 1k", async () => {
+    const { formatTokenCount } = await import("../src/shared/chat");
+    expect([0, 424, 999, 1000, 18929, 34700].map(formatTokenCount)).toEqual([
+      "0",
+      "424",
+      "999",
+      "1.0k",
+      "18.9k",
+      "34.7k",
+    ]);
   });
 });

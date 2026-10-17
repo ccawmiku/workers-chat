@@ -6,6 +6,7 @@ import { randomBytes, pbkdf2Sync } from "node:crypto";
 import type { Chat, Settings, Provider } from "../src/shared/chat";
 import {
   defaultPlugins,
+  pluginDefaults,
   type PluginState,
   type PluginJobView,
 } from "../src/shared/plugins";
@@ -179,7 +180,7 @@ beforeAll(async () => {
                       : pluginMarker.startsWith("[PLUGIN_TEST_suggest]")
                         ? '{"suggestions":["用户下一句一","用户下一句二","用户下一句三"]}'
                         : pluginMarker.startsWith("[PLUGIN_TEST_rewrite]")
-                          ? '{"prompt":"重生后的用户要求"}'
+                          ? '{"rewrites":["重生后的用户要求","换个说法的要求","另一条用户要求"]}'
                           : "1. 请问你希望采用什么风格？";
                 if (controls.mode === "plugin-slow") {
                   const delay = controls.delay,
@@ -544,8 +545,8 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(upstreamCalls).toHaveLength(count + 1);
     expect(upstreamCalls.at(-1)).toMatchObject({
       model: "Gemini3.8flash-low",
-      reasoning_effort: "max",
     });
+    expect(upstreamCalls.at(-1)).not.toHaveProperty("reasoning_effort");
     expect(upstreamCalls.at(-1)).not.toHaveProperty("max_tokens");
     const reply = done.messages[done.currentId!]!;
     expect(reply.content).toBe("第一部分，完成");
@@ -1517,6 +1518,60 @@ describe("workerd HTTP + D1 + Workflows", () => {
     });
     s = await wait(
       (s) =>
+        !s.pluginJob &&
+        s.pluginState.runs.some(
+          (r) => r.plugin.kind === "analysis" && r.status === "waiting",
+        ),
+    );
+    const firstAnalysis = s.pluginState.runs.find(
+      (r) => r.plugin.kind === "analysis",
+    )!;
+    expect(s.chat.pluginPending).toBe("waiting");
+    expect(Object.values(s.chat.messages)).toHaveLength(1);
+    expect(upstreamCalls.length - before).toBe(2);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(upstreamCalls.length - before).toBe(2);
+    expect(
+      (
+        await request("/chats/" + chat.id + "/plugins", "POST", {
+          action: "answer",
+          runId: firstAnalysis.id,
+          content: "bypass",
+        })
+      ).status,
+    ).toBe(400);
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "regenerate-analysis",
+      runId: firstAnalysis.id,
+    });
+    s = await wait(
+      (s) =>
+        !s.pluginJob &&
+        s.pluginState.runs.some(
+          (r) => r.plugin.kind === "analysis" && r.status === "waiting",
+        ),
+    );
+    expect(upstreamCalls.length - before).toBe(3);
+    expect(
+      s.pluginState.runs.filter((r) => r.plugin.kind === "clarify"),
+    ).toHaveLength(1);
+    expect(
+      (
+        await request("/chats/" + chat.id + "/plugins", "POST", {
+          action: "approve-analysis",
+          runId: firstAnalysis.id,
+        })
+      ).status,
+    ).toBe(409);
+    const approved = s.pluginState.runs.findLast(
+      (r) => r.plugin.kind === "analysis" && r.status === "waiting",
+    )!;
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "approve-analysis",
+      runId: approved.id,
+    });
+    s = await wait(
+      (s) =>
         !s.job &&
         !s.pluginJob &&
         s.pluginState.runs.some(
@@ -1527,7 +1582,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
       "user",
       "assistant",
     ]);
-    expect(upstreamCalls.length - before).toBe(4);
+    expect(upstreamCalls.length - before).toBe(5);
     const analysis = upstreamCalls[before + 1]!.messages as {
       role: string;
       content: string;
@@ -1537,7 +1592,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(JSON.stringify(analysis)).toContain(
       question.output.replaceAll("\n", "\\n"),
     );
-    const main = upstreamCalls[before + 2]!.messages as {
+    const main = upstreamCalls[before + 3]!.messages as {
       role: string;
       content: string;
     }[];
@@ -1571,7 +1626,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     );
     expect(Object.values(s.chat.messages)).toHaveLength(2);
     expect(JSON.parse(s.pluginState.runs.at(-1)!.output)).toEqual({
-      prompt: "重生后的用户要求",
+      rewrites: ["重生后的用户要求", "换个说法的要求", "另一条用户要求"],
     });
     const duplicate = await value<Chat>(
         "/chats/" + chat.id + "/duplicate",
@@ -1588,6 +1643,63 @@ describe("workerd HTTP + D1 + Workflows", () => {
     ).toBe(true);
     await value("/settings", "PUT", settings);
   }, 30000);
+  it("skips a reviewed analysis without injecting it or making an extra plugin call", async () => {
+    const p = {
+      ...pluginDefaults("analysis"),
+      prompt: "[PLUGIN_TEST_analysis]",
+      schema: '{"type":"object","required":["ABC"]}',
+    };
+    await value("/settings", "PUT", { ...settings, plugins: [p] });
+    const chat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + chat.id, "PATCH", { title: "Review skip fixture" });
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "configure",
+      plugins: [{ id: p.id, enabled: true }],
+    });
+    const before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "Skip this analysis",
+    });
+    let snapshot: {
+      chat: Chat;
+      pluginState: PluginState;
+      pluginJob: PluginJobView | null;
+    };
+    for (let i = 0; i < 100; i++) {
+      snapshot = await value("/chats/" + chat.id);
+      if (snapshot.chat.pluginPending === "waiting" && !snapshot.pluginJob)
+        break;
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    expect(snapshot!.chat.pluginPending).toBe("waiting");
+    expect(Object.values(snapshot!.chat.messages)).toHaveLength(1);
+    expect(upstreamCalls.length - before).toBe(1);
+    const runId = snapshot!.pluginState.runs.at(-1)!.id;
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "skip",
+      runId,
+    });
+    const done = await finished(chat.id);
+    expect(Object.values(done.messages)).toHaveLength(2);
+    expect(upstreamCalls.length - before).toBe(2);
+    expect(JSON.stringify(upstreamCalls.at(-1))).not.toContain(
+      "analysis-result",
+    );
+    expect(
+      (upstreamCalls.at(-1)!.messages as { role: string }[]).some(
+        (m) => m.role === "tool",
+      ),
+    ).toBe(false);
+    expect(
+      (
+        await request("/chats/" + chat.id + "/plugins", "POST", {
+          action: "approve-analysis",
+          runId,
+        })
+      ).status,
+    ).toBe(409);
+    await value("/settings", "PUT", settings);
+  });
   it("pauses invalid JSON, repairs without repeating the call, and keeps debug results out of main history", async () => {
     const list = defaultPlugins().map((p) => ({
       ...p,
@@ -1631,6 +1743,12 @@ describe("workerd HTTP + D1 + Workflows", () => {
       content: '{"ABC":"repaired"}',
     });
     s = await value<S>("/chats/" + chat.id);
+    expect(s.chat.pluginPending).toBe("waiting");
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "approve-analysis",
+      runId: s.pluginState.runs[0]!.id,
+    });
+    s = await value<S>("/chats/" + chat.id);
     expect(s.chat.pluginPending).toBe("debug");
     expect(Object.values(s.chat.messages)).toHaveLength(1);
     expect(upstreamCalls.length - before).toBe(1);
@@ -1658,9 +1776,17 @@ describe("workerd HTTP + D1 + Workflows", () => {
     });
     for (let i = 0; i < 100; i++) {
       s = await value<S>("/chats/" + chat.id);
-      if (s.chat.pluginPending === "debug") break;
+      if (s.chat.pluginPending === "waiting") break;
       await new Promise((r) => setTimeout(r, 40));
     }
+    expect(s.chat.pluginPending).toBe("waiting");
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "approve-analysis",
+      runId: s.pluginState.runs.findLast(
+        (r) => r.plugin.kind === "analysis" && r.status === "waiting",
+      )!.id,
+    });
+    s = await value<S>("/chats/" + chat.id);
     expect(s.chat.pluginPending).toBe("debug");
     expect(upstreamCalls.length - before).toBe(2);
     await value("/chats/" + chat.id + "/plugins", "POST", { action: "use" });
@@ -1729,10 +1855,10 @@ describe("workerd HTTP + D1 + Workflows", () => {
     let snapshot = await value<Snapshot>("/chats/" + chat.id);
     expect(
       snapshot.pluginJob!.direct!.request.messages.map((m) => m.role),
-    ).toEqual(["system", "user"]);
-    expect(snapshot.pluginJob!.direct!.request.messages.at(-1)?.content).toBe(
-      "first request",
-    );
+    ).toEqual(["user"]);
+    expect(
+      snapshot.pluginJob!.direct!.request.messages.at(-1)?.content,
+    ).toContain("first request");
     expect(
       JSON.stringify(snapshot.pluginJob!.direct!.request.messages),
     ).not.toContain("later unrelated");
@@ -1746,7 +1872,12 @@ describe("workerd HTTP + D1 + Workflows", () => {
     await request(
       "/plugins/jobs/" + snapshot.pluginJob!.id + "/finish",
       "POST",
-      { sequence: 1, status: "complete", content: '{"prompt":"new request"}' },
+      {
+        sequence: 1,
+        status: "complete",
+        content:
+          '{"rewrites":["new request","another request","third request"]}',
+      },
       true,
       "https://chat.test",
       true,
@@ -1831,6 +1962,24 @@ describe("workerd HTTP + D1 + Workflows", () => {
       true,
     );
     expect(saved.status, await saved.text()).toBe(200);
+    const reviewed = await value<{
+      chat: Chat;
+      pluginState: PluginState;
+      job: unknown;
+    }>("/chats/" + chat.id);
+    expect(reviewed.chat.pluginPending).toBe("waiting");
+    expect(reviewed.job).toBeNull();
+    await request(
+      "/chats/" + chat.id + "/plugins",
+      "POST",
+      {
+        action: "approve-analysis",
+        runId: reviewed.pluginState.runs.at(-1)!.id,
+      },
+      true,
+      "https://chat.test",
+      true,
+    );
     const next = await value<{
       generation: { direct?: { request: { messages: { role: string }[] } } };
       job: { id: string };
@@ -1899,6 +2048,19 @@ describe("workerd HTTP + D1 + Workflows", () => {
     });
     s = await wait(
       (s) =>
+        !s.pluginJob &&
+        s.pluginState.runs.some(
+          (r) => r.plugin.kind === "analysis" && r.status === "waiting",
+        ),
+    );
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "approve-analysis",
+      runId: s.pluginState.runs.findLast(
+        (r) => r.plugin.kind === "analysis" && r.status === "waiting",
+      )!.id,
+    });
+    s = await wait(
+      (s) =>
         !s.job && !s.pluginJob && Object.values(s.chat.messages).length === 2,
     );
     const originalAssistant = s.chat.currentId!;
@@ -1935,6 +2097,19 @@ describe("workerd HTTP + D1 + Workflows", () => {
     });
     s = await wait(
       (s) =>
+        !s.pluginJob &&
+        s.pluginState.runs.some(
+          (r) => r.plugin.kind === "analysis" && r.status === "waiting",
+        ),
+    );
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "approve-analysis",
+      runId: s.pluginState.runs.findLast(
+        (r) => r.plugin.kind === "analysis" && r.status === "waiting",
+      )!.id,
+    });
+    s = await wait(
+      (s) =>
         !s.job && !s.pluginJob && Object.values(s.chat.messages).length === 4,
     );
     expect(upstreamCalls.length - count).toBe(2);
@@ -1951,6 +2126,19 @@ describe("workerd HTTP + D1 + Workflows", () => {
       action: "regenerate-main",
       runId: originalRun.id,
       answer: "新的偏好",
+    });
+    s = await wait(
+      (s) =>
+        !s.pluginJob &&
+        s.pluginState.runs.some(
+          (r) => r.plugin.kind === "analysis" && r.status === "waiting",
+        ),
+    );
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "approve-analysis",
+      runId: s.pluginState.runs.findLast(
+        (r) => r.plugin.kind === "analysis" && r.status === "waiting",
+      )!.id,
     });
     s = await wait(
       (s) =>
@@ -2024,7 +2212,8 @@ describe("workerd HTTP + D1 + Workflows", () => {
     s = await value<S>("/chats/" + chat.id);
     expect(s.pluginJob).not.toBeNull();
     expect(Object.values(s.chat.messages)).toHaveLength(1);
-    s = await wait((s) => s.chat.pluginPending === "debug");
+    s = await wait((s) => s.chat.pluginPending === "waiting");
+    expect(s.pluginState.runs.at(-1)?.status).toBe("waiting");
     expect(s.pluginState.runs.at(-1)?.output).toContain("analysis-result");
     expect(upstreamCalls.length - before).toBe(2);
     await value("/chats/" + chat.id + "/plugins", "POST", { action: "cancel" });

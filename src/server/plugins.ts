@@ -455,6 +455,7 @@ async function advance(env: Env, chatId: string, flowId: string) {
     !flow ||
     !chatDoc ||
     flow.status === "cancelled" ||
+    flow.status === "waiting" ||
     flow.status === "main" ||
     flow.status === "complete"
   )
@@ -548,7 +549,7 @@ export async function finishPlugin(
     status === "complete"
       ? run.replaces
         ? "candidate"
-        : run.plugin.kind === "clarify"
+        : ["clarify", "analysis"].includes(run.plugin.kind)
           ? "waiting"
           : "complete"
       : status === "stopped"
@@ -569,7 +570,8 @@ export async function finishPlugin(
   if (flow && !run.replaces) {
     if (status !== "complete")
       flow.status = status === "stopped" ? "cancelled" : "error";
-    else if (run.plugin.kind === "clarify") flow.status = "waiting";
+    else if (["clarify", "analysis"].includes(run.plugin.kind))
+      flow.status = "waiting";
     else flow.index++;
   }
   const store = new Store(env.DB),
@@ -620,7 +622,10 @@ export async function finishPlugin(
             ? undefined
             : "running",
     );
-    if (status === "complete" && run.plugin.kind !== "clarify")
+    if (
+      status === "complete" &&
+      !["clarify", "analysis"].includes(run.plugin.kind)
+    )
       await advanceFlow(env, job.chat_id, flow.id);
   }
   if (!flow && run.plugin.kind === "suggest")
@@ -838,13 +843,13 @@ export async function pluginEndpoint(
     run.output = output;
     delete run.error;
     if (run.status === "error" && run.plugin.kind === "analysis") {
-      run.status = "complete";
+      run.status = "waiting";
       if (flow) {
-        flow.index++;
-        flow.status = "running";
+        flow.status = "waiting";
       }
     }
     await saveState(env, chat.id, state);
+    if (flow?.status === "waiting") await markChat(env, chat.id, "waiting");
     if (flow?.status === "running") await advanceFlow(env, chat.id, flow.id);
     return { ok: true };
   }
@@ -888,8 +893,51 @@ export async function pluginEndpoint(
       ),
     };
   }
+  if (action === "approve-analysis" || action === "regenerate-analysis") {
+    if (
+      !run ||
+      run.plugin.kind !== "analysis" ||
+      run.status !== "waiting" ||
+      !flow ||
+      flow.status !== "waiting" ||
+      flow.results.at(-1) !== run.id
+    )
+      throw new HttpError(409, "当前没有等待确认的 JSON 结果");
+    if (action === "approve-analysis") {
+      normalizePluginOutput(run.plugin, run.output);
+      run.status = "complete";
+      flow.index++;
+      flow.status = "running";
+      await saveState(env, chat.id, state);
+      await advanceFlow(env, chat.id, flow.id);
+      return { ok: true };
+    }
+    run.status = "superseded";
+    flow.results = flow.results.filter((id) => id !== run.id);
+    flow.status = "running";
+    await saveState(env, chat.id, state);
+    await markChat(env, chat.id, "running");
+    return {
+      jobId: await enqueue(
+        env,
+        chat,
+        state,
+        run.plugin,
+        run.input,
+        run.contextAnchorId ?? null,
+        transport,
+        flow,
+      ),
+    };
+  }
   if (action === "answer") {
-    if (!run || run.status !== "waiting" || !flow || flow.status !== "waiting")
+    if (
+      !run ||
+      run.plugin.kind !== "clarify" ||
+      run.status !== "waiting" ||
+      !flow ||
+      flow.status !== "waiting"
+    )
       throw new HttpError(400, "当前没有等待回答的问题");
     const answer = str(body.content);
     if (!answer.trim()) throw new HttpError(400, "请填写回答");
@@ -913,6 +961,8 @@ export async function pluginEndpoint(
     if (!flow || !["waiting", "error"].includes(flow.status))
       throw new HttpError(400, "没有待继续的插件流程");
     const last = state.value.runs.find((r) => r.id === flow.results.at(-1));
+    if (run && run.id !== last?.id)
+      throw new HttpError(409, "插件阶段已变化，请刷新后重试");
     if (last) last.status = "skipped";
     for (const other of state.value.runs)
       if (

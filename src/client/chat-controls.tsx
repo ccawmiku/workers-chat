@@ -4,6 +4,7 @@ import {
   type Message,
   type Provider,
   cacheHitRate,
+  formatTokenCount,
 } from "../shared/chat";
 import { api } from "./api";
 import { IconButton, ParameterControl } from "./controls";
@@ -33,7 +34,7 @@ export function ModelControls({
   refresh: () => Promise<void>;
 }) {
   const connection = useDeviceConnection();
-  const [effort, setEffort] = useState("max"),
+  const [effort, setEffort] = useState("inherit"),
     [busy, setBusy] = useState(false),
     [result, setResult] = useState("");
   return (
@@ -388,7 +389,7 @@ export function MessageUsage({
         .map(([label, value]) => (
           <span key={label}>
             {" "}
-            · {label} {value.toLocaleString()}
+            · {label} {formatTokenCount(value)}
           </span>
         ))}
       {rows.some((r) => r[1] !== undefined) && <span> Token</span>}

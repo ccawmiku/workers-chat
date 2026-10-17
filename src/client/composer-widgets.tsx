@@ -7,7 +7,7 @@ import {
   Unplug,
   UserRound,
 } from "lucide-react";
-import type { Effort } from "../shared/chat";
+import { type Effort, formatTokenCount } from "../shared/chat";
 import { useDialogFocus } from "./controls";
 
 export function FloatingPanel({
@@ -104,9 +104,7 @@ export function FloatingPanel({
     : null;
 }
 
-function compact(value: number) {
-  return (value / 1000).toFixed(1) + "k";
-}
+const compact = formatTokenCount;
 
 export function ContextUsage({
   used,

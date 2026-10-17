@@ -566,7 +566,7 @@ async function api(request: Request, env: Env) {
     if (providerMatch[2] === "test" && method === "POST") {
       const model = p.models.find((m) => m.id === body.modelId);
       if (!model) throw new HttpError(400, "请选择服务商已有模型");
-      const effort = body.effort ?? "max";
+      const effort = body.effort ?? "inherit";
       if (
         !["inherit", "none", "low", "medium", "high", "max"].includes(
           String(effort),

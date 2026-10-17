@@ -111,6 +111,41 @@ for (const mobile of [false, true])
       saved.plugins.find((p: any) => p.id === "builtin-clarify"),
     ).toMatchObject({ highWater: 600000, lowWater: 250000 });
     await list
+      .getByRole("button", { name: "编辑插件 重新生成 user 提示", exact: true })
+      .click();
+    editor = page.getByRole("dialog", {
+      name: "全局 · 重新生成 user 提示",
+      exact: true,
+    });
+    await expect(
+      editor.getByLabel("插件任务提示词", { exact: true }),
+    ).toHaveValue("");
+    await expect(
+      editor.getByLabel("插件思考强度", { exact: true }),
+    ).toHaveValue("inherit");
+    await expect(
+      editor.getByLabel("开头 user（U0）", { exact: true }),
+    ).toHaveValue("好的");
+    await expect(
+      editor.getByLabel("高水位（k Token）", { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      editor.getByLabel("最近完整问答对数", { exact: true }),
+    ).toHaveCount(0);
+    await editor.getByLabel("开头 user（U0）", { exact: true }).fill("开始吧");
+    await editor.getByRole("button", { name: "保存", exact: true }).click();
+    await list
+      .getByRole("button", { name: "编辑插件 重新生成 user 提示", exact: true })
+      .click();
+    editor = page.getByRole("dialog", {
+      name: "全局 · 重新生成 user 提示",
+      exact: true,
+    });
+    await expect(
+      editor.getByLabel("开头 user（U0）", { exact: true }),
+    ).toHaveValue("开始吧");
+    await editor.getByRole("button", { name: "取消", exact: true }).click();
+    await list
       .getByRole("button", { name: "复制插件 JSON 分析", exact: true })
       .click();
     editor = page.getByRole("dialog", {

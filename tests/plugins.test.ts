@@ -12,11 +12,11 @@ import {
   emptyPluginState,
   injectPlugins,
   normalizePluginOutput,
-  shortenUser,
   upgradeLegacyPlugin,
   REWRITE_PROMPT,
   SUGGEST_PROMPT,
   extractRewritePrompt,
+  extractRewriteCandidates,
   definitions,
   enabledPlugins,
   flowClarifications,
@@ -225,77 +225,64 @@ describe("plugin context assembly", () => {
     }
     expect(Object.values(chat.messages)).toHaveLength(2);
   });
-  it("extracts rewrite JSON and rejects malformed, expanded and meta instruction results", () => {
+  it("validates three distinct rewrites without the removed hard length ceiling and reads saved legacy runs", () => {
     const p = pluginDefaults("rewrite");
-    expect(extractRewritePrompt('```json\n{"prompt":"继续。"}\n```')).toBe(
-      "继续。",
-    );
+    const rewrites = ["请继续。", "接着写下去。", "继续后面的内容。"];
     expect(
-      JSON.parse(normalizePluginOutput(p, '{"prompt":"继续。"}', "继续")),
-    ).toEqual({ prompt: "继续。" });
-    for (const text of [
-      '{"title":"继续"}',
-      '{"prompt":" "}',
-      "继续",
-      '{"prompt":"继续", "extra":true}',
+      JSON.parse(
+        normalizePluginOutput(p, JSON.stringify({ rewrites }), "继续"),
+      ),
+    ).toEqual({ rewrites });
+    expect(extractRewriteCandidates(JSON.stringify({ rewrites }))).toEqual(
+      rewrites,
+    );
+    expect(extractRewriteCandidates('{"prompt":"旧结果"}')).toEqual(["旧结果"]);
+    expect(extractRewritePrompt('{"prompt":"旧结果"}')).toBe("旧结果");
+    expect(JSON.parse(normalizePluginOutput({ ...p, initialUser: undefined }, '{"prompt":"旧结果"}'))).toEqual({ prompt: "旧结果" });
+    for (const value of [
+      { prompt: "继续" },
+      { rewrites: ["A", "A", "B"] },
+      { rewrites: ["A", " B ", "B"] },
+      { rewrites: ["A", "B", " "] },
+      { rewrites: ["A", "B"] },
     ])
-      expect(() => normalizePluginOutput(p, text, "继续")).toThrow();
-    expect(() =>
-      normalizePluginOutput(
-        p,
-        JSON.stringify({ prompt: "请继续并新增视角与节奏限制" }),
-        "继续",
-      ),
-    ).toThrow("长度");
-    expect(() =>
-      normalizePluginOutput(
-        p,
-        JSON.stringify({ prompt: "核心要求：继续" }),
-        "x".repeat(30),
-      ),
-    ).toThrow("任务说明");
+      expect(() => normalizePluginOutput(p, JSON.stringify(value))).toThrow();
   });
-  it("updates the built-in rewrite defaults and old labels while preserving customized settings and prompts", () => {
-    const legacy = {
+
+  it("defaults all efforts to inherit and migrates candidate labels and disabled waterlines", () => {
+    for (const kind of ["analysis", "clarify", "suggest", "rewrite"] as const)
+      expect(pluginDefaults(kind).effort).toBe("inherit");
+    expect(newChat().effort).toBe("inherit");
+    const old = {
       ...pluginDefaults("rewrite"),
+      initialUser: undefined,
       name: "请求重生",
-      cardTitle: "请求重生",
-      historyRounds: 5,
       highWater: 30000,
       lowWater: 10000,
+      prompt: "custom",
+      effort: "high" as const,
     };
-    expect(upgradeLegacyPlugin(legacy)).toMatchObject({
+    expect(upgradeLegacyPlugin(old)).toMatchObject({
       name: "重新生成 user 提示",
-      historyRounds: 50,
-      highWater: 200000,
-      lowWater: 100000,
-    });
-    expect(
-      upgradeLegacyPlugin({
-        ...legacy,
-        historyRounds: 12,
-        prompt: "my custom prompt",
-      }),
-    ).toMatchObject({
-      historyRounds: 12,
-      highWater: 30000,
-      prompt: "my custom prompt",
+      initialUser: "好的",
+      highWater: 0,
+      lowWater: 0,
+      prompt: "custom",
+      effort: "high",
     });
     expect(pluginDefaults("suggest")).toMatchObject({
-      historyRounds: 5,
-      highWater: 30000,
-      lowWater: 10000,
       prompt: SUGGEST_PROMPT,
+      highWater: 0,
+      lowWater: 0,
+      initialUser: "好的",
     });
     expect(pluginDefaults("rewrite").prompt).toBe(REWRITE_PROMPT);
   });
-  it("keeps the final historical reply for an empty preview and counts only complete recent pairs", () => {
+
+  it("keeps the historical reply in analysis previews and merges adjacent mapped roles without losing text", () => {
     const { chat, settings, state } = fixture();
-    for (let i = 0; i < 2; i++) {
-      addMessage(chat, "user", "U" + i);
-      addMessage(chat, "assistant", "A" + i);
-    }
-    const expected = contextMessages(chat, " ").slice(0, -1);
+    addMessage(chat, "user", "U1");
+    addMessage(chat, "assistant", "A1");
     const preview = preparePlugin(
       chat,
       pluginDefaults("analysis"),
@@ -304,33 +291,30 @@ describe("plugin context assembly", () => {
       state,
       "",
     );
-    expect(preview.request.messages.slice(0, -1)).toEqual(expected);
-    addMessage(chat, "user", "未完成的历史问题");
-    const p = pluginDefaults("rewrite");
-    p.historyRounds = 2;
-    const actual = preparePlugin(
+    expect(preview.request.messages.slice(0, -1)).toEqual(
+      contextMessages(chat),
+    );
+    addMessage(chat, "user", "U2");
+    addMessage(chat, "user", "U3");
+    const result = preparePlugin(
       chat,
-      p,
+      pluginDefaults("rewrite"),
       settings,
       [provider],
       state,
-      "新草稿",
-    );
-    const reference = JSON.parse(
-      actual.request.messages[1]!.content!,
-    ).reference_history;
-    expect(
-      reference.recent_pairs.filter(
-        (m: { role: string }) => m.role === "assistant",
-      ),
-    ).toHaveLength(2);
-    expect(
-      reference.user_archive.filter(
-        (m: { content: string }) => m.content === "未完成的历史问题",
-      ),
-    ).toHaveLength(1);
-    expect(actual.request.messages.at(-1)?.content).toBe("新草稿");
+      "草稿",
+    ).request.messages;
+    expect(result.map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(result[3]?.content).toBe("U2\n\nU3");
+    expect(result.at(-1)?.content).toContain("草稿");
   });
+
   it("keeps the main prefix byte-for-byte and changes only the final user", () => {
     const { chat, settings, state } = fixture();
     addMessage(chat, "user", "old");
@@ -350,7 +334,7 @@ describe("plugin context assembly", () => {
     expect(actual.request.messages.at(-1)?.content).toContain("new");
     expect(chat.messages[anchor!]?.content).toBe("reply");
     expect(actual.request.temperature).toBe(0.4);
-    expect(actual.request.reasoning_effort).toBe("max");
+    expect(actual.request).not.toHaveProperty("reasoning_effort");
   });
   it("selects complete recent rounds and keeps the paired old prompt after config edits", () => {
     const { chat, settings, state } = fixture();
@@ -435,71 +419,102 @@ describe("plugin context assembly", () => {
     expect(suffix).toContain("ANSWER7");
     expect(suffix).not.toContain("ANSWER0");
   });
-  it("separates the user archive, complete recent pairs, and the full rewrite draft", () => {
+  it("swaps full UA history for both candidates, leaves main system out, and appends the task to the latest mapped user", () => {
     const { chat, settings, state } = fixture();
-    for (let i = 0; i < 9; i++) {
-      addMessage(
+    const long = "🙂".repeat(10000);
+    addMessage(chat, "user", long);
+    addMessage(chat, "assistant", "A1");
+    const anchor = chat.currentId;
+    addMessage(chat, "user", "later branch content");
+    addMessage(chat, "assistant", "later answer");
+    chat.rounds = 1;
+    for (const kind of ["suggest", "rewrite"] as const) {
+      const p = {
+        ...pluginDefaults(kind),
+        historyRounds: 1,
+        highWater: 1,
+        lowWater: 0,
+        userHistoryCount: 1,
+      };
+      const result = preparePlugin(
         chat,
-        "user",
-        i === 8
-          ? "首".repeat(600) + "中".repeat(8000) + "尾".repeat(600)
-          : "U" + i,
+        p,
+        settings,
+        [provider],
+        state,
+        "草稿",
+        anchor,
       );
-      addMessage(chat, "assistant", "A" + i);
+      expect(result.request.messages.map((m) => m.role)).toEqual([
+        "user",
+        "assistant",
+        "user",
+      ]);
+      expect(result.request.messages[0]?.content).toBe("好的");
+      expect(result.request.messages[1]?.content).toBe(long);
+      expect(result.request.messages[2]?.content).toContain("A1\n\n");
+      expect(JSON.stringify(result.request.messages)).not.toMatch(
+        /Stable system|later branch content|中间删减/,
+      );
+      expect(result.request.response_format).toEqual({ type: "json_object" });
+      expect(result.request).not.toHaveProperty("reasoning_effort");
+      expect(result.metrics).toMatchObject({
+        trimmed: 0,
+        shortened: 0,
+        highWater: 0,
+        lowWater: 0,
+      });
+      expect(result.metrics.total).toBeGreaterThan(result.metrics.capacity / 4);
     }
-    const p = pluginDefaults("rewrite");
-    p.historyRounds = 5;
-    const draft = "原".repeat(10000),
-      result = preparePlugin(chat, p, settings, [provider], state, draft);
-    expect(result.request.messages.at(-1)).toEqual({
-      role: "user",
-      content: draft,
-    });
-    expect(result.metrics.shortened).toBe(1);
-    const history = JSON.parse(
-      result.request.messages[1]!.content!,
-    ).reference_history;
-    const messages = [...history.user_archive, ...history.recent_pairs] as {
-      role: string;
-      content: string;
-    }[];
-    for (let i = 0; i < 8; i++)
-      expect(messages.filter((m) => m.content === "U" + i)).toHaveLength(1);
-    expect(messages.filter((m) => m.role === "assistant")).toHaveLength(5);
-    expect(
-      messages.find((m) => m.content?.includes("中间删减了"))?.content?.length,
-    ).toBeLessThan(1100);
-    expect(result.request.messages.map((m) => m.role)).toEqual([
-      "system",
-      "user",
-      "user",
-    ]);
-    expect(result.request.messages[0]?.content).not.toContain("Stable system");
   });
-  it("trims only the old user archive to the low watermark", () => {
+
+  it("uses independent editable U0 and optional system with no context ceiling", () => {
     const { chat, settings, state } = fixture();
     for (let i = 0; i < 20; i++) {
-      addMessage(chat, "user", "user" + i + "中".repeat(300));
-      addMessage(chat, "assistant", "assistant" + i);
+      addMessage(chat, "user", "U" + i);
+      addMessage(chat, "assistant", "A" + i);
     }
-    const p = pluginDefaults("suggest");
-    p.highWater = 2000;
-    p.lowWater = 700;
+    const p = {
+      ...pluginDefaults("suggest"),
+      initialUser: "开始",
+      prompt: "custom system",
+      historyRounds: 1,
+      highWater: 1,
+      lowWater: 0,
+    };
     const result = preparePlugin(chat, p, settings, [provider], state, "");
-    expect(result.metrics.archive).toBeLessThanOrEqual(700);
-    expect(result.metrics.trimmed).toBeGreaterThan(0);
+    expect(result.request.messages[0]).toEqual({
+      role: "system",
+      content: "custom system",
+    });
+    expect(result.request.messages[1]).toEqual({
+      role: "user",
+      content: "开始",
+    });
     expect(
       result.request.messages.filter((m) => m.role === "assistant"),
-    ).toHaveLength(5);
-    expect(result.request.messages.at(-1)?.content).toBe("assistant19");
+    ).toHaveLength(20);
+    expect(result.request.messages.at(-1)?.content).toContain("A19");
+    expect(result.metrics.trimmed).toBe(0);
   });
-  it("shortens Unicode characters without breaking surrogate pairs", () => {
-    const text = "🙂".repeat(2001),
-      short = shortenUser(text);
-    expect(Array.from(short.split("\n")[0]!)).toHaveLength(500);
-    expect(Array.from(short.split("\n").at(-1)!)).toHaveLength(500);
-    expect(shortenUser("x".repeat(2000))).toHaveLength(2000);
+
+  it("supports first-message rewrite as a single final user with required U0 and the unmodified draft", () => {
+    const { chat, settings, state } = fixture();
+    const draft = "原".repeat(10000);
+    const result = preparePlugin(
+      chat,
+      pluginDefaults("rewrite"),
+      settings,
+      [provider],
+      state,
+      draft,
+    );
+    expect(result.request.messages).toHaveLength(1);
+    expect(result.request.messages[0]?.content).toContain(draft);
+    expect(result.request.messages[0]?.content).toMatch(/^好的\n\n/);
+    expect(result.request.messages[0]?.content).toContain('"rewrites"');
   });
+
   it("injects native tool pairs or user suffix without mutating stored messages", () => {
     const source = [{ role: "user" as const, content: "original" }],
       item = {

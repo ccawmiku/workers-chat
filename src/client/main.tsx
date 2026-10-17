@@ -1004,7 +1004,10 @@ function App() {
   );
   const waitingPlugin = pluginState.runs.findLast(
     (r) =>
-      r.flowId === pluginFlow?.id && r.status === "waiting" && !r.dismissed,
+      r.flowId === pluginFlow?.id &&
+      r.plugin.kind === "clarify" &&
+      r.status === "waiting" &&
+      !r.dismissed,
   );
   const rewriteResult = pluginState.runs.findLast(
     (r) =>
@@ -1913,9 +1916,11 @@ function App() {
                   ? `正在回答 ${waitingPlugin.plugin.name}`
                   : pluginFlow.status === "debug"
                     ? "调试完成，尚未生成正文"
-                    : pluginFlow.status === "error"
-                      ? "插件流程已暂停"
-                      : "插件正在运行"}
+                    : pluginFlow.status === "waiting"
+                      ? "请确认 JSON 分析结果"
+                      : pluginFlow.status === "error"
+                        ? "插件流程已暂停"
+                        : "插件正在运行"}
               </span>
               {pluginFlow.status === "debug" && (
                 <>
@@ -2106,7 +2111,7 @@ function App() {
                 </div>
                 <EffortControl
                   key={chat?.id ?? "new-chat"}
-                  value={chat?.effort ?? "max"}
+                  value={chat?.effort ?? "inherit"}
                   model={
                     selectedModel
                       ? selectedModel.provider.prefix + selectedModel.id

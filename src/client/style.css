@@ -6,8 +6,8 @@
   themes: false;
   prefix: "du-";
   include:
-    button, input, select, textarea, toggle, checkbox, range, card, badge,
-    avatar, menu, tabs, collapse, alert, loading, table, fieldset, modal,
+    button, input, select, textarea, toggle, checkbox, radio, range, card,
+    badge, avatar, menu, tabs, collapse, alert, loading, table, fieldset, modal,
     progress, stat, list, dropdown;
   logs: false;
 }
@@ -3225,4 +3225,29 @@ main {
   .plugin-picker-row .icon-button {
     padding: 4px;
   }
+}
+
+.rewrite-candidates {
+  gap: 8px;
+  margin-block: 12px;
+}
+.rewrite-candidate {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line-color);
+  cursor: pointer;
+}
+.rewrite-candidate:has(input:checked) {
+  border-color: var(--accent);
+}
+.rewrite-candidate input {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.rewrite-candidate span {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

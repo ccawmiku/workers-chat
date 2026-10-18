@@ -18,7 +18,7 @@ for (const mobile of [false, true])
       ),
     );
     const errors: string[] = [];
-    page.on("pageerror", (e) => errors.push(e.message));
+    page.on("pageerror", (e) => errors.push(e.stack || e.message));
     await page.goto("/");
     await page.getByLabel("访问密码", { exact: true }).fill(password);
     await page.getByRole("button", { name: "登录", exact: true }).click();

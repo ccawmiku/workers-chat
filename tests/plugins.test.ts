@@ -1,6 +1,6 @@
+import { replyFallback as candidateReplyExcerpt } from "../src/shared/reply-context";
 import { describe, it, expect } from "vitest";
 import {
-  candidateReplyExcerpt,
   candidateTask,
   swappedHistory,
 } from "../src/shared/candidate-requests";
@@ -245,7 +245,7 @@ describe("plugin context assembly", () => {
   it("temporarily excerpts each original assistant reply before merging, preserving user instructions and source history", () => {
     const { chat, settings, state } = fixture();
     const user = "令".repeat(2000),
-      reply = "🙂".repeat(201) + "END_REPLY";
+      reply = "🙂".repeat(301) + "END_REPLY";
     addMessage(chat, "user", user);
     addMessage(chat, "assistant", reply);
     addMessage(chat, "assistant", "文".repeat(300) + "SECOND_END");
@@ -261,7 +261,7 @@ describe("plugin context assembly", () => {
       );
       expect(request.request.messages[1]?.content).toBe(user);
       const tail = request.request.messages.at(-1)?.content ?? "";
-      expect(tail).toContain("🙂".repeat(200) + "\n\n" + "文".repeat(200));
+      expect(tail).toContain("🙂".repeat(300) + "\n\n" + "文".repeat(300));
       expect(tail).not.toMatch(/END_REPLY|SECOND_END/);
       expect(request.metrics.shortened).toBe(2);
       if (kind === "rewrite") expect(tail).toContain("DRAFT".repeat(100));
@@ -274,19 +274,16 @@ describe("plugin context assembly", () => {
     expect(task).not.toMatch(/写作助手|模仿历史|assistant/);
   });
 
-  it("caps replies at 200 Unicode code points without cutting surrogate pairs or limiting the task, system or U0", () => {
-    expect(candidateReplyExcerpt("中".repeat(200))).toBe("中".repeat(200));
-    expect(candidateReplyExcerpt("中".repeat(201))).toBe("中".repeat(200));
-    expect(candidateReplyExcerpt("A".repeat(199) + "🙂B")).toBe(
-      "A".repeat(199) + "🙂",
-    );
+  it("caps missing-summary replies at 300 Unicode characters without limiting U0, system or user instructions", () => {
+    expect(candidateReplyExcerpt("中".repeat(300))).toBe("中".repeat(300));
+    expect(candidateReplyExcerpt("中".repeat(301))).toBe("中".repeat(300));
+    expect(candidateReplyExcerpt("A".repeat(299) + "🙂B")).toBe("A".repeat(299) + "🙂");
     const { chat } = fixture();
-    addMessage(chat, "assistant", "🙂".repeat(201));
-    const system = "S".repeat(300),
-      u0 = "U".repeat(300);
+    addMessage(chat, "assistant", "🙂".repeat(301));
+    const system = "S".repeat(500), u0 = "U".repeat(500);
     expect(swappedHistory(Object.values(chat.messages), u0, system)).toEqual([
       { role: "system", content: system },
-      { role: "user", content: u0 + "\n\n" + "🙂".repeat(200) },
+      { role: "user", content: u0 + "\n\n" + "🙂".repeat(300) },
     ]);
   });
 

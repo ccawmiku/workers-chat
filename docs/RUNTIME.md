@@ -41,3 +41,12 @@
 ## 设备直连（2026-10-16）
 
 设备模式不启动生成 Workflow；Worker 只建立任务和无密钥请求描述，浏览器临时解锁 Key 后直接通过 HTTPS/CORS 调用上游。每约 2 秒更新 DO 检查点，最终正文与任务状态仍原子保存至 D1。生成 90 秒无心跳在状态读取时转为中断，不重放上游请求。关闭页面不保证继续生成，原服务端模式继续承担该能力。标题也使用原子 claim 和 attempted 防止刷新重复调用。模型列表和连通性测试在直连开关开启时同样由浏览器发出。CSP 允许 HTTPS 连接，fetch 仍拒绝 HTTP、URL 凭证、重定向，并不携带站点 Cookie。
+
+
+## 2026-10-18 DO 驻留优化
+
+重新使用官方 Workers、Durable Objects（含 rules/testing）与 cf-cli skills，核对 [DO 生命周期](https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/)：未清理的计时器会阻止休眠，并可能让对象闲置驻留至 15 分钟。已完成任务不能仅丢弃 AbortSignal.timeout 的引用来假定超时已取消。
+
+原主回复/插件/摘要使用 AbortSignal.any + 30 分钟 AbortSignal.timeout；改为共用 generationDeadline：显式计时器驱动原取消控制器，成功/失败/停止的 finally 均 clearTimeout、移除监听器并中止遗留上游 I/O。标题同样清理 120 秒超时。保留任务运行中的超时、2 秒流式检查点、独立 Workflow/DO 后台执行及 attempted 防重放；不增加轮询、自动重试或模型请求。单测检查三条退出路径、超时边界和已取消控制器不残留计时器，workerd 集成继续验证 >30 秒后台保存和停止。
+
+历史分析：北京时间 10 月 17 日 08:00 至 18 日 08:00，DO 总时长约 14,620.54 GB·s，CPU 仅约 7.80 秒；112 个对象集中驻留 900–910 秒。超过 15 分钟的对象占约 89.8% 时长，优先排查计时器而非请求量或数据库写入。统计是问题窗口实测；未来节省量仍需用发布后的同负载时长验证，不能把历史占比直接当作已实现节省率。

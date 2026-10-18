@@ -24,6 +24,7 @@ import {
   type SummaryState,
   type SummaryRun,
   defaultSummaryConfig,
+  upgradeSummaryConfig,
   summaryConfig,
   summarySourceKey,
   prepareSummary,
@@ -227,7 +228,7 @@ export function GlobalSummarySettings({
       </div>
       {open && (
         <SummaryEditor
-          value={{ ...defaultSummaryConfig(), ...settings.replySummary }}
+          value={{ ...defaultSummaryConfig(), ...upgradeSummaryConfig(settings.replySummary ?? {}) }}
           providers={providers}
           close={() => setOpen(false)}
           save={async (replySummary) => save({ ...settings, replySummary })}
@@ -240,7 +241,6 @@ function Usage({ run }: { run: SummaryRun }) {
   return (
     <div className="plugin-usage">
       <MessageUsage
-        showBar
         message={{
           id: run.id,
           parentId: null,
@@ -611,9 +611,10 @@ export function SummaryContextChip({
               : undefined
           }
         />
-        {cacheHitRate(run?.usage?.cache_hit_rate) && (
-          <small>缓存 {cacheHitRate(run?.usage?.cache_hit_rate)}</small>
-        )}
+        <small className="plugin-chip-cache">
+          {cacheHitRate(run?.usage?.cache_hit_rate)
+            ? `缓存 ${cacheHitRate(run?.usage?.cache_hit_rate)}` : "\u00a0"}
+        </small>
       </button>
       {open && (
         <Dialog title="回复摘要 · 上下文" close={() => setOpen(false)} wide>
@@ -679,7 +680,7 @@ export function ConfirmPostSend({
   return (
     <Dialog title="仍有摘要或追问正在生成" close={cancel}>
       <p>
-        继续发送下一条消息？原任务会继续，结果仍显示在原回复下；缺摘要时本次请求使用原回复全文。
+        继续发送下一条消息？原任务会继续，结果仍显示在原回复下；缺摘要时本次请求使用原回复前 300 字。
       </p>
       <footer>
         <button className="du-btn du-btn-ghost" onClick={cancel}>

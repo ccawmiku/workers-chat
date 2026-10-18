@@ -16,7 +16,6 @@ import {
   Copy,
   Trash2,
   X,
-  Play,
   RotateCcw,
   Check,
   SkipForward,
@@ -283,7 +282,7 @@ export function PluginEditor({
             <>
               <div className="du-alert" role="note">
                 历史 UA 对调，保留当前分支全部文字，不继承主聊天
-                system。此处留空则不发送 system；末尾自动附加简短任务与 JSON
+                system。原回复优先使用摘要，缺失时取前 300 字。此处留空则不发送 system；末尾自动附加简短任务与 JSON
                 格式要求。
               </div>
               <label>
@@ -1064,16 +1063,10 @@ export function PluginBar({
                       : undefined
                   }
                 />
-                {cacheHitRate(usageRun?.usage?.cache_hit_rate) && (
-                  <small>
-                    缓存 {cacheHitRate(usageRun?.usage?.cache_hit_rate)}
-                  </small>
-                )}
-                {metrics && metrics.shortened > 0 && (
-                  <small>
-                    {metrics.shortened ? `截 ${metrics.shortened} 条` : ""}
-                  </small>
-                )}
+                <small className="plugin-chip-cache">
+                  {cacheHitRate(usageRun?.usage?.cache_hit_rate)
+                    ? `缓存 ${cacheHitRate(usageRun?.usage?.cache_hit_rate)}` : "\u00a0"}
+                </small>
               </button>
             );
           })}
@@ -1132,21 +1125,6 @@ export function PluginBar({
                         {merged.name}
                         <small>{pluginName(p.kind)}</small>
                       </span>
-                      {p.kind === "suggest" && binding?.enabled && (
-                        <IconButton
-                          label={"运行 " + p.name}
-                          disabled={busy}
-                          onClick={() => {
-                            setOpen(false);
-                            void command("suggest", {
-                              pluginId: p.id,
-                              content: draft,
-                            }).catch((e) => setError(e.message));
-                          }}
-                        >
-                          <Play size={14} />
-                        </IconButton>
-                      )}
                       <IconButton
                         label={"配置 " + p.name}
                         onClick={() => {

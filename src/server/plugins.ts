@@ -1,3 +1,4 @@
+import { generationDeadline } from "./deadline";
 import { summaryState } from "./summaries";
 import {
   type Chat,
@@ -734,14 +735,12 @@ export async function runPlugin(
     output: CompletionOutput = { content: "", reasoning: "" };
   let key = "",
     last = 0;
+  const disposeDeadline = generationDeadline(controller);
   try {
     key = task.provider.encryptedKey
       ? await decrypt(task.provider.encryptedKey, env.ENCRYPTION_KEY)
       : "";
-    const signal = AbortSignal.any([
-      controller.signal,
-      AbortSignal.timeout(30 * 60 * 1000),
-    ]);
+    const signal = controller.signal;
     const response = await fetch(task.provider.baseUrl + "/chat/completions", {
       method: "POST",
       redirect: "manual",
@@ -769,6 +768,8 @@ export async function runPlugin(
       progress.isCancelled() ? "stopped" : "error",
       redactError(error instanceof Error ? error.message : "插件调用失败", key),
     );
+  } finally {
+    disposeDeadline();
   }
   return { status: "plugin-complete" };
 }

@@ -15,6 +15,9 @@ import {
   summarySourceKeys,
   summaryFor,
   excerpt,
+  summaryConfig,
+  SUMMARY_PROMPT,
+  upgradeSummaryConfig,
   type SummaryState,
   type SummaryRun,
 } from "../src/shared/summaries";
@@ -124,7 +127,7 @@ describe("reply summaries", () => {
       text,
     );
     expect(
-      normalizeSummary(JSON.stringify({ summary: "中".repeat(50) })).warning,
+      normalizeSummary(JSON.stringify({ summary: "中".repeat(100) })).warning,
     ).toBeUndefined();
   });
   it("cold starts without examples, uses full current UA and an independent system/model/temperature", () => {
@@ -159,7 +162,7 @@ describe("reply summaries", () => {
       stream: false,
     });
   });
-  it("keeps historical U-to-summary mapping, never backfills old full A into the summarizer, and picks the latest valid example", () => {
+  it("keeps historical U-to-summary mapping, fills missing summaries with bounded A excerpts, and picks the latest valid example", () => {
     const { chat, settings, state } = fixture();
     const u1 = addMessage(
         chat,
@@ -183,7 +186,7 @@ describe("reply summaries", () => {
     expect(history[1]).toEqual({
       message_id: a2.id,
       user_excerpt: "U2",
-      summary: null,
+      assistant_excerpt: "MISSING_SUMMARY_OLD_A",
     });
     expect(history[0].user_excerpt).toBe(excerpt(u1.content, 500));
     expect(history[0].user_excerpt).not.toContain("MIDDLE_USER");
@@ -193,7 +196,7 @@ describe("reply summaries", () => {
       summary: "ACCEPTED_SUMMARY",
     });
     expect(tail.previous_example.assistant_excerpt).not.toContain("MIDDLE_A");
-    expect(JSON.stringify(p.request.messages)).not.toContain(
+    expect(JSON.stringify(p.request.messages)).toContain(
       "MISSING_SUMMARY_OLD_A",
     );
     expect(tail.current.assistant).toBe("CURRENT_FULL_A");
@@ -236,9 +239,52 @@ describe("reply summaries", () => {
     ).toThrow();
   });
 });
+describe("summary fallback across every plugin", () => {
+  it.each(["suggest", "rewrite", "clarify", "analysis"] as const)("%s sees valid summaries and the latest unsummarized answer", kind => {
+    const { chat, settings, state } = fixture();
+    addMessage(chat, "user", "first user");
+    const first = addMessage(chat, "assistant", "FIRST_FULL_BODY_MUST_NOT_LEAK");
+    state.runs.push(accepted(chat, first.id));
+    addMessage(chat, "user", "latest user");
+    const last = addMessage(chat, "assistant", "🙂".repeat(300) + "EXCLUDED_TAIL");
+    state.runs.push({ ...accepted(chat, last.id, "FAILED_SUMMARY"), status: "error" });
+    const p = { ...pluginDefaults(kind), rawRounds: 0 };
+    const result = preparePlugin(chat, p, settings, [provider], emptyPluginState(), "draft", chat.currentId, [], state);
+    const text = JSON.stringify(result.request.messages);
+    expect(text).toContain("ACCEPTED_SUMMARY");
+    expect(text).toContain("🙂".repeat(300));
+    expect(text).not.toMatch(/FIRST_FULL_BODY|EXCLUDED_TAIL|FAILED_SUMMARY/);
+    expect(result.metrics.missingSummaries).toBe(1);
+    // An invalidated accepted result must also fall back, never use stale text.
+    last.contentVersion = "edited";
+    state.runs.push({ ...accepted(chat, last.id, "STALE"), sourceKey: "wrong" });
+    expect(JSON.stringify(preparePlugin(chat, p, settings, [provider], emptyPluginState(), "draft", chat.currentId, [], state).request)).not.toContain("STALE");
+  });
+  it("keeps fallback history JSON distinct from real summary examples", () => {
+    const { chat, settings, state } = fixture();
+    addMessage(chat, "user", "u1");
+    addMessage(chat, "assistant", "🙂".repeat(301) + "LEAK");
+    addMessage(chat, "user", "u2");
+    const a = addMessage(chat, "assistant", "current full answer");
+    const messages = prepareSummary(chat, a.id, state, settings, [provider]).request.messages;
+    expect(JSON.parse(messages[1]!.content!).history[0]).toMatchObject({ assistant_excerpt: "🙂".repeat(300) });
+    expect(JSON.parse(messages.at(-1)!.content!)).not.toHaveProperty("previous_example");
+    expect(JSON.stringify(messages)).not.toContain("LEAK");
+  });
+  it("migrates only the exact old built-in summary prompt and keeps custom/blank settings", () => {
+    const old = SUMMARY_PROMPT.replaceAll("100–150", "50–100");
+    expect(upgradeSummaryConfig({ system: old }).system).toBe(SUMMARY_PROMPT);
+    for (const system of ["", "custom 50–100 字"]) expect(upgradeSummaryConfig({ system }).system).toBe(system);
+    const { chat, settings } = fixture(); settings.replySummary = { ...defaultSummaryConfig(), system: old };
+    expect(summaryConfig(chat, settings).system).toBe(SUMMARY_PROMPT);
+    chat.summaryOverrides = { system: "" }; expect(summaryConfig(chat, settings).system).toBe("");
+    for (const n of [100, 150]) expect(normalizeSummary(JSON.stringify({summary: "字".repeat(n)})).warning).toBeUndefined();
+    for (const n of [99, 151]) expect(normalizeSummary(JSON.stringify({summary: "字".repeat(n)})).warning).toContain("100–150");
+  });
+});
 describe("front plugin summary context", () => {
   it.each(["clarify", "analysis"] as const)(
-    "%s filters all main systems, keeps U + accepted S with full-A fallback, then appends N raw rounds",
+    "%s filters all main systems, keeps U + accepted S with 300-character fallback, then appends N raw rounds",
     (kind) => {
       const { chat, settings, state } = fixture();
       addMessage(chat, "system", "HISTORY_SYSTEM_FORBIDDEN");

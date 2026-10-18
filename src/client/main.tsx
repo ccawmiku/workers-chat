@@ -315,6 +315,7 @@ function App() {
     draftRef = useRef(""),
     scrollRef = useRef<HTMLDivElement>(null),
     stick = useRef(true),
+    scrollGesture = useRef({ upward: 0, time: 0, downward: false, touchY: 0, lastTop: 0 }),
     textarea = useRef<HTMLTextAreaElement>(null),
     fileRef = useRef<HTMLInputElement>(null),
     [pendingImport, setPendingImport] = useState<{
@@ -876,6 +877,19 @@ function App() {
     return () => document.removeEventListener("visibilitychange", activate);
   }, [auth]);
   const scrollIntent = useRef<{ id?: string; offset?: number } | null>(null);
+  function noteScrollGesture(delta: number) {
+    const gesture = scrollGesture.current, now = Date.now();
+    if (now - gesture.time > 700) gesture.upward = 0;
+    gesture.time = now;
+    gesture.downward = delta > 0;
+    if (delta >= 0) { gesture.upward = 0; return; }
+    gesture.upward += -delta;
+    if (gesture.upward >= 48) {
+      stick.current = false;
+      if (!scrollIntent.current?.id) scrollIntent.current = null;
+      setScrollBottom(true);
+    }
+  }
   function messageElement(id: string) {
     return scrollRef.current?.querySelector<HTMLElement>(
       '[data-message-id="' + CSS.escape(id) + '"]',
@@ -1692,10 +1706,32 @@ function App() {
         <div
           className="message-scroll"
           ref={scrollRef}
+          onWheel={(e) => noteScrollGesture(e.deltaY)}
+          onTouchStart={(e) => { scrollGesture.current.touchY = e.touches[0]?.clientY ?? 0; }}
+          onTouchMove={(e) => {
+            const y = e.touches[0]?.clientY;
+            if (y === undefined) return;
+            noteScrollGesture(scrollGesture.current.touchY - y);
+            scrollGesture.current.touchY = y;
+          }}
+          onKeyDown={(e) => {
+            if (["ArrowUp", "PageUp", "Home"].includes(e.key)) noteScrollGesture(-60);
+            if (["ArrowDown", "PageDown", "End"].includes(e.key)) noteScrollGesture(60);
+          }}
+          onPointerDown={(e) => { if (e.target === e.currentTarget) scrollGesture.current.downward = true; }}
           onScroll={() => {
             const el = scrollRef.current!;
-            stick.current =
-              el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+            const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+            const upward = scrollGesture.current.lastTop - el.scrollTop;
+            scrollGesture.current.lastTop = el.scrollTop;
+            if (upward > 0) noteScrollGesture(-upward);
+            // A small layout shift must never re-arm follow after an upward gesture.
+            if (distance > 100) stick.current = false;
+            else if (distance <= 4 && scrollGesture.current.downward) {
+              stick.current = true;
+              scrollGesture.current.downward = false;
+              scrollGesture.current.upward = 0;
+            }
             setScrollBottom(!stick.current);
           }}
         >
@@ -2054,10 +2090,10 @@ function App() {
               className="to-bottom"
               onClick={() => {
                 stick.current = true;
-                scrollRef.current?.scrollTo({
-                  top: scrollRef.current.scrollHeight,
-                  behavior: "smooth",
-                });
+                const container = scrollRef.current;
+                if (container) container.scrollTop = container.scrollHeight;
+                scrollGesture.current.upward = 0;
+                setScrollBottom(false);
               }}
             >
               <ArrowDown size={17} />

@@ -264,19 +264,12 @@ export function deleteMessage(chat: Chat, id: string): string[] {
 }
 export function forkChat(chat: Chat, id: string, titles: string[]): Chat {
   const copy = structuredClone({ ...chat, messages: {} }),
-    base = chat.title.replace(/ · 分支[A-Z]+$/u, "");
-  let n = 0,
-    title: string;
+    base = chat.title.replace(/ · 分支(?:[A-Z]+|\d+)$/u, "");
+  const taken = new Set(titles);
+  let n = 0, title: string;
   do {
-    let x = ++n,
-      suffix = "";
-    while (x) {
-      x--;
-      suffix = String.fromCharCode(65 + (x % 26)) + suffix;
-      x = Math.floor(x / 26);
-    }
-    title = `${base} · 分支${suffix}`;
-  } while (titles.includes(title));
+    title = `${base} · 分支${String(++n).padStart(2, "0")}`;
+  } while (taken.has(title));
   const path = route(chat, id),
     remap = new Map(path.map((m) => [m.id, uuid()]));
   copy.messages = Object.fromEntries(

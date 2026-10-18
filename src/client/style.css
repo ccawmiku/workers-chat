@@ -1759,6 +1759,10 @@ summary {
   --color-info: #80addb;
   --color-warning: #d9b36c;
   --color-success: #82b89c;
+  --color-warning-content: #29200e;
+  --color-error-content: #310b0b;
+  --color-info-content: #101f30;
+  --color-success-content: #102b1b;
   --radius-selector: 999px;
   --radius-field: 10px;
   --radius-box: 14px;
@@ -2724,20 +2728,21 @@ main {
 }
 .plugin-chip {
   flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: 18px 4px 4px 12px;
   align-items: stretch;
-  height: auto;
-  gap: 4px;
+  height: 60px;
+  min-height: 60px;
+  gap: 3px;
   min-width: 108px;
   max-width: 180px;
-  padding: 6px 9px;
+  padding: 5px 9px;
   border: 1px solid var(--line-color);
   border-radius: 9px;
   text-align: left;
   background: var(--panel);
 }
-.plugin-chip > span {
+.plugin-chip > span:first-child {
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -2758,7 +2763,8 @@ main {
   display: block;
   color: var(--muted);
   font-size: 10px;
-  margin-top: 3px;
+  margin: 0;
+  line-height: 12px;
 }
 .plugin-chip.over-budget {
   border-color: var(--danger);
@@ -3371,6 +3377,7 @@ main {
   height: 100%;
   border: 0;
   border-radius: 0;
+  background: currentColor;
 }
 .usage-stack .usage-input {
   color: #60a5fa;
@@ -3384,9 +3391,11 @@ main {
 .usage-segment::-webkit-progress-value,
 .usage-segment::-webkit-progress-bar {
   border-radius: 0;
+  transition: none;
 }
 .usage-segment::-moz-progress-bar {
   border-radius: 0;
+  transition: none;
 }
 .message-meta > .usage-stack {
   flex-basis: 100%;
@@ -3394,7 +3403,7 @@ main {
   margin-block: 6px;
 }
 .plugin-chip .usage-stack {
-  margin-top: 4px;
+  margin: 0;
 }
 .plugin-chip > small {
   white-space: nowrap;
@@ -3528,17 +3537,29 @@ main {
   margin: 0;
   cursor: pointer;
 }
-.color-value input[type="color"],
-.custom-color input[type="color"] {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  background: none;
-  border-radius: 50%;
-  overflow: hidden;
-  cursor: pointer;
+.color-control { position: relative; }
+.color-control > .color-value { min-height: 30px; height: 30px; }
+.color-control .color-swatch { width: 16px; height: 16px; aspect-ratio: 1; flex: 0 0 16px; }
+.color-popover {
+  z-index: 30;
+  width: 250px;
+  padding: 10px;
+  margin-top: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line-color);
+  box-shadow: 0 8px 24px #0003;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
+.color-popover .react-colorful { width: 228px; height: 220px; flex: none; }
+.color-popover .react-colorful__hue { height: 20px; }
+.color-popover > .du-input { width: 100%; }
+.accent-options li:has(.color-control) { display: block; }
+.accent-options .color-control { margin: 0 8px 8px; }
+.du-alert-warning, .du-alert-warning :is(p, small, .muted) { color: var(--color-warning-content); }
+.du-alert-error, .du-alert-error :is(p, small, .muted) { color: var(--color-error-content); }
 .color-value input::-webkit-color-swatch-wrapper,
 .custom-color input::-webkit-color-swatch-wrapper {
   padding: 0;

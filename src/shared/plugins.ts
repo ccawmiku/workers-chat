@@ -1,9 +1,8 @@
+import { replyFallback, REPLY_FALLBACK_CHAR_LIMIT } from "./reply-context";
 import { CLARIFY_PROMPT } from "./clarify-defaults";
 import {
   candidateTask,
   swappedHistory,
-  candidateReplyExcerpt,
-  CANDIDATE_REPLY_CHAR_LIMIT,
 } from "./candidate-requests";
 import { readPluginJSON } from "./plugin-json";
 import { upgradeLegacyPlugin } from "./plugin-migrations";
@@ -383,16 +382,19 @@ export function preparePlugin(
     const history: APIMessage[] = cleanPath.map((m) => {
       if (m.role === "user") return { role: "user", content: m.content };
       const saved = savedSummaries.get(m.id);
-      if (!saved) metrics.missingSummaries++;
+      if (!saved) {
+        metrics.missingSummaries++;
+        if (replyFallback(m.content) !== m.content) metrics.shortened++;
+      }
       return {
         role: "assistant",
         content: saved
           ? JSON.stringify({ message_id: m.id, summary: saved.summary })
-          : m.content,
+          : replyFallback(m.content),
       };
     });
     messages.push(...history);
-    section("历史 U 与 A 摘要（缺失回退原文）", history);
+    section("历史 U 与 A 摘要（缺失回退前 300 字）", history);
     if (p.rawRounds > 0) {
       const rounds: (typeof cleanPath)[] = [];
       for (const m of cleanPath) {
@@ -473,18 +475,20 @@ export function preparePlugin(
     messages.push({ role: "user", content: suffix });
     section("插件任务与参考", messages.slice(-1));
   } else {
-    metrics.shortened = path.filter(
-      (m) =>
-        m.role === "assistant" &&
-        candidateReplyExcerpt(m.content) !== m.content,
-    ).length;
+    const savedSummaries = summaryIndex(chat, summaries, path);
+    for (const m of path) {
+      if (m.role !== "assistant" || savedSummaries.has(m.id)) continue;
+      metrics.missingSummaries++;
+      if (replyFallback(m.content) !== m.content) metrics.shortened++;
+    }
     messages = swappedHistory(
       path,
       p.initialUser ?? "好的",
       render(p.prompt, { COUNT: String(p.suggestions), USER_INPUT: input }),
+      savedSummaries,
     );
     section(
-      `UA 对调历史（回复前 ${CANDIDATE_REPLY_CHAR_LIMIT} 字符，含 U0）`,
+      `UA 对调历史（有效摘要，缺失取回复前 ${REPLY_FALLBACK_CHAR_LIMIT} 字符，含 U0）`,
       messages,
     );
     const task = candidateTask(p.kind, p.suggestions, input);

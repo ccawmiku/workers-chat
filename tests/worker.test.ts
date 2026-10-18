@@ -192,7 +192,7 @@ beforeAll(async () => {
               }
               if (
                 messages.some((m) =>
-                  m.content?.includes("本轮回复提炼为 50–100 字"),
+                  m.content?.includes("本轮回复提炼为 100–150 字"),
                 )
               ) {
                 summaryCalls.push(payload);

@@ -9,12 +9,7 @@ import { readPluginJSON } from "./plugin-json";
 import { upgradeLegacyPlugin } from "./plugin-migrations";
 export { upgradeLegacyPlugin } from "./plugin-migrations";
 import { summaryIndex, type SummaryState } from "./summaries";
-import {
-  ANALYSIS_PROMPT,
-  ANALYSIS_SCHEMA,
-  LEGACY_ANALYSIS_PROMPT,
-  LEGACY_ANALYSIS_SCHEMA,
-} from "./analysis-defaults";
+import { ANALYSIS_PROMPT, ANALYSIS_SCHEMA } from "./analysis-defaults";
 import {
   type Chat,
   type ModelRef,
@@ -22,7 +17,6 @@ import {
   type Effort,
   type Provider,
   type Settings,
-  contextMessages,
   route,
   estimateTokens,
 } from "./chat";
@@ -235,11 +229,7 @@ export function enabledPlugins(chat: Chat, settings: Settings) {
   );
 }
 export { readPluginJSON } from "./plugin-json";
-export function normalizePluginOutput(
-  p: PluginDefinition,
-  text: string,
-  input?: string,
-) {
+export function normalizePluginOutput(p: PluginDefinition, text: string) {
   if (!text.trim()) throw Error("插件返回内容为空");
   if (p.kind === "analysis")
     return JSON.stringify(readPluginJSON(text, p.schema), null, 2);

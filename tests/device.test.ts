@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   newChat,
   addMessage,
@@ -124,6 +124,74 @@ describe("direct transport and templates", () => {
       () => {},
     );
     expect(output.content).toBe("开头完整结尾✓");
+  });
+  it("bounds combined UTF-8 answer and reasoning while retaining the received partial", async () => {
+    const encoder = new TextEncoder(),
+      output: CompletionOutput = {
+        content: "continuation seed",
+        reasoning: "",
+      };
+    const content = "文".repeat(100000);
+    const stream = new ReadableStream({
+      start(c) {
+        for (let i = 0; i < 30; i++)
+          c.enqueue(
+            encoder.encode(
+              "data: " +
+                JSON.stringify({
+                  choices: [
+                    {
+                      delta:
+                        i % 2 ? { content } : { reasoning_content: content },
+                    },
+                  ],
+                }) +
+                "\n\n",
+            ),
+          );
+        c.close();
+      },
+    });
+    await expect(
+      readCompletion(
+        new Response(stream),
+        true,
+        new AbortController().signal,
+        output,
+        () => {},
+      ),
+    ).rejects.toThrow("文字超过安全上限");
+    const size = encoder.encode(output.content + output.reasoning).byteLength;
+    expect(size).toBeGreaterThan(7 * 1024 * 1024);
+    expect(size).toBeLessThanOrEqual(8 * 1024 * 1024);
+  });
+  it("keeps a quiet upstream alive with one outstanding read and cancels its heartbeat", async () => {
+    vi.useFakeTimers();
+    try {
+      const pull = vi.fn(),
+        cancel = vi.fn(),
+        update = vi.fn(),
+        controller = new AbortController();
+      const output: CompletionOutput = { content: "", reasoning: "" };
+      const pending = readCompletion(
+        new Response(new ReadableStream({ pull, cancel })),
+        true,
+        controller.signal,
+        output,
+        update,
+        20,
+      ).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(65);
+      expect(pull).toHaveBeenCalledTimes(1);
+      expect(update).toHaveBeenCalledTimes(3);
+      controller.abort();
+      expect(await pending).toBeInstanceOf(DOMException);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(update).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

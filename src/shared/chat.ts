@@ -1,4 +1,5 @@
 import type { SummaryConfig } from "./summaries";
+export const MODEL_ID_MAX_LENGTH = 1000;
 import { DEFAULT_TITLE_PROMPT } from "./default-title-prompt";
 import type { PluginBinding, PluginDefinition } from "./plugins";
 export type Role = "user" | "assistant" | "system";

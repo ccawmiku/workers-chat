@@ -10,7 +10,12 @@ import {
   SummaryTools,
   ConfirmPostSend,
 } from "./summaries-ui";
-import type { SummaryState, PostJobView } from "../shared/summaries";
+import {
+  summarySourceKeys,
+  type SummaryState,
+  type SummaryRun,
+  type PostJobView,
+} from "../shared/summaries";
 import React, {
   useCallback,
   useEffect,
@@ -76,7 +81,6 @@ import {
   type Message,
   type Provider,
   type Settings,
-  type ModelRef,
   route,
   indexChildren,
   markdownExport,
@@ -808,7 +812,7 @@ function App() {
       () => {
         const latest = latestSync.current;
         void latest.run(async () => {
-          await latest.refresh();
+          await latest.refresh(id, true);
           await latest.loadNavigation();
         }, false);
       },
@@ -824,6 +828,7 @@ function App() {
       !["pending", "running"].includes(titleJob.status)
     )
       return;
+    const id = chat?.id;
     return observeJob(
       titleJob.id,
       true,
@@ -831,7 +836,7 @@ function App() {
       () => {
         const latest = latestSync.current;
         void latest.run(async () => {
-          await latest.refresh();
+          await latest.refresh(id, true);
           await latest.loadNavigation();
         }, false);
       },
@@ -1093,25 +1098,26 @@ function App() {
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
-  const path = useMemo(() => (chat ? route(chat) : []), [chat]);
+  const path = useMemo(
+    () => (chat ? route(chat) : []),
+    [chat?.messages, chat?.currentId],
+  );
+  const summaryKeys = useMemo(() => summarySourceKeys(path), [path]);
+  const summaryRuns = useMemo(() => {
+    const grouped = new Map<string, SummaryRun[]>();
+    for (const run of summaryState.runs) {
+      const rows = grouped.get(run.messageId);
+      if (rows) rows.push(run);
+      else grouped.set(run.messageId, [run]);
+    }
+    return grouped;
+  }, [summaryState.runs]);
   const byParent = useMemo(
     () => (chat ? indexChildren(chat) : new Map<string | null, Message[]>()),
     [chat?.messages],
   );
-  const depths = useMemo(() => {
-    const result = new Map<string, number>(),
-      pending = (byParent.get(null) ?? []).map((m) => ({ id: m.id, depth: 1 }));
-    while (pending.length) {
-      const next = pending.pop()!;
-      if (result.has(next.id)) continue;
-      result.set(next.id, next.depth);
-      for (const child of byParent.get(next.id) ?? [])
-        pending.push({ id: child.id, depth: next.depth + 1 });
-    }
-    return result;
-  }, [byParent]);
   const pathIds = new Set(path.map((m) => m.id)),
-    lastAssistant = path.filter((m) => m.role === "assistant").at(-1)?.id;
+    lastAssistant = path.findLast((m) => m.role === "assistant")?.id;
   const estimate = estimateTokens(
       chat
         ? contextMessages(chat, draft)
@@ -1713,7 +1719,7 @@ function App() {
             </div>
           ) : (
             <div className="messages">
-              {path.map((m, index) => {
+              {path.map((m) => {
                 const siblings = chat
                     ? (byParent.get(m.parentId) ?? []).filter(
                         (s) => s.role === m.role,
@@ -2008,7 +2014,8 @@ function App() {
                           <ReplySummaryCard
                             chat={chat!}
                             messageId={m.id}
-                            state={summaryState}
+                            sourceKey={summaryKeys.get(m.id) ?? ""}
+                            runs={summaryRuns.get(m.id) ?? []}
                             latest={m.id === lastAssistant}
                             command={summaryCommand}
                           />

@@ -5,7 +5,7 @@
 - 先读 `SPEC.md`、`docs/ACCEPTANCE.md`、`docs/CLOUD_HANDOFF.md`，查看 `references/` 的实际图像。
 - 用户最新明确指令优先。`docs/DECISIONS.md` 是历史原题/决策索引，未选方案不能作为已确认需求实现。
 - 1—131 项功能已经确认。普通工程决策自行承担，不重复进行几十项产品问答；确有冲突时先收集证据，完成不依赖答案的工作。
-- 用户已确认：仓库 `workers-chat`、网页“在线AI”，按本次需求独立实现。当前已有应用代码，接续以 `docs/PROGRESS.md` 和 `codex/implement-workers-chat` 分支为准，不覆盖已有实现；原电脑的另一套 app 不作为基线。
+- 用户已确认：仓库 `workers-chat`、网页“在线AI”，按本次需求独立实现。当前已有应用代码，接续先重新获取远端默认分支、最新提交及未合并 PR，记录基线 SHA，再读取最新版 `docs/PROGRESS.md`；早期 `codex/implement-workers-chat` 分支不是永久基线，不覆盖已有实现；原电脑的另一套 app 不作为基线。
 - 用户准备自行发起云端任务；本次创建仓库没有自动启动任何云端任务。
 
 ## Cloudflare 官方 skills（必读）

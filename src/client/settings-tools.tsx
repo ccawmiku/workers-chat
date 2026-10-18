@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect } from "react";
 import { Eye, X } from "lucide-react";
 import type { Provider, Settings } from "../shared/chat";
 import type { SettingsBackup } from "../shared/backup";

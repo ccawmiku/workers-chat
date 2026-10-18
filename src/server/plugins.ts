@@ -23,10 +23,10 @@ import {
   flowClarifications,
 } from "../shared/plugins";
 import { type Document, Store, HttpError, summary } from "./store";
-import { type Job, startGeneration, generationStart } from "./generation";
+import { type Job, startGeneration } from "./generation";
 import { readCompletion, type CompletionOutput } from "../shared/completion";
 import { decrypt, redactError, digest } from "./security";
-import { obj, str } from "./validation";
+import { str } from "./validation";
 import { validatedBindings } from "./plugin-validation";
 
 export type PluginTask = {
@@ -93,8 +93,7 @@ async function saveState(
         }[];
         for (const row of wanted[key]) {
           const before = base[key].find((r) => r.id === row.id) as
-            | Record<string, unknown>
-            | undefined;
+            Record<string, unknown> | undefined;
           const target = rows.find((r) => r.id === row.id);
           if (!before) {
             if (!target) rows.push(structuredClone(row));
@@ -616,7 +615,7 @@ async function finishPluginOnce(
   let text = output.content;
   if (status === "complete")
     try {
-      text = normalizePluginOutput(run.plugin, text, run.input);
+      text = normalizePluginOutput(run.plugin, text);
     } catch (e) {
       status = "error";
       failure = e instanceof Error ? e.message : "插件结果格式错误";

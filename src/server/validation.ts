@@ -1,6 +1,6 @@
 import { validatedSummaryConfig } from "./summaries";
 import type { Chat, ModelRef, Settings, Provider } from "../shared/chat";
-import { defaultSettings } from "../shared/chat";
+import { defaultSettings, MODEL_ID_MAX_LENGTH } from "../shared/chat";
 import { HttpError } from "./store";
 import { upstreamUrl } from "./security";
 import { validatedPlugins } from "./plugin-validation";
@@ -38,7 +38,10 @@ export function parameters(v: unknown) {
 export function modelRef(v: unknown): ModelRef | null {
   if (v === null || v === undefined) return null;
   const r = obj(v);
-  return { providerId: str(r.providerId, 128), modelId: str(r.modelId, 500) };
+  return {
+    providerId: str(r.providerId, 128),
+    modelId: str(r.modelId, MODEL_ID_MAX_LENGTH),
+  };
 }
 export function validatedSettings(v: unknown): Settings {
   const input = { ...defaultSettings(), ...obj(v) };
@@ -72,7 +75,7 @@ export function validatedProvider(
   const ids = new Set<string>();
   const models = p.models.map((v) => {
     const m = obj(v),
-      id = str(m.id, 500);
+      id = str(m.id, MODEL_ID_MAX_LENGTH);
     if (!id || ids.has(id)) throw new HttpError(400, "模型 ID 为空或重复");
     ids.add(id);
     if (

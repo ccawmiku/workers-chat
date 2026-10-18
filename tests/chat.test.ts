@@ -147,8 +147,8 @@ describe("message tree", () => {
   });
   it("keeps same model IDs distinct across providers and sends raw IDs even when disabled", () => {
     const chat = newChat({ providerId: "two", modelId: "same-model" });
-    const u = addMessage(chat, "user", "hi"),
-      a = addMessage(chat, "assistant", "body");
+    addMessage(chat, "user", "hi");
+    const a = addMessage(chat, "assistant", "body");
     a.reasoning = "do not resend";
     a.excluded = true;
     const settings = defaultSettings();

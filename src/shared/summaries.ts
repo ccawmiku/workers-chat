@@ -72,9 +72,10 @@ export type PostJobView = {
 
 // A version fingerprint for source matching, never an authentication or security token.
 export function summarySourceKey(chat: Chat, messageId: string): string {
-  return sourceKeys(route(chat, messageId)).get(messageId) ?? "";
+  return summarySourceKeys(route(chat, messageId)).get(messageId) ?? "";
 }
-function sourceKeys(path: ReturnType<typeof route>) {
+/** Build every prefix fingerprint once for a selected route. */
+export function summarySourceKeys(path: ReturnType<typeof route>) {
   let a = 2166136261,
     b = 5381;
   const keys = new Map<string, string>();
@@ -97,7 +98,7 @@ export function summaryIndex(
   state: SummaryState,
   path = route(chat),
 ) {
-  const keys = sourceKeys(path),
+  const keys = summarySourceKeys(path),
     index = new Map<string, SummaryRun>();
   for (const r of state.runs)
     if (

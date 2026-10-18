@@ -13,6 +13,7 @@ import {
   type SummaryConfig,
   summarySourceKey,
   summaryFor,
+  summaryIndex,
   prepareSummary,
   normalizeSummary,
   defaultSummaryConfig,
@@ -435,14 +436,16 @@ export async function summaryEndpoint(
   }
   if (action === "backfill") {
     // One persisted chain; each completion schedules at most the next missing item.
-    const ids = route(chat)
-      .filter(
-        (m) =>
-          m.role === "assistant" &&
-          m.status === "complete" &&
-          !summaryFor(chat, state.value, m.id),
-      )
-      .map((m) => m.id);
+    const path = route(chat),
+      accepted = summaryIndex(chat, state.value, path),
+      ids = path
+        .filter(
+          (m) =>
+            m.role === "assistant" &&
+            m.status === "complete" &&
+            !accepted.has(m.id),
+        )
+        .map((m) => m.id);
     const id = "summary-backfill:" + chat.id,
       old = await store.get<Backfill>(id);
     if (old?.value.activeId || old?.value.ids.length)

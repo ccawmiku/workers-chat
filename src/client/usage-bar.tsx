@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import { useMemo } from "react";
 import { formatTokenCount, estimateTokens, type Message } from "../shared/chat";
 import { tokenBreakdown, type TokenBreakdown } from "../shared/usage";
 export function MessageTokenBar({ message: m }: { message: Message }) {

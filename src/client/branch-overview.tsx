@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { mount, unmount } from "svelte";
 import { writable } from "svelte/store";
 import Bridge from "../vendor/open-webui/Bridge.svelte";

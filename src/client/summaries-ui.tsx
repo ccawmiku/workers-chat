@@ -1,6 +1,6 @@
 import { UsageBar } from "./usage-bar";
 import { api } from "./api";
-import React, { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import type { PluginRequest } from "../shared/plugins";
 import {
   BookOpenText,
@@ -25,7 +25,6 @@ import {
   type SummaryRun,
   defaultSummaryConfig,
   summaryConfig,
-  summaryFor,
   summarySourceKey,
   prepareSummary,
 } from "../shared/summaries";
@@ -263,13 +262,15 @@ export type SummaryCommand = (
 export function ReplySummaryCard({
   chat,
   messageId,
-  state,
+  sourceKey,
+  runs,
   latest,
   command,
 }: {
   chat: Chat;
   messageId: string;
-  state: SummaryState;
+  sourceKey: string;
+  runs: SummaryRun[];
   latest: boolean;
   command: SummaryCommand;
 }) {
@@ -278,10 +279,9 @@ export function ReplySummaryCard({
     [error, setError] = useState(""),
     [compare, setCompare] = useState(false);
   useEffect(() => setOpen(latest), [latest]);
-  const all = state.runs.filter((r) => r.messageId === messageId),
-    key = summarySourceKey(chat, messageId),
-    valid = all.filter((r) => r.sourceKey === key);
-  const accepted = summaryFor(chat, state, messageId),
+  const all = runs,
+    valid = all.filter((r) => r.sourceKey === sourceKey);
+  const accepted = valid.findLast((r) => r.status === "complete" && r.summary),
     pending = valid.findLast((r) => r.status === "running"),
     candidate = valid.findLast((r) => r.status === "candidate"),
     last = valid.at(-1) ?? all.at(-1);

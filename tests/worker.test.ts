@@ -1,3 +1,4 @@
+import type { SettingsBackup } from "../src/shared/backup";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { Miniflare, Response as MFResponse } from "miniflare";
 import { build } from "esbuild";
@@ -342,7 +343,16 @@ beforeAll(async () => {
                 );
               if (!payload.stream)
                 return MFResponse.json({
-                  choices: [{ message: { content: "非流式回答" } }],
+                  choices: [
+                    {
+                      message: {
+                        content: "非流式回答",
+                        ...(mode === "nonstream-reasoning"
+                          ? { reasoning: "独立思考" }
+                          : {}),
+                      },
+                    },
+                  ],
                   usage: {
                     prompt_tokens: 4,
                     completion_tokens: 5,
@@ -546,6 +556,111 @@ describe("workerd HTTP + D1 + Workflows", () => {
     });
     expect(moved.baseUrl).toBe("https://another-offline.invalid/v1");
     await value("/providers/" + p.id, "DELETE", {});
+  });
+  it("refreshes and configures ten thousand models without losing identity, settings or keys", async () => {
+    const longId = "valid-long-model-" + "x".repeat(983);
+    expect(longId).toHaveLength(1000);
+    const ids = [
+      ...Array.from({ length: 9999 }, (_, i) => "model-" + i),
+      longId,
+    ];
+    const metadata = {
+      name: "Large synthetic provider",
+      baseUrl: "https://never-contact.invalid/v1",
+      prefix: "Large/",
+    };
+    const before = upstreamCalls.length;
+    const saved = await request(
+      "/providers",
+      "POST",
+      {
+        ...metadata,
+        models: ids.map((id) => ({ id })),
+        apiKey: "large-provider-fixture-key",
+      },
+      true,
+      "https://chat.test",
+      true,
+    );
+    expect(saved.status).toBe(200);
+    const p = (await saved.json()) as Provider;
+    const configured = await value<Provider>(
+      "/providers/" + p.id + "/models",
+      "PUT",
+      {
+        models: p.models.map((m, i) => ({
+          ...m,
+          enabled: true,
+          capacity: 32000 + i,
+          parameters: { temperature: 0.4 },
+        })),
+      },
+    );
+    const refreshed = await request(
+      "/providers",
+      "POST",
+      {
+        ...metadata,
+        id: p.id,
+        models: [...ids.slice(1), "new-model"].reverse().map((id) => ({ id })),
+      },
+      true,
+      "https://chat.test",
+      true,
+    );
+    expect(refreshed.status).toBe(200);
+    const current = (await refreshed.json()) as Provider;
+    expect(current.models).toHaveLength(10000);
+    expect(current.models.find((m) => m.id === longId)).toEqual(
+      configured.models.at(-1),
+    );
+    expect(current.models.find((m) => m.id === "new-model")).toMatchObject({
+      enabled: false,
+      capacity: 1048576,
+    });
+    expect(
+      await value("/providers/" + p.id + "/key", "POST", {
+        password: fixturePassword,
+      }),
+    ).toEqual({ apiKey: "large-provider-fixture-key" });
+    const chat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + chat.id, "PATCH", {
+      model: { providerId: p.id, modelId: longId },
+    });
+    const preview = await value<Record<string, unknown>>(
+      "/chats/" + chat.id + "/preview",
+      "POST",
+      { draft: "Local preview only" },
+    );
+    expect(preview.model).toBe(longId);
+    try {
+      await value("/settings", "PUT", {
+        ...settings,
+        defaultModel: { providerId: p.id, modelId: longId },
+      });
+      const backup = await value<SettingsBackup>(
+        "/settings/export",
+        "POST",
+        {},
+      );
+      expect(backup.settings.defaultModel?.modelId).toBe(longId);
+      const scoped = {
+        ...backup,
+        providers: backup.providers.filter((item) => item.id === p.id),
+      };
+      expect(
+        (
+          await request("/settings/import", "POST", {
+            mode: "merge",
+            data: scoped,
+          })
+        ).status,
+      ).toBe(200);
+      expect(upstreamCalls).toHaveLength(before);
+    } finally {
+      await value("/settings", "PUT", settings);
+      await value("/providers/" + p.id, "DELETE", {});
+    }
   });
   it("removes context-exclusion and subtree-delete endpoints without losing history", async () => {
     const imported = await value<{ ids: string[] }>("/import", "POST", {
@@ -924,6 +1039,24 @@ describe("workerd HTTP + D1 + Workflows", () => {
     await value("/chats/" + chat.id + "/send", "POST", { content: "inherit" });
     await finished(chat.id);
     expect(upstreamCalls.at(-1)).not.toHaveProperty("reasoning_effort");
+  });
+  it("preserves a provider's non-streaming reasoning alias without another upstream request", async () => {
+    controls.mode = "nonstream-reasoning";
+    try {
+      const chat = await value<Chat>("/chats", "POST", {});
+      await value("/chats/" + chat.id, "PATCH", {
+        title: "Reasoning alias fixture",
+        stream: false,
+      });
+      const before = upstreamCalls.length;
+      await value("/chats/" + chat.id + "/send", "POST", { content: "Q" });
+      const done = await finished(chat.id);
+      expect(done.messages[done.currentId!]?.content).toBe("非流式回答");
+      expect(done.messages[done.currentId!]?.reasoning).toBe("独立思考");
+      expect(upstreamCalls).toHaveLength(before + 1);
+    } finally {
+      controls.mode = "normal";
+    }
   });
   it("keeps a started workflow alive for more than 30 seconds without a browser connection", async () => {
     controls.mode = "normal";

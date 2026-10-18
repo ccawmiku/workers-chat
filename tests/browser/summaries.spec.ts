@@ -98,6 +98,7 @@ for (const mobile of [false, true])
         inputTokens: 18929,
         usage: {
           input_tokens: 18929,
+          cached_tokens: 16247,
           output_tokens: 424,
           completion_tokens_details: { reasoning_tokens: 100 },
           total_tokens: 19353,
@@ -111,7 +112,10 @@ for (const mobile of [false, true])
       backfilled = false;
     const decorate = (snapshot: any) => ({
       ...snapshot,
-      chat: { ...snapshot.chat, plugins: defaultPlugins().map(p => ({id:p.id,enabled:true})) },
+      chat: {
+        ...snapshot.chat,
+        plugins: defaultPlugins().map((p) => ({ id: p.id, enabled: true })),
+      },
       pluginState: emptyPluginState(),
       summaryState: state,
       postJobs: pending
@@ -199,40 +203,133 @@ for (const mobile of [false, true])
     await expect(latest).toContainText("输入 18.9k");
     await expect(latest).toContainText("输出 424");
     await expect(latest).toContainText("缓存率 85.8%");
-    await expect(latest.locator(".plugin-usage .usage-stack")).toHaveCount(0);
-    const composition = page.locator(".summary-context-chip .usage-stack");
-    await expect(composition.locator(".usage-segment")).toHaveCount(3);
-    expect(await composition.locator(".usage-segment").evaluateAll(segments => segments.map(s => Number(s.getAttribute("data-tokens"))))).toEqual([18929,100,324]);
-    const colors = await composition.locator(".usage-segment").evaluateAll(segments => segments.map(s => getComputedStyle(s).color));
-    expect(colors).toEqual(["rgb(96, 165, 250)", "rgb(250, 204, 21)", "rgb(240, 119, 175)"]);
-    const segmentsWidth = await composition.evaluate(node => ({
-      whole: node.getBoundingClientRect().width,
-      sum: Array.from(node.children).reduce((n,c) => n+c.getBoundingClientRect().width,0),
-      gap: getComputedStyle(node).gap,
-    }));
-    expect(Math.abs(segmentsWidth.whole-segmentsWidth.sum)).toBeLessThan(1);
-    expect(segmentsWidth.gap).toBe("0px");
+    await expect(latest.locator(".plugin-usage .usage-ring")).toHaveCount(1);
+    const composition = page.locator(
+      ".summary-context-chip .plugin-combined-ring",
+    );
+    await expect(composition.locator(".ring-cache-value")).toHaveText("86");
+    await expect(
+      page.locator(".summary-context-chip .plugin-chip-cache"),
+    ).toHaveText("85.8%");
+    expect(
+      await composition
+        .locator(".ring-cache-value")
+        .evaluate((el) => Number(getComputedStyle(el).fontWeight)),
+    ).toBeGreaterThanOrEqual(700);
+    expect(
+      await composition.evaluate((svg) => {
+        const outer = svg.querySelector(".usage-arcs > circle")!,
+          inner = svg.querySelector(".context-arcs > circle")!;
+        return (
+          Number(outer.getAttribute("r")) -
+          Number(outer.getAttribute("stroke-width")) / 2 -
+          Number(inner.getAttribute("r")) -
+          Number(inner.getAttribute("stroke-width")) / 2
+        );
+      }),
+    ).toBeGreaterThan(2);
+    const chipGeometry = await page
+      .locator(".summary-context-chip")
+      .evaluate((el) => {
+        const name = el
+            .querySelector(".plugin-chip-name")!
+            .getBoundingClientRect(),
+          tokens = el.querySelector("b")!.getBoundingClientRect(),
+          cache = el
+            .querySelector(".plugin-chip-cache")!
+            .getBoundingClientRect(),
+          ring = el
+            .querySelector(".plugin-combined-ring")!
+            .getBoundingClientRect();
+        return {
+          stack: name.bottom <= tokens.top && tokens.bottom <= cache.top,
+          right: cache.right <= ring.left,
+        };
+      });
+    expect(chipGeometry).toEqual({ stack: true, right: true });
+
+    await expect(composition.locator(".usage-segment")).toHaveCount(4);
+    expect(
+      await composition
+        .locator(".usage-segment")
+        .evaluateAll((segments) =>
+          segments.map((s) => Number(s.getAttribute("data-tokens"))),
+        ),
+    ).toEqual([2682, 16247, 100, 324]);
+    const colors = await composition
+      .locator(".usage-segment")
+      .evaluateAll((segments) =>
+        segments.map((s) => getComputedStyle(s).color),
+      );
+    expect(colors).toEqual([
+      "rgb(37, 99, 235)",
+      "rgb(147, 197, 253)",
+      "rgb(250, 204, 21)",
+      "rgb(240, 119, 175)",
+    ]);
+    const arcs = await composition
+      .locator(".usage-segment")
+      .evaluateAll((nodes) =>
+        nodes.map((n) => ({
+          dash: n.getAttribute("stroke-dasharray")!,
+          offset: Number(n.getAttribute("stroke-dashoffset")),
+        })),
+      );
+    expect(
+      arcs.reduce((sum, a) => sum + Number(a.dash.split(" ")[0]), 0),
+    ).toBeCloseTo(100, 4);
+    expect(arcs[0]!.offset).toBe(0);
+    expect(arcs[1]!.offset).toBeLessThan(0);
     const chips = page.locator(".plugin-chip");
     await expect(chips).toHaveCount(5);
-    const dimensions = await chips.evaluateAll(nodes => nodes.map(node => {
-      const r=node.getBoundingClientRect(), bars=node.querySelectorAll(".du-progress");
-      return {height:r.height, capacity:bars[0]!.getBoundingClientRect().y-r.y, composition:node.querySelector(".usage-stack")!.getBoundingClientRect().y-r.y};
-    }));
-    expect(new Set(dimensions.map(v=>v.height)).size).toBe(1);
+    const dimensions = await chips.evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const r = node.getBoundingClientRect(),
+          bars = node.querySelectorAll(".context-arcs");
+        return {
+          height: r.height,
+          capacity: bars[0]!.getBoundingClientRect().y - r.y,
+          composition:
+            node.querySelector(".plugin-combined-ring")!.getBoundingClientRect()
+              .y - r.y,
+        };
+      }),
+    );
+    expect(new Set(dimensions.map((v) => v.height)).size).toBe(1);
     expect(dimensions[0]!.height).toBeLessThanOrEqual(60);
-    expect(new Set(dimensions.map(v=>v.capacity)).size).toBe(1);
-    expect(new Set(dimensions.map(v=>v.composition)).size).toBe(1);
-    await expect(page.locator(".plugin-chips")).not.toContainText(/截\s*\d+\s*条/);
+    expect(new Set(dimensions.map((v) => v.capacity)).size).toBe(1);
+    expect(new Set(dimensions.map((v) => v.composition)).size).toBe(1);
+    await expect(page.locator(".plugin-chips")).not.toContainText(
+      /截\s*\d+\s*条/,
+    );
     const warning = latest.locator(".du-alert-warning");
-    expect(await warning.evaluate(node => {
-      const style=getComputedStyle(node), parse=(s:string)=>s.match(/[\d.]+/g)!.slice(0,3).map(Number);
-      const luminance=(c:number[])=>c.map(x=>{x/=255;return x<=.04045?x/12.92:((x+.055)/1.055)**2.4}).reduce((n,v,i)=>n+v*[.2126,.7152,.0722][i]!,0);
-      const fg=luminance(parse(style.color)), bg=luminance(parse(style.backgroundColor));
-      return (Math.max(fg,bg)+.05)/(Math.min(fg,bg)+.05);
-    })).toBeGreaterThan(4.5);
-    await page.getByRole("button",{name:"插件",exact:true}).click();
-    await expect(page.getByRole("button",{name:"运行 追问建议",exact:true})).toHaveCount(0);
-    await page.getByRole("button",{name:"关闭插件列表",exact:true}).click();
+    expect(
+      await warning.evaluate((node) => {
+        const style = getComputedStyle(node),
+          parse = (s: string) =>
+            s
+              .match(/[\d.]+/g)!
+              .slice(0, 3)
+              .map(Number);
+        const luminance = (c: number[]) =>
+          c
+            .map((x) => {
+              x /= 255;
+              return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+            })
+            .reduce((n, v, i) => n + v * [0.2126, 0.7152, 0.0722][i]!, 0);
+        const fg = luminance(parse(style.color)),
+          bg = luminance(parse(style.backgroundColor));
+        return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+      }),
+    ).toBeGreaterThan(4.5);
+    await page.getByRole("button", { name: "插件", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "运行 追问建议", exact: true }),
+    ).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "关闭插件列表", exact: true })
+      .click();
     await expect(
       page.getByRole("button", { name: "回复摘要上下文", exact: true }),
     ).toContainText("18.9k");
@@ -258,16 +355,50 @@ for (const mobile of [false, true])
     await context
       .getByRole("button", { name: "关闭插件窗口", exact: true })
       .click();
-    const actions = page.locator(".message-actions");
-    await expect(actions.locator(".usage-stack.compact")).toHaveCount(4);
+    await expect(page.locator(".message-actions .usage-ring")).toHaveCount(0);
+    await expect(
+      page.locator(
+        ".message.assistant > .message-body > .message-meta .message-model > .usage-ring",
+      ),
+    ).toHaveCount(2);
+    const replyMeta = page
+      .locator(".message.assistant > .message-body > .message-meta")
+      .last();
     expect(
-      await actions
-        .last()
-        .locator("button[aria-label='删除消息']")
-        .evaluate((e) =>
-          e.nextElementSibling?.classList.contains("usage-stack"),
+      await replyMeta
+        .locator(".usage-ring")
+        .evaluate(
+          (el) =>
+            el.getBoundingClientRect().width /
+            parseFloat(getComputedStyle(el).fontSize),
         ),
-    ).toBe(true);
+    ).toBeCloseTo(1.2, 1);
+    await replyMeta.evaluate((el) => (el.style.fontSize = "20px"));
+    expect(
+      await replyMeta
+        .locator(".usage-ring")
+        .evaluate((el) => el.getBoundingClientRect().width),
+    ).toBeCloseTo(24, 0);
+    await replyMeta.evaluate((el) => el.style.removeProperty("font-size"));
+    await page.screenshot({
+      path: `test-results/combined-ring-${mobile ? "phone" : "desktop"}-${test.info().project.name}.png`,
+    });
+    await page
+      .getByRole("button", { name: "折叠插件上下文", exact: true })
+      .click();
+    await expect(
+      page.locator(".summary-context-chip .ring-cache-value"),
+    ).toHaveText("86");
+    await expect(
+      page.locator(".summary-context-chip .plugin-chip-name"),
+    ).toBeVisible();
+    await page.screenshot({
+      path: `test-results/combined-collapsed-${mobile ? "phone" : "desktop"}-${test.info().project.name}.png`,
+    });
+    await page
+      .getByRole("button", { name: "展开插件上下文", exact: true })
+      .click();
+
     await page
       .getByRole("button", { name: "当前聊天设置", exact: true })
       .click();
@@ -317,6 +448,11 @@ for (const mobile of [false, true])
       name: "当前聊天 · 回复摘要",
       exact: true,
     });
+    await expect(
+      settings
+        .getByRole("button", { name: "取消", exact: true })
+        .locator("svg"),
+    ).toHaveCount(1);
     await expect(settings.getByLabel("温度", { exact: true })).toHaveValue(
       "0.3",
     );
@@ -359,4 +495,6 @@ for (const mobile of [false, true])
     await page.screenshot({
       path: `test-results/summaries-${mobile ? "phone" : "desktop"}-${test.info().project.name}.png`,
     });
+    await page.unrouteAll({ behavior: "wait" });
+    expect(errors).toEqual([]);
   });

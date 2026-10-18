@@ -25,6 +25,7 @@ import { decrypt, redactError } from "./security";
 import { readCompletion, type CompletionOutput } from "../shared/completion";
 import { obj, str, parameters, modelRef } from "./validation";
 import type { Job } from "./generation";
+import { fallbackRequest } from "./fallback-model";
 const stateId = (id: string) => "summary-state:" + id;
 const taskId = (id: string) => "summary-task:" + id;
 type SummaryTask = {
@@ -96,6 +97,7 @@ export async function queueSummary(
   messageId: string,
   manual = false,
   requestedId?: string,
+  fallback?: unknown,
 ) {
   const store = new Store(env.DB),
     doc = await store.get<Chat>(chatId);
@@ -135,8 +137,21 @@ export async function queueSummary(
       state.value,
       settings,
       providers,
+      fallback !== undefined ? (modelRef(fallback) ?? undefined) : undefined,
     );
+    if (fallback !== undefined)
+      prepared = {
+        ...prepared,
+        ...fallbackRequest(
+          settings,
+          providers,
+          fallback,
+          prepared.request,
+          prepared.config.parameters,
+        ),
+      };
   } catch (e) {
+    if (fallback !== undefined) throw e;
     const failed: SummaryRun = {
       id: uuid(),
       messageId,
@@ -458,6 +473,29 @@ export async function summaryEndpoint(
     return { jobId: await continueBackfill(env, chat.id) };
   }
   if (!run) throw new HttpError(404, "摘要记录不存在");
+  if (action === "fallback") {
+    if (
+      run.status !== "error" ||
+      summarySourceKey(chat, run.messageId) !== run.sourceKey
+    )
+      throw new HttpError(409, "该失败摘要已失效");
+    if (
+      state.value.runs.findLast(
+        (r) => r.messageId === run.messageId && r.sourceKey === run.sourceKey,
+      )?.id !== run.id
+    )
+      throw new HttpError(409, "此回复已有更新的摘要任务");
+    return {
+      jobId: await queueSummary(
+        env,
+        chat.id,
+        run.messageId,
+        true,
+        undefined,
+        body.model,
+      ),
+    };
+  }
   if (action === "cancel") {
     const output = await env.PROGRESS.getByName(run.id).cancel();
     await finishSummary(env, run.id, output, "stopped");

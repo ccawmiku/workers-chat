@@ -1,4 +1,5 @@
 import { generationDeadline } from "./deadline";
+import { compatibleMessages } from "../shared/upstream-compat";
 import { readCompletion, type CompletionOutput } from "../shared/completion";
 import type { DirectTask, GenerationStart } from "../shared/direct";
 import {
@@ -109,6 +110,17 @@ export async function startGeneration(
     stream: chat.stream,
     ...(transport ? { transport } : {}),
   };
+  const parent = message.parentId ? chat.messages[message.parentId] : undefined;
+  if (injections?.length && parent?.role === "user")
+    message.toolContext = {
+      parentId: parent.id,
+      messages: injectPlugins(
+        [{ role: "user", content: parent.content }],
+        injections,
+      ).slice(1),
+    };
+  else if (seed?.toolContext && parent?.id === seed.toolContext.parentId)
+    message.toolContext = structuredClone(seed.toolContext);
   chat.unread = false;
   const config: JobConfig = {
     ...(injections?.length ? { injections } : {}),
@@ -229,24 +241,38 @@ export function requestForJob(
   const target = chat.messages[job.message_id];
   if (!target) throw new HttpError(404, "回答不存在");
   const messages = injectPlugins(
-    contextMessages({
-      ...chat,
-      currentId: target.parentId,
-      system: config.system,
-      rounds: config.rounds,
-      includeStopped: config.includeStopped,
-    }),
+    contextMessages(
+      {
+        ...chat,
+        currentId: target.parentId,
+        system: config.system,
+        rounds: config.rounds,
+        includeStopped: config.includeStopped,
+      },
+      undefined,
+      /(^|\/)deepseek(?:[-/]|$)/i.test(config.model.modelId),
+    ),
     config.injections ?? [],
   );
   const seed = config.seedId ? chat.messages[config.seedId] : null;
   if (seed) {
-    messages.push({ role: "assistant", content: seed.content });
+    messages.push({
+      role: "assistant",
+      content: seed.content,
+      ...(/(^|\/)deepseek(?:[-/]|$)/i.test(config.model.modelId) &&
+      seed.reasoning
+        ? { reasoning_content: seed.reasoning }
+        : {}),
+    });
     messages.push({
       role: "user",
       content: "请继续上面的回答，不要重复已经写出的内容。",
     });
   }
-  return { ...config.options, messages };
+  return {
+    ...config.options,
+    messages: compatibleMessages(config.model.modelId, messages),
+  };
 }
 export async function generationStart(
   env: Env,

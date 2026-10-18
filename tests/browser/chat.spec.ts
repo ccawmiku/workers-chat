@@ -81,7 +81,7 @@ test("repeated questions switch complete user-answer sends on desktop and phone"
     return result.ids[0]!;
   });
   await page.reload();
-  await expect(page.locator(".header-title")).toHaveText("重新发送切换验证");
+  await expect(page.locator(".chat-row.selected .chat-title")).toHaveText("重新发送切换验证");
   for (const viewport of [
     { width: 1440, height: 1000 },
     { width: 390, height: 844 },

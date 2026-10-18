@@ -2726,28 +2726,6 @@ main {
   scrollbar-width: thin;
   padding: 2px;
 }
-.plugin-chip {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-rows: 18px 4px 4px 12px;
-  align-items: stretch;
-  height: 60px;
-  min-height: 60px;
-  gap: 3px;
-  min-width: 108px;
-  max-width: 180px;
-  padding: 5px 9px;
-  border: 1px solid var(--line-color);
-  border-radius: 9px;
-  text-align: left;
-  background: var(--panel);
-}
-.plugin-chip > span:first-child {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  white-space: nowrap;
-}
 .plugin-chip-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3352,62 +3330,6 @@ main {
 }
 
 /* Adjacent daisyUI progress segments share one clipped track. Reasoning is split from output. */
-.usage-stack {
-  display: inline-flex;
-  align-items: stretch;
-  gap: 0;
-  width: 100%;
-  min-width: 0;
-  height: 4px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: var(--line-color);
-  vertical-align: middle;
-  flex-shrink: 0;
-}
-.usage-stack.compact {
-  width: 96px;
-  height: 8px;
-  margin-inline: 8px;
-}
-.usage-stack .usage-segment {
-  margin: 0;
-  min-width: 0;
-  flex: none;
-  height: 100%;
-  border: 0;
-  border-radius: 0;
-  background: currentColor;
-}
-.usage-stack .usage-input {
-  color: #60a5fa;
-}
-.usage-stack .usage-thinking {
-  color: #facc15;
-}
-.usage-stack .usage-output {
-  color: #f077af;
-}
-.usage-segment::-webkit-progress-value,
-.usage-segment::-webkit-progress-bar {
-  border-radius: 0;
-  transition: none;
-}
-.usage-segment::-moz-progress-bar {
-  border-radius: 0;
-  transition: none;
-}
-.message-meta > .usage-stack {
-  flex-basis: 100%;
-  max-width: 240px;
-  margin-block: 6px;
-}
-.plugin-chip .usage-stack {
-  margin: 0;
-}
-.plugin-chip > small {
-  white-space: nowrap;
-}
 .plugin-bar.empty:has(.summary-context-chip) {
   display: block;
 }
@@ -3951,11 +3873,6 @@ main {
   .appearance-group {
     padding-inline: 12px;
   }
-  .usage-stack.compact {
-    width: 72px;
-    height: 7px;
-    margin-inline: 6px;
-  }
 }
 
 .settings-search,
@@ -4022,16 +3939,6 @@ main {
   padding: 12px 0 0;
   border-top: 1px solid var(--line-color);
   background: var(--panel);
-}
-.plugin-chip {
-  height: 42px;
-  min-height: 42px;
-  grid-template-rows: 18px 4px 4px;
-  gap: 2px;
-  padding: 4px 9px;
-}
-.plugin-chip:has(> small:not(:empty)) {
-  height: 42px;
 }
 .plugin-chip > small:empty {
   display: none;
@@ -4171,14 +4078,59 @@ main {
   color: var(--accent-ink);
   border-color: var(--accent);
 }
-.plugin-chips:has(.plugin-chip-cache) .plugin-chip {
-  height: 54px;
-  min-height: 54px;
-  grid-template-rows: 18px 4px 4px 10px;
-}
 .plugin-chip .plugin-chip-cache {
   line-height: 10px;
   font-size: 10px;
+}
+.plugin-bar {
+  position: relative;
+  padding-left: 23px;
+}
+.chips-toggle.du-btn {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: 20px;
+  min-width: 20px;
+  padding: 0;
+}
+.fallback-control,
+.fallback-options {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+}
+.fallback-options .du-select {
+  max-width: min(320px, 100%);
+}
+.fallback-settings {
+  padding: 12px;
+  border: 1px solid var(--line-color);
+  margin-block: 12px;
+}
+.fallback-settings h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chat-corner-controls {
+  position: absolute;
+  top: 6px;
+  inset-inline: 8px;
+  z-index: 25;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.chat-corner-controls > button {
+  pointer-events: auto;
+  background: var(--bg);
+  opacity: 0.82;
+}
+.chat-corner-controls > button:last-child {
+  margin-inline-start: auto;
 }
 .plugin-card-actions {
   align-items: center;
@@ -4190,4 +4142,143 @@ main {
 .section-candidate .du-btn-primary {
   background: var(--accent);
   color: var(--accent-ink);
+}
+
+/* One combined SVG per plugin; reply meters follow the metadata text size. */
+.usage-ring {
+  width: 20px;
+  height: 20px;
+  display: inline-block;
+  flex: none;
+  vertical-align: middle;
+  overflow: visible;
+}
+.usage-ring.compact {
+  width: 1.2em;
+  height: 1.2em;
+  margin-inline-start: 0.15em;
+}
+.ring-track {
+  stroke: var(--line-color);
+}
+.usage-arcs .usage-input {
+  color: #2563eb;
+}
+.usage-arcs .usage-cached {
+  color: #93c5fd;
+}
+.usage-arcs .usage-thinking {
+  color: #facc15;
+}
+.usage-arcs .usage-output {
+  color: #f077af;
+}
+.context-arcs {
+  color: #f077af;
+}
+.context-arcs .ring-track {
+  stroke: #f077af;
+  opacity: 0.22;
+}
+.context-arcs.over-budget {
+  color: var(--danger);
+}
+.message-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+.plugin-chips {
+  gap: 10px;
+}
+.plugin-chip {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 60px;
+  min-height: 60px;
+  min-width: 132px;
+  max-width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-color);
+  border-radius: 9px;
+  text-align: left;
+  background: var(--panel);
+}
+.plugin-chip-info {
+  display: grid;
+  grid-template-rows: 15px 14px 12px;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.plugin-chip-name {
+  font-size: 12px;
+  line-height: 15px;
+}
+.plugin-chip b {
+  font-size: 11px;
+  line-height: 14px;
+}
+.plugin-chip .plugin-chip-cache {
+  font-size: 10px;
+  line-height: 12px;
+  min-height: 12px;
+}
+.plugin-combined-ring {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  overflow: visible;
+}
+.ring-cache-value {
+  fill: var(--text);
+  font-size: 18px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.plugin-bar.chips-collapsed .plugin-chips {
+  width: fit-content;
+  max-width: 100%;
+  gap: 16px;
+  padding: 3px 8px;
+  border: 1px solid var(--line-color);
+  border-radius: 999px;
+  background: var(--panel);
+}
+.plugin-bar.chips-collapsed .plugin-chip {
+  justify-content: flex-start;
+  min-width: 0;
+  max-width: none;
+  height: 34px;
+  min-height: 34px;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.plugin-bar.chips-collapsed .plugin-chip-info {
+  display: block;
+  max-width: 96px;
+}
+.plugin-bar.chips-collapsed .plugin-chip-name {
+  display: block;
+}
+.plugin-bar.chips-collapsed .plugin-chip b,
+.plugin-bar.chips-collapsed .plugin-chip small {
+  display: none;
+}
+.plugin-bar.chips-collapsed .plugin-combined-ring {
+  width: 32px;
+  height: 32px;
+}
+.plugin-bar.chips-collapsed .chips-toggle {
+  top: 7px;
+  height: 24px;
+  min-height: 24px;
 }

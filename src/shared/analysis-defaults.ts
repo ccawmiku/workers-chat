@@ -84,9 +84,13 @@ export const LEGACY_ANALYSIS_SCHEMA = JSON.stringify(
   2,
 );
 
-export const ANALYSIS_PROMPT = PRE_BLOCK_ANALYSIS_PROMPT.replace(
+export const PRE_PRESENT_ANALYSIS_PROMPT = PRE_BLOCK_ANALYSIS_PROMPT.replace(
   "列出所有有足够依据的主要角色",
   "只列出有足够依据的非主角主要角色；不要生成主角或‘你’的第一人称想法。无法确认是否为主角时不要擅自写其内心。列出其他角色",
+);
+export const ANALYSIS_PROMPT = PRE_PRESENT_ANALYSIS_PROMPT.replace(
+  "资料边界：",
+  "角色范围：只提到并分析当前场景明确在场的角色；忽略不在场、已离场和位置不明者，不列缺席角色，不写‘某某不在场’的解释、占位或名单。主角、用户扮演的角色及‘我/你’代表的主角严禁生成任何第一人称心理；只能在动作/场景中客观记录其已发生的可观察事实。先识别主角并排除；身份无法确认时宁可不写内心。\n\n资料边界：",
 );
 const schema = JSON.parse(PRE_BLOCK_ANALYSIS_SCHEMA);
 schema.properties.additional_sections = {

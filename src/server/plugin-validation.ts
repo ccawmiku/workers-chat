@@ -69,7 +69,6 @@ export function validatedPlugins(value: unknown): PluginDefinition[] {
               p.clarifyFormat === "questions"
                 ? ("questions" as const)
                 : undefined,
-            clarifyLoop: p.clarifyLoop === true,
           }
         : {}),
       ...(kind === "analysis"

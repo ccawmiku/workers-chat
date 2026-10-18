@@ -134,15 +134,16 @@ test("device streams paint before completion, unlock once, save, title, stop and
   await page.locator(".new-chat").click();
   await page.getByLabel("消息", { exact: true }).fill("测试直连流式");
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await page.getByLabel("直连验证密码", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "验证并连接", exact: true }).click();
+  await expect(page.getByLabel("直连验证密码", { exact: true })).toHaveCount(0);
   await expect(page.locator(".message.assistant .markdown")).toHaveText(
     "第一段即时内容",
   );
   await expect(
     page.getByRole("button", { name: "停止生成", exact: true }),
   ).toBeVisible();
-  await expect(page.locator(".header-title")).toHaveText("📱 直连测试");
+  await expect(page.locator(".chat-row.selected .chat-title")).toHaveText(
+    "📱 直连测试",
+  );
   await expect(page.locator(".message.assistant .markdown")).toHaveText(
     "第一段即时内容，第二段完整回答",
   );

@@ -615,6 +615,41 @@ describe("workerd HTTP + D1 + Workflows", () => {
         password: fixturePassword,
       }),
     ).toEqual({ apiKey: "synthetic-fixture-key" });
+    const deviceKeyPath = "/providers/" + provider.id + "/device-key";
+    expect(
+      (
+        await request(
+          deviceKeyPath,
+          "POST",
+          { baseUrl: provider.baseUrl },
+          false,
+        )
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await request(
+          deviceKeyPath,
+          "POST",
+          { baseUrl: provider.baseUrl },
+          true,
+          "https://other.test",
+        )
+      ).status,
+    ).toBe(403);
+    const unlocked = await request(deviceKeyPath, "POST", {
+      baseUrl: provider.baseUrl,
+    });
+    expect(unlocked.headers.get("Cache-Control")).toBe("no-store");
+    expect(await unlocked.json()).toEqual({ apiKey: "synthetic-fixture-key" });
+    expect((await request(deviceKeyPath, "GET")).status).toBe(405);
+    expect(
+      (
+        await request(deviceKeyPath, "POST", {
+          baseUrl: "https://different.test/v1",
+        })
+      ).status,
+    ).toBe(409);
     const sessions = await value<{ id: string }[]>("/auth/sessions");
     expect(sessions[0]!.id).not.toBe(cookie.replace("session=", ""));
   });
@@ -2064,11 +2099,10 @@ describe("workerd HTTP + D1 + Workflows", () => {
     ).toBe(409);
     await value(endpoint, "POST", { action: "cancel" });
   });
-  it("repeats clarification with full submitted answers and skipped questions, waits on an empty batch and retains the main draft", async () => {
+  it("repeats clarification with full submitted answers and skipped questions, reports a repeated/empty follow-up as a recoverable error and retains the main draft", async () => {
     controls.mode = "clarify-loop";
     const p = {
       ...pluginDefaults("clarify"),
-      clarifyLoop: true,
       prompt: "[PLUGIN_TEST_clarify]\n" + pluginDefaults("clarify").prompt,
     };
     await value("/settings", "PUT", { ...settings, plugins: [p] });
@@ -2087,7 +2121,10 @@ describe("workerd HTTP + D1 + Workflows", () => {
     const wait = async () => {
       for (let n = 0; n < 160; n++) {
         const s = await value<S>("/chats/" + chat.id);
-        if (!s.pluginJob && s.pluginState.runs.at(-1)?.status === "waiting")
+        if (
+          !s.pluginJob &&
+          ["waiting", "error"].includes(s.pluginState.runs.at(-1)?.status ?? "")
+        )
           return s;
         await new Promise((r) => setTimeout(r, 30));
       }
@@ -2097,17 +2134,28 @@ describe("workerd HTTP + D1 + Workflows", () => {
       first = s.pluginState.runs.at(-1)!;
     await value("/chats/" + chat.id + "/draft", "PUT", { draft: "主草稿保留" });
     controls.mode = "normal"; // The model repeats the same question; the server must suppress it without another model call.
-    await value(endpoint, "POST", {
-      action: "answer",
-      runId: first.id,
-      selections: {},
-      content: "我的自由回答",
-    });
+    const answerResponse = await value<{ jobId: string; snapshot: S }>(
+      endpoint,
+      "POST",
+      {
+        action: "answer",
+        runId: first.id,
+        selections: {},
+        content: "我的自由回答",
+        includeSnapshot: true,
+      },
+    );
+    expect(answerResponse.jobId).toBeTruthy();
+    expect(answerResponse.snapshot.chat.draft).toBe("主草稿保留");
+    expect(answerResponse.snapshot.pluginState.runs.at(-1)?.id).toBe(
+      answerResponse.jobId,
+    );
     s = await wait();
     const last = s.pluginState.runs.at(-1)!;
     expect(last.id).not.toBe(first.id);
-    expect(JSON.parse(last.output).questions).toEqual([]);
-    expect(s.pluginState.flows[0]!.status).toBe("waiting");
+    expect(last.status).toBe("error");
+    expect(last.error).toContain("没有生成新的追问");
+    expect(s.pluginState.flows[0]!.status).toBe("error");
     expect(s.chat.draft).toBe("主草稿保留");
     const snapshot = await value<{
       messages: { role: string; content: string }[];
@@ -2121,7 +2169,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
       ),
     ).toBe(true);
     await value(endpoint, "POST", {
-      action: "finish-clarify",
+      action: "skip",
       runId: last.id,
       content: "最后补充",
     });
@@ -2179,7 +2227,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(s.pluginState.runs[0]?.usage?.cache_hit_rate).toBe("80%");
     const question = s.pluginState.runs[0]!;
     await value("/chats/" + chat.id + "/plugins", "POST", {
-      action: "answer",
+      action: "finish-clarify",
       runId: question.id,
       content: "轻松幽默",
     });
@@ -2270,7 +2318,8 @@ describe("workerd HTTP + D1 + Workflows", () => {
       analysis.some(
         (m) =>
           m.role === "tool" &&
-          m.content.includes(JSON.stringify(question.output)),
+          m.content.includes("轻松幽默") &&
+          !m.content.includes(JSON.stringify(question.output)),
       ),
     ).toBe(true);
     const main = upstreamCalls[before + 3]!.messages as {
@@ -2279,10 +2328,24 @@ describe("workerd HTTP + D1 + Workflows", () => {
     }[];
     expect(main.filter((m) => m.role === "tool")).toHaveLength(2);
     expect(JSON.stringify(main)).toContain("轻松幽默");
-    expect(JSON.stringify(s.chat.messages)).not.toContain("analysis-result");
+    const nextPreview = await value<{ messages: unknown[] }>(
+      "/chats/" + chat.id + "/preview",
+      "POST",
+      { draft: "下一轮原始请求" },
+    );
+    expect(nextPreview.messages.slice(0, main.length)).toEqual(main);
+    expect(nextPreview.messages.at(-1)).toEqual({
+      role: "user",
+      content: "下一轮原始请求",
+    });
+    expect(
+      s.chat.messages[s.chat.currentId!]!.toolContext?.messages.filter(
+        (m) => m.role === "tool",
+      ),
+    ).toHaveLength(2);
     const exp = await value("/chats/" + chat.id + "/export");
     expect(JSON.stringify(exp)).not.toMatch(
-      /analysis-result|轻松幽默|pluginState/,
+      /analysis-result|轻松幽默|pluginState|toolContext/,
     );
     const snapshot = await value<{ messages: unknown[] }>(
       "/chats/" + chat.id + "/plugins",
@@ -2725,7 +2788,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     let s = await wait((s) => s.chat.pluginPending === "waiting");
     const originalRun = s.pluginState.runs.find((r) => r.status === "waiting")!;
     await value("/chats/" + chat.id + "/plugins", "POST", {
-      action: "answer",
+      action: "finish-clarify",
       runId: originalRun.id,
       content: "旧偏好",
     });
@@ -2762,7 +2825,8 @@ describe("workerd HTTP + D1 + Workflows", () => {
       analysisRequest.messages.some(
         (m) =>
           m.role === "tool" &&
-          m.content.includes(JSON.stringify(originalRun.output)),
+          m.content.includes("旧偏好") &&
+          !m.content.includes(JSON.stringify(originalRun.output)),
       ),
     ).toBe(true);
     expect(JSON.stringify(upstreamCalls.at(-1)?.messages)).toContain("旧偏好");
@@ -2833,6 +2897,11 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(
       s.pluginState.runs.findLast((r) => r.status === "answered")?.answer,
     ).toBe("新的偏好");
+    const rewrittenTools = (
+      upstreamCalls.at(-1)?.messages as { role: string; content: string }[]
+    ).filter((m) => m.role === "tool");
+    expect(JSON.stringify(rewrittenTools)).toContain("新的偏好");
+    expect(JSON.stringify(rewrittenTools)).not.toContain("旧偏好");
     const fork = await value<Chat>("/chats/" + chat.id + "/fork", "POST", {
         messageId: originalAssistant,
       }),
@@ -3240,6 +3309,161 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(s.summaryState.runs.at(-1)?.sourceIncomplete).toBe(true);
     summaryControls.delay = 0;
   });
+  it("manually retries all four plugin kinds and summaries with a shared fallback without persisting the override", async () => {
+    controls.mode = "normal";
+    summaryControls.delay = 0;
+    const originalProvider = (await value<Provider[]>("/providers")).find(
+      (p) => p.id === provider.id,
+    )!;
+    const ref = { providerId: provider.id, modelId: "other" };
+    await value("/providers/" + provider.id + "/models", "PUT", {
+      models: originalProvider.models.map((m) => ({ ...m, enabled: true })),
+    });
+    await value("/settings", "PUT", {
+      ...settings,
+      pluginFallbackModels: [ref],
+    });
+    const c = await value<Chat>("/chats", "POST", {});
+    const endpoint = "/chats/" + c.id + "/plugins";
+    const device = async (path: string, body: unknown) => {
+      const r = await request(
+        path,
+        "POST",
+        body,
+        true,
+        "https://chat.test",
+        true,
+      );
+      const data = await r.json();
+      expect(r.status, JSON.stringify(data)).toBeLessThan(400);
+      return data as any;
+    };
+    try {
+      for (const kind of [
+        "clarify",
+        "analysis",
+        "suggest",
+        "rewrite",
+      ] as const) {
+        const id = "builtin-" + kind;
+        await value(endpoint, "POST", {
+          action: "configure",
+          plugins: [{ id, enabled: true }],
+        });
+        if (kind === "clarify" || kind === "analysis")
+          await device("/chats/" + c.id + "/send", {
+            content: "fallback fixture " + kind,
+            debugPlugins: true,
+          });
+        else
+          await device(endpoint, {
+            action: kind,
+            pluginId: id,
+            content: "fixture request",
+          });
+        const before = await value<{
+          pluginJob: PluginJobView;
+          pluginState: PluginState;
+          postJobs: PostJobView[];
+        }>("/chats/" + c.id);
+        const first =
+          before.pluginJob ??
+          before.postJobs.find((j) => j.kind === "suggest")!;
+        expect(first.direct).toBeTruthy();
+        await device("/plugins/jobs/" + first.id + "/finish", {
+          sequence: 1,
+          status: "error",
+          content: "",
+          error: "synthetic upstream failure",
+        });
+        const denied = await request(endpoint, "POST", {
+          action: "fallback",
+          runId: first.id,
+          model: { ...ref, modelId: "not-listed" },
+        });
+        expect(denied.status).toBe(400);
+        const retried = await device(endpoint, {
+          action: "fallback",
+          runId: first.id,
+          model: ref,
+          includeSnapshot: true,
+        });
+        const task = (retried.snapshot.pluginJob ??
+          retried.snapshot.postJobs.find(
+            (j: PostJobView) => j.kind === "suggest",
+          )) as PluginJobView;
+        expect(task.direct?.request.model).toBe("other");
+        expect(task.direct?.request.messages).toEqual(
+          first.direct?.request.messages,
+        );
+        expect(retried.snapshot.pluginState.runs.at(-1).model).toEqual(ref);
+        const output =
+          kind === "clarify"
+            ? '{"questions":[]}'
+            : kind === "analysis"
+              ? '{"character_thoughts":"none","scene_state":"none","action_state":"none","knowledge_boundaries":"none"}'
+              : kind === "suggest"
+                ? '{"suggestions":["one","two","three"]}'
+                : '{"prompt1":"one","prompt2":"two","prompt3":"three"}';
+        await device("/plugins/jobs/" + task.id + "/finish", {
+          sequence: 1,
+          status: "complete",
+          content: output,
+        });
+        if (kind === "clarify" || kind === "analysis")
+          await value(endpoint, "POST", { action: "cancel" });
+      }
+      await value(endpoint, "POST", { action: "configure", plugins: [] });
+      summaryControls.output = "invalid summary JSON";
+      const start = await device("/chats/" + c.id + "/send", {
+        content: "summary fallback fixture",
+      });
+      await device("/device/jobs/" + start.jobId + "/finish", {
+        sequence: 1,
+        status: "complete",
+        content: "A neutral completed reply.",
+      });
+      let s = await waitSummary(
+        c.id,
+        (s) => s.summaryState.runs.at(-1)?.status === "error",
+      );
+      const failed = s.summaryState.runs.at(-1)!;
+      summaryControls.output = '{"summary":"A valid replacement summary"}';
+      await value("/chats/" + c.id + "/summaries", "POST", {
+        action: "fallback",
+        runId: failed.id,
+        model: ref,
+      });
+      s = await waitSummary(
+        c.id,
+        (s) => s.summaryState.runs.at(-1)?.status === "complete",
+      );
+      expect(s.summaryState.runs.at(-1)?.model).toEqual(ref);
+      expect(summaryCalls.at(-1)?.model).toBe("other");
+      expect(
+        (await value<Settings>("/settings")).replySummary?.model,
+      ).toBeNull();
+      expect(s.chat.summaryOverrides).toBeUndefined();
+      expect(s.chat.model).toEqual(settings.defaultModel);
+      await value("/chats/" + c.id, "PATCH", { model: ref });
+      await value("/chats/" + c.id + "/summaries", "POST", {
+        action: "regenerate",
+        messageId: failed.messageId,
+      });
+      s = await waitSummary(
+        c.id,
+        (s) => s.summaryState.runs.at(-1)?.status === "candidate",
+      );
+      expect(s.summaryState.runs.at(-1)?.model).toEqual(ref);
+      expect(summaryCalls.at(-1)?.model).toBe("other");
+    } finally {
+      summaryControls.output = "";
+      await value("/providers/" + provider.id + "/models", "PUT", {
+        models: originalProvider.models,
+      });
+      await value("/settings", "PUT", settings);
+    }
+  }, 30000);
   it("finishes a summary after more than 30 seconds without a page and never reissues the upstream request", async () => {
     controls.mode = "normal";
     controls.delay = 0;

@@ -14,7 +14,16 @@ const object = (v: unknown): Record<string, unknown> =>
 export function tokenBreakdown(value: unknown): TokenBreakdown | undefined {
   const u = object(value),
     details = object(u.completion_tokens_details ?? u.output_tokens_details);
-  const input = number(u.prompt_tokens ?? u.input_tokens),
+  const rawInput = number(u.prompt_tokens ?? u.input_tokens),
+    input =
+      rawInput === undefined
+        ? undefined
+        : u.prompt_tokens === undefined &&
+            u.cache_read_input_tokens !== undefined
+          ? rawInput +
+            (number(u.cache_read_input_tokens) ?? 0) +
+            (number(u.cache_creation_input_tokens) ?? 0)
+          : rawInput,
     out = number(u.completion_tokens ?? u.output_tokens),
     thought = number(
       details.reasoning_tokens ?? u.reasoning_tokens ?? u.thinking_tokens,

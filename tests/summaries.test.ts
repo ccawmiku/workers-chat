@@ -136,7 +136,7 @@ describe("reply summaries", () => {
     const u = addMessage(chat, "user", "U".repeat(4000)),
       a = addMessage(chat, "assistant", "A".repeat(8000));
     const p = prepareSummary(chat, a.id, state, settings, [provider]);
-    expect(p.request.model).toBe("gemini-3.1-flash-lite");
+    expect(p.request.model).toBe("main");
     expect(p.request.temperature).toBe(0.3);
     expect(p.request).not.toHaveProperty("reasoning_effort");
     const payload = JSON.parse(p.request.messages.at(-1)!.content!);
@@ -161,6 +161,22 @@ describe("reply summaries", () => {
       temperature: 0,
       stream: false,
     });
+    chat.summaryOverrides = undefined;
+    chat.model = { providerId: "p", modelId: "gemini-3.1-flash-lite" };
+    expect(
+      prepareSummary(chat, a.id, state, settings, [provider]).request.model,
+    ).toBe("gemini-3.1-flash-lite");
+    settings.replySummary = {
+      ...defaultSummaryConfig(),
+      model: { providerId: "p", modelId: "main" },
+    };
+    expect(
+      prepareSummary(chat, a.id, state, settings, [provider]).request.model,
+    ).toBe("main");
+    chat.summaryOverrides = { model: null };
+    expect(
+      prepareSummary(chat, a.id, state, settings, [provider]).request.model,
+    ).toBe("gemini-3.1-flash-lite");
   });
   it("keeps historical U-to-summary mapping, fills missing summaries with bounded A excerpts, and picks the latest valid example", () => {
     const { chat, settings, state } = fixture();
@@ -184,14 +200,14 @@ describe("reply summaries", () => {
       tail = JSON.parse(p.request.messages.at(-1)!.content!);
     expect(history).toHaveLength(2);
     expect(history[1]).toEqual({
-      message_id: a2.id,
+      turn: 2,
       user_excerpt: "U2",
       assistant_excerpt: "MISSING_SUMMARY_OLD_A",
     });
     expect(history[0].user_excerpt).toBe(excerpt(u1.content, 500));
     expect(history[0].user_excerpt).not.toContain("MIDDLE_USER");
     expect(tail.previous_example).toMatchObject({
-      message_id: a1.id,
+      turn: 1,
       assistant_excerpt: excerpt(a1.content, 2500),
       summary: "ACCEPTED_SUMMARY",
     });
@@ -240,46 +256,101 @@ describe("reply summaries", () => {
   });
 });
 describe("summary fallback across every plugin", () => {
-  it.each(["suggest", "rewrite", "clarify", "analysis"] as const)("%s sees valid summaries and the latest unsummarized answer", kind => {
-    const { chat, settings, state } = fixture();
-    addMessage(chat, "user", "first user");
-    const first = addMessage(chat, "assistant", "FIRST_FULL_BODY_MUST_NOT_LEAK");
-    state.runs.push(accepted(chat, first.id));
-    addMessage(chat, "user", "latest user");
-    const last = addMessage(chat, "assistant", "🙂".repeat(300) + "EXCLUDED_TAIL");
-    state.runs.push({ ...accepted(chat, last.id, "FAILED_SUMMARY"), status: "error" });
-    const p = { ...pluginDefaults(kind), rawRounds: 0 };
-    const result = preparePlugin(chat, p, settings, [provider], emptyPluginState(), "draft", chat.currentId, [], state);
-    const text = JSON.stringify(result.request.messages);
-    expect(text).toContain("ACCEPTED_SUMMARY");
-    expect(text).toContain("🙂".repeat(300));
-    expect(text).not.toMatch(/FIRST_FULL_BODY|EXCLUDED_TAIL|FAILED_SUMMARY/);
-    expect(result.metrics.missingSummaries).toBe(1);
-    // An invalidated accepted result must also fall back, never use stale text.
-    last.contentVersion = "edited";
-    state.runs.push({ ...accepted(chat, last.id, "STALE"), sourceKey: "wrong" });
-    expect(JSON.stringify(preparePlugin(chat, p, settings, [provider], emptyPluginState(), "draft", chat.currentId, [], state).request)).not.toContain("STALE");
-  });
+  it.each(["suggest", "rewrite", "clarify", "analysis"] as const)(
+    "%s sees valid summaries and the latest unsummarized answer",
+    (kind) => {
+      const { chat, settings, state } = fixture();
+      addMessage(chat, "user", "first user");
+      const first = addMessage(
+        chat,
+        "assistant",
+        "FIRST_FULL_BODY_MUST_NOT_LEAK",
+      );
+      state.runs.push(accepted(chat, first.id));
+      addMessage(chat, "user", "latest user");
+      const last = addMessage(
+        chat,
+        "assistant",
+        "🙂".repeat(300) + "EXCLUDED_TAIL",
+      );
+      state.runs.push({
+        ...accepted(chat, last.id, "FAILED_SUMMARY"),
+        status: "error",
+      });
+      const p = { ...pluginDefaults(kind), rawRounds: 0 };
+      const result = preparePlugin(
+        chat,
+        p,
+        settings,
+        [provider],
+        emptyPluginState(),
+        "draft",
+        chat.currentId,
+        [],
+        state,
+      );
+      const text = JSON.stringify(result.request.messages);
+      expect(text).toContain("ACCEPTED_SUMMARY");
+      expect(text).toContain("🙂".repeat(300));
+      expect(text).not.toMatch(/FIRST_FULL_BODY|EXCLUDED_TAIL|FAILED_SUMMARY/);
+      expect(result.metrics.missingSummaries).toBe(1);
+      // An invalidated accepted result must also fall back, never use stale text.
+      last.contentVersion = "edited";
+      state.runs.push({
+        ...accepted(chat, last.id, "STALE"),
+        sourceKey: "wrong",
+      });
+      expect(
+        JSON.stringify(
+          preparePlugin(
+            chat,
+            p,
+            settings,
+            [provider],
+            emptyPluginState(),
+            "draft",
+            chat.currentId,
+            [],
+            state,
+          ).request,
+        ),
+      ).not.toContain("STALE");
+    },
+  );
   it("keeps fallback history JSON distinct from real summary examples", () => {
     const { chat, settings, state } = fixture();
     addMessage(chat, "user", "u1");
     addMessage(chat, "assistant", "🙂".repeat(301) + "LEAK");
     addMessage(chat, "user", "u2");
     const a = addMessage(chat, "assistant", "current full answer");
-    const messages = prepareSummary(chat, a.id, state, settings, [provider]).request.messages;
-    expect(JSON.parse(messages[1]!.content!).history[0]).toMatchObject({ assistant_excerpt: "🙂".repeat(300) });
-    expect(JSON.parse(messages.at(-1)!.content!)).not.toHaveProperty("previous_example");
+    const messages = prepareSummary(chat, a.id, state, settings, [provider])
+      .request.messages;
+    expect(JSON.parse(messages[1]!.content!).history[0]).toMatchObject({
+      assistant_excerpt: "🙂".repeat(300),
+    });
+    expect(JSON.parse(messages.at(-1)!.content!)).not.toHaveProperty(
+      "previous_example",
+    );
     expect(JSON.stringify(messages)).not.toContain("LEAK");
   });
   it("migrates only the exact old built-in summary prompt and keeps custom/blank settings", () => {
     const old = SUMMARY_PROMPT.replaceAll("100–150", "50–100");
     expect(upgradeSummaryConfig({ system: old }).system).toBe(SUMMARY_PROMPT);
-    for (const system of ["", "custom 50–100 字"]) expect(upgradeSummaryConfig({ system }).system).toBe(system);
-    const { chat, settings } = fixture(); settings.replySummary = { ...defaultSummaryConfig(), system: old };
+    for (const system of ["", "custom 50–100 字"])
+      expect(upgradeSummaryConfig({ system }).system).toBe(system);
+    const { chat, settings } = fixture();
+    settings.replySummary = { ...defaultSummaryConfig(), system: old };
     expect(summaryConfig(chat, settings).system).toBe(SUMMARY_PROMPT);
-    chat.summaryOverrides = { system: "" }; expect(summaryConfig(chat, settings).system).toBe("");
-    for (const n of [100, 150]) expect(normalizeSummary(JSON.stringify({summary: "字".repeat(n)})).warning).toBeUndefined();
-    for (const n of [99, 151]) expect(normalizeSummary(JSON.stringify({summary: "字".repeat(n)})).warning).toContain("100–150");
+    chat.summaryOverrides = { system: "" };
+    expect(summaryConfig(chat, settings).system).toBe("");
+    for (const n of [100, 150])
+      expect(
+        normalizeSummary(JSON.stringify({ summary: "字".repeat(n) })).warning,
+      ).toBeUndefined();
+    for (const n of [99, 151])
+      expect(
+        normalizeSummary(JSON.stringify({ summary: "字".repeat(n) })).warning,
+      ).toContain("100–150");
   });
 });
 describe("front plugin summary context", () => {
@@ -348,7 +419,7 @@ describe("front plugin summary context", () => {
       ).toBe(false);
     },
   );
-  it("keeps only own results, associates by message id without old prompt/user, and places reference before raw tail", () => {
+  it("keeps own references after the shared raw prefix, uses stable positions and excludes old prompt/user", () => {
     const { chat, settings, state } = fixture(),
       ps = emptyPluginState();
     const u = addMessage(chat, "user", "USER1"),
@@ -394,11 +465,11 @@ describe("front plugin summary context", () => {
       [],
       state,
     );
-    const ref = JSON.parse(result.request.messages[2]!.content!).plugin_history;
+    const ref = JSON.parse(result.request.messages[3]!.content!).plugin_history;
     expect(ref).toEqual([
-      { message_id: u.id, question: "QUESTION", answer: "ANSWER" },
+      { message: 1, question: "QUESTION", answer: "ANSWER" },
     ]);
-    expect(result.request.messages[3]?.content).toContain("recent_raw_rounds");
+    expect(result.request.messages[2]?.content).toContain("recent_raw_rounds");
     expect(JSON.stringify(result.request.messages)).not.toMatch(
       /OLD_PROMPT_FORBIDDEN|OLD_DUP_USER_FORBIDDEN|FOREIGN|OTHER_PLUGIN/,
     );

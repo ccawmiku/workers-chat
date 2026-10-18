@@ -23,6 +23,7 @@ import {
   normalizePluginOutput,
   flowInjections,
   flowClarifications,
+  injectPlugins,
 } from "../shared/plugins";
 import { type Document, Store, HttpError, summary } from "./store";
 import { type Job, startGeneration } from "./generation";
@@ -39,6 +40,13 @@ import {
   type AnalysisType,
 } from "../shared/plugin-sections";
 import { ANALYSIS_SCHEMA } from "../shared/analysis-defaults";
+import {
+  clarificationSubmission,
+  legacyClarificationSubmission,
+} from "../shared/clarification-transmission";
+import { CONTINUE_CLARIFY_TASK } from "../shared/clarify-defaults";
+import { fallbackRequest } from "./fallback-model";
+import { compatibleMessages } from "../shared/upstream-compat";
 
 export type PluginTask = {
   kind: "plugin";
@@ -50,20 +58,94 @@ export type PluginTask = {
 };
 const stateId = (id: string) => "plugin-state:" + id;
 const taskId = (id: string) => "plugin-task:" + id;
-async function frozenPreparation(env: Env, source: PluginRun) {
-  const saved = await new Store(env.DB).get<PluginTask>(taskId(source.id));
+async function frozenPreparation(
+  env: Env,
+  source: PluginRun,
+  allowMissingProvider = false,
+) {
+  const saved = await new Store(env.DB).get<PluginTask>(
+    taskId(source.fallbackOf ?? source.id),
+  );
   if (!saved) throw new HttpError(409, "本轮请求快照不可用，请重新运行插件");
   const { providers } = await config(env),
     provider = providers.find((p) => p.id === saved.value.provider.id);
-  if (!provider) throw new HttpError(409, "原服务商已移除");
+  if (!provider && !allowMissingProvider)
+    throw new HttpError(409, "原服务商已移除");
   return {
     request: structuredClone(saved.value.request),
-    metrics: structuredClone(source.metrics),
-    provider,
-    modelRef: source.model ?? source.plugin.model!,
+    metrics: {
+      ...structuredClone(source.metrics),
+      capacity:
+        provider?.models.find((m) => m.id === saved.value.request.model)
+          ?.capacity ?? source.metrics.capacity,
+    },
+    provider: provider ?? {
+      ...saved.value.provider,
+      name: "原服务商",
+      prefix: "",
+      models: [],
+    },
+    modelRef: source.fallbackOf
+      ? {
+          providerId: saved.value.provider.id,
+          modelId: saved.value.request.model,
+        }
+      : (source.model ?? source.plugin.model!),
   };
 }
 const baselines = new WeakMap<Document<PluginState>, PluginState>();
+async function frozenClarification(
+  env: Env,
+  source: PluginRun,
+  state: PluginState,
+  flow: PluginFlow,
+) {
+  const initial = state.runs.find(
+    (r) => flow.results.includes(r.id) && r.plugin.kind === "clarify",
+  );
+  if (!initial) return undefined;
+  let prepared;
+  try {
+    prepared = await frozenPreparation(env, initial);
+  } catch (e) {
+    // Legacy/copied questions may have no snapshot. Keep their existing rebuild path.
+    if (
+      e instanceof HttpError &&
+      e.status === 409 &&
+      e.message.includes("请求快照不可用")
+    )
+      return undefined;
+    throw e;
+  }
+  const task = prepared.request.messages.pop();
+  const answers = flowClarifications(state, flow, true);
+  prepared.request.messages = injectPlugins(
+    [...prepared.request.messages, { role: "user", content: source.input }],
+    answers,
+  );
+  if (task)
+    prepared.request.messages.push({
+      ...task,
+      content:
+        (task.content ?? "") +
+        "\n\n" +
+        (source.plugin.clarifyFormat === "questions"
+          ? CONTINUE_CLARIFY_TASK
+          : "用户明确要求继续提问，请至少提出一个尚未问过、未回答或跳过的新问题，不得只回答无。保留原来的提问格式，不代写正文。"),
+    });
+  prepared.request.messages = compatibleMessages(
+    prepared.request.model,
+    prepared.request.messages,
+  );
+  prepared.metrics.total = estimateTokens(
+    prepared.request.messages.map((m) => m.content ?? "").join("\n"),
+  );
+  prepared.metrics.sections.push({
+    name: "本轮已提交澄清问答",
+    tokens: estimateTokens(JSON.stringify(answers)),
+  });
+  return prepared;
+}
 export async function pluginState(env: Env, id: string) {
   const doc = (await new Store(env.DB).get<PluginState>(stateId(id))) ?? {
     value: emptyPluginState(),
@@ -117,8 +199,7 @@ async function saveState(
         }[];
         for (const row of wanted[key]) {
           const before = base[key].find((r) => r.id === row.id) as
-            | Record<string, unknown>
-            | undefined;
+            Record<string, unknown> | undefined;
           const target = rows.find((r) => r.id === row.id);
           if (!before) {
             if (!target) rows.push(structuredClone(row));
@@ -165,9 +246,7 @@ async function signature(chat: Chat, settings: Settings) {
       chat.rounds,
       enabledPlugins(chat, settings)
         .filter((p) => p.kind === "analysis" || p.kind === "clarify")
-        .map(
-          ({ analysisTypes, clarifyLoop, ...requestConfig }) => requestConfig,
-        ),
+        .map(({ analysisTypes, ...requestConfig }) => requestConfig),
     ]),
   );
 }
@@ -405,6 +484,7 @@ async function enqueue(
   queuedId?: string,
   override?: ReturnType<typeof preparePlugin> & {
     sectionEdit?: PluginRun["sectionEdit"];
+    fallbackOf?: string;
   },
 ) {
   const { settings, providers } = await config(env),
@@ -418,7 +498,9 @@ async function enqueue(
         stateDoc.value,
         input,
         anchorId,
-        flow ? flowClarifications(stateDoc.value, flow) : [],
+        flow
+          ? flowClarifications(stateDoc.value, flow, p.kind === "clarify")
+          : [],
         (await summaryState(env, chat.id)).value,
       );
   const id = queuedId ?? crypto.randomUUID(),
@@ -435,6 +517,7 @@ async function enqueue(
       createdAt: Date.now(),
       metrics: prepared.metrics,
       model: prepared.modelRef,
+      ...(override?.fallbackOf ? { fallbackOf: override.fallbackOf } : {}),
       ...(replaces ? { replaces } : {}),
       ...(override?.sectionEdit ? { sectionEdit: override.sectionEdit } : {}),
     };
@@ -719,6 +802,15 @@ async function finishPluginOnce(
           null,
           2,
         );
+        if (
+          taskDoc?.value.request.messages
+            .at(-1)
+            ?.content?.includes(CONTINUE_CLARIFY_TASK) &&
+          !questionView(text)?.length
+        )
+          throw Error(
+            "模型没有生成新的追问，请重新生成或手动切换备用模型；已有回答已保留",
+          );
       }
     } catch (e) {
       status = "error";
@@ -1009,6 +1101,62 @@ export async function pluginEndpoint(
   }
   if (active && action !== "dismiss")
     throw new HttpError(409, "请等待当前生成结束，或先停止");
+  if (action === "fallback") {
+    if (!run || run.status !== "error" || run.dismissed)
+      throw new HttpError(409, "只有尚未处理的失败结果可以切换备用模型");
+    if (
+      run.flowId &&
+      (!flow ||
+        (run.replaces
+          ? flow.status !== "waiting"
+          : flow.status !== "error" || flow.results.at(-1) !== run.id))
+    )
+      throw new HttpError(409, "原插件阶段已变化，不能重新运行");
+    if (
+      run.sectionEdit &&
+      state.value.runs.find((r) => r.id === run.sectionEdit!.sourceId)
+        ?.output !== run.sectionEdit.expectedOutput
+    )
+      throw new HttpError(409, "分块内容已变化，请从当前块重新发起修改");
+    const prepared = await frozenPreparation(env, run, true);
+    const { settings, providers } = await config(env);
+    const selected = fallbackRequest(
+      settings,
+      providers,
+      body.model,
+      prepared.request,
+      run.plugin.parameters,
+    );
+    run.status = "superseded";
+    if (flow && !run.replaces) flow.results.pop();
+    return {
+      jobId: await enqueue(
+        env,
+        chat,
+        state,
+        run.plugin,
+        run.input,
+        run.contextAnchorId ?? null,
+        transport,
+        run.flowId ? flow : undefined,
+        run.replaces,
+        run.rewriteMessageId,
+        undefined,
+        {
+          ...prepared,
+          ...selected,
+          metrics: {
+            ...prepared.metrics,
+            capacity: selected.provider.models.find(
+              (m) => m.id === selected.modelRef.modelId,
+            )!.capacity,
+          },
+          sectionEdit: run.sectionEdit,
+          fallbackOf: run.fallbackOf ?? run.id,
+        },
+      ),
+    };
+  }
   const requireAnalysis = () => {
     if (
       !run ||
@@ -1036,16 +1184,16 @@ export async function pluginEndpoint(
     prepared.request.messages.push({
       role: "user",
       content: JSON.stringify({
+        original_task: originalTask?.content?.split("\n\nJSON Schema：")[0],
+        output_contract:
+          '原任务只作为资料和内容规则参考，原任务中的完整字段/全量输出要求在本次无效。只输出 JSON {"type":"类型名称","content":"该块内容","instruction":"仅新增类型时填写可复用通用规则，不包含本轮人物/剧情方向"}；不要输出 id、其他块或完整分析。类型名称和内容不能为空。指定块的 type 必须保持原样。不得生成主角、玩家或“你”的第一人称想法。只涉及当前明确在场的角色；忽略不在场、已离场或位置不明的角色，不列缺席名单，不输出“某某不在场”的说明或占位。不编造已有状态。',
+        excluded_characters: source.plugin.excludedCharacters ?? "",
+        current_sections: sections,
         task: targetId
           ? "只重新生成指定块；其他块只读，不要输出或改变它们。"
           : "按用户描述添加一种新类型；不改动现有块。",
-        original_task: originalTask?.content?.split("\n\nJSON Schema：")[0],
-        current_sections: sections,
         target: target ?? null,
         user_requirement: instruction,
-        output_contract:
-          '原任务只作为资料和内容规则参考，原任务中的完整字段/全量输出要求在本次无效。只输出 JSON {"type":"类型名称","content":"该块内容","instruction":"仅新增类型时填写可复用通用规则，不包含本轮人物/剧情方向"}；不要输出 id、其他块或完整分析。类型名称和内容不能为空。指定块的 type 必须保持原样。不得生成主角或“你”的第一人称想法；不编造已有状态。',
-        excluded_characters: source.plugin.excludedCharacters ?? "",
       }),
     });
     prepared.request.response_format = { type: "json_object" };
@@ -1271,34 +1419,6 @@ export async function pluginEndpoint(
     await saveState(env, chat.id, state, extra);
     return { ok: true };
   }
-  if (action === "clarify-loop") {
-    if (
-      !run ||
-      run.plugin.kind !== "clarify" ||
-      run.status !== "waiting" ||
-      !flow ||
-      flow.status !== "waiting" ||
-      flow.results.at(-1) !== run.id
-    )
-      throw new HttpError(409, "当前没有待处理提问");
-    const enabled = body.enabled === true;
-    run.plugin.clarifyLoop = enabled;
-    flow.definitions = flow.definitions.map((p) =>
-      p.id === run.plugin.id ? { ...p, clarifyLoop: enabled } : p,
-    );
-    chat.plugins = (chat.plugins ?? []).map((p) =>
-      p.id === run.plugin.id
-        ? { ...p, overrides: { ...p.overrides, clarifyLoop: enabled } }
-        : p,
-    );
-    await saveState(
-      env,
-      chat.id,
-      state,
-      store.planSave(chat.id, "chat", chat, chatDoc.revision, summary(chat)),
-    );
-    return { ok: true };
-  }
   if (action === "rewrite" || action === "suggest") {
     const { settings } = await config(env),
       p = enabledPlugins(chat, settings).find(
@@ -1477,6 +1597,11 @@ export async function pluginEndpoint(
     if (!answer.trim() && action !== "finish-clarify" && structured === null)
       throw new HttpError(400, "请填写回答");
     run.answer = answer;
+    run.submission = clarificationSubmission(
+      run.output,
+      body.selections,
+      freeText,
+    );
     run.status = "answered";
     for (const other of state.value.runs)
       if (
@@ -1485,10 +1610,7 @@ export async function pluginEndpoint(
         ["candidate", "error"].includes(other.status)
       )
         other.status = "superseded";
-    const repeat =
-      action !== "finish-clarify" &&
-      run.plugin.clarifyLoop &&
-      structured?.length !== 0;
+    const repeat = action !== "finish-clarify";
     if (!repeat) flow.index++;
     flow.status = "running";
     await saveState(env, chat.id, state);
@@ -1503,6 +1625,10 @@ export async function pluginEndpoint(
           run.contextAnchorId ?? null,
           transport,
           flow,
+          undefined,
+          undefined,
+          undefined,
+          await frozenClarification(env, run, state.value, flow),
         ),
       };
     await advanceFlow(env, chat.id, flow.id);
@@ -1636,7 +1762,17 @@ export async function pluginEndpoint(
           anchorId: copy.id,
           contextAnchorId: copy.parentId,
           ...(id === run.id && typeof body.answer === "string"
-            ? { answer: body.answer }
+            ? {
+                answer: body.answer,
+                ...(old.plugin.kind === "clarify"
+                  ? {
+                      submission: legacyClarificationSubmission(
+                        old.output,
+                        body.answer,
+                      ),
+                    }
+                  : {}),
+              }
             : {}),
         };
         state.value.runs.push(cloned);

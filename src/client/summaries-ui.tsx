@@ -1,4 +1,6 @@
-import { UsageBar } from "./usage-bar";
+import { UsageRing, PluginChipContents } from "./usage-bar";
+import { ActionIcons as I } from "./action-icons";
+import { FallbackButton } from "./fallback-ui";
 import { api } from "./api";
 import { useEffect, useState, useMemo } from "react";
 import type { PluginRequest } from "../shared/plugins";
@@ -70,6 +72,9 @@ export function SummaryEditor({
         <div className="settings-form-scroll">
           <p className="muted">
             每条完整回复结束后与追问同时生成。只影响新请求；旧摘要保留，可手动重新生成。
+            {local
+              ? "当前聊天配置优先于全局，点击恢复全局可清除覆盖。"
+              : "已有聊天的独立摘要配置优先于全局。"}
           </p>
           <fieldset className="du-fieldset plugin-editor-section">
             <legend className="du-fieldset-legend">摘要模型</legend>
@@ -86,9 +91,7 @@ export function SummaryEditor({
                   })
                 }
               >
-                <option value="">
-                  自动：优先 Gemini 3.1 Flash Lite，否则当前模型
-                </option>
+                <option value="">跟随当前主聊天模型</option>
                 {providers.flatMap((v) =>
                   v.models
                     .filter((m) => m.enabled)
@@ -193,10 +196,12 @@ export function SummaryEditor({
                   .catch((e) => setError(e.message))
               }
             >
+              <I.reset size={15} />
               恢复全局
             </button>
           )}
           <button className="du-btn du-btn-ghost" type="button" onClick={close}>
+            <I.cancel size={15} />
             取消
           </button>
           <button className="du-btn du-btn-primary" disabled={busy}>
@@ -327,7 +332,8 @@ export function ReplySummaryCard({
             disabled={busy || !chat.messages[messageId]?.content.trim()}
             onClick={() => void action("regenerate", { messageId })}
           >
-            {busy ? <Loading small /> : <RotateCcw size={14} />}生成摘要
+            {busy ? <Loading small /> : <I.regenerateSummary size={14} />}
+            生成摘要
           </button>
           {error && <p role="alert">{error}</p>}
         </div>
@@ -394,7 +400,7 @@ export function ReplySummaryCard({
               disabled={busy || !!pending}
               onClick={() => void action("regenerate", { messageId })}
             >
-              <RotateCcw size={14} />
+              <I.regenerateSummary size={14} />
               重新生成摘要
             </button>
             {pending && (
@@ -411,12 +417,23 @@ export function ReplySummaryCard({
                 className="du-btn du-btn-sm"
                 onClick={() => setCompare(true)}
               >
+                <I.compare size={14} />
                 查看新摘要
               </button>
             )}
             <small className="muted">
               上下文 {formatTokenCount((pending ?? last).inputTokens)} Token
             </small>
+            {last.status === "error" && !pending && (
+              <FallbackButton
+                disabled={busy}
+                retry={(model) =>
+                  action("fallback", { runId: last.id, model }).then((ok) => {
+                    if (!ok) throw Error("备用模型请求未启动");
+                  })
+                }
+              />
+            )}
           </div>
           {error && (
             <p className="du-alert du-alert-error" role="alert">
@@ -454,6 +471,7 @@ export function ReplySummaryCard({
                 )
               }
             >
+              <I.cancel size={15} />
               保留原摘要
             </button>
             <button
@@ -600,28 +618,27 @@ export function SummaryContextChip({
         aria-label="回复摘要上下文"
         onClick={() => setOpen(true)}
       >
-        <span>
-          <span className="plugin-chip-name">回复摘要</span>
-          <b>{message ? formatTokenCount(tokens) : "待回复"}</b>
-        </span>
-        <progress
-          className="du-progress du-progress-primary"
-          max={capacity}
-          value={Math.min(tokens, capacity)}
-        />
-        <UsageBar
+        <PluginChipContents
+          name="回复摘要"
+          inputLabel={message ? formatTokenCount(tokens) : "待回复"}
+          used={tokens}
+          capacity={capacity}
           usage={run?.usage}
+          cacheId={run?.id}
           fallback={
             tokens
               ? { input: tokens, thinking: 0, output: 0, total: tokens }
               : undefined
           }
+          preview={
+            run?.status === "running" &&
+            prepared &&
+            run.model?.providerId === prepared.modelRef.providerId &&
+            run.model?.modelId === prepared.modelRef.modelId
+              ? prepared
+              : undefined
+          }
         />
-        {cacheHitRate(run?.usage?.cache_hit_rate) && (
-          <small className="plugin-chip-cache">
-            缓存 {cacheHitRate(run?.usage?.cache_hit_rate)}
-          </small>
-        )}
       </button>
       {open && (
         <Dialog title="回复摘要 · 上下文" close={() => setOpen(false)} wide>
@@ -643,7 +660,7 @@ export function SummaryContextChip({
                 value={Math.min(tokens, capacity)}
                 max={capacity}
               />
-              <UsageBar
+              <UsageRing
                 usage={run?.usage}
                 fallback={
                   tokens
@@ -692,9 +709,11 @@ export function ConfirmPostSend({
       </p>
       <footer>
         <button className="du-btn du-btn-ghost" onClick={cancel}>
+          <I.cancel size={15} />
           暂不发送
         </button>
         <button className="du-btn du-btn-primary" onClick={confirm}>
+          <I.submit size={15} />
           继续发送
         </button>
       </footer>

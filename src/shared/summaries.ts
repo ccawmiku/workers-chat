@@ -1,6 +1,7 @@
 import { replyFallback } from "./reply-context";
 import {
   route,
+  resolveModel,
   type Chat,
   type Settings,
   type Provider,
@@ -17,7 +18,9 @@ export const SUMMARY_PROMPT = `你负责将本轮回复提炼为 100–150 字�
 参考真实上一轮范例的颗粒度，但不照搬其事实。首轮没有范例也正常生成，不自行编造示例。100–150 字是目标，原文很短可更短；不要为凑字数补写。`;
 const PREVIOUS_SUMMARY_PROMPT = SUMMARY_PROMPT.replaceAll("100–150", "50–100");
 /** Only migrate our exact old default; preserve custom prompts and explicit blank. */
-export function upgradeSummaryConfig<T extends Partial<SummaryConfig>>(config: T): T {
+export function upgradeSummaryConfig<T extends Partial<SummaryConfig>>(
+  config: T,
+): T {
   return config.system === PREVIOUS_SUMMARY_PROMPT
     ? { ...config, system: SUMMARY_PROMPT }
     : config;
@@ -168,6 +171,7 @@ export function prepareSummary(
   state: SummaryState,
   settings: Settings,
   providers: Provider[],
+  modelOverride?: ModelRef,
 ) {
   const message = chat.messages[messageId];
   if (
@@ -178,14 +182,11 @@ export function prepareSummary(
   )
     throw Error("请选择已有正文的回复生成摘要");
   const config = summaryConfig(chat, settings);
-  const preferred = providers
-    .flatMap((p) => p.models.map((m) => ({ p, m })))
-    .find(({ m }) => m.enabled && m.id === "gemini-3.1-flash-lite");
+  // A null selection follows the current main model, including after a switch.
   const ref =
+    modelOverride ??
     config.model ??
-    (preferred
-      ? { providerId: preferred.p.id, modelId: preferred.m.id }
-      : (chat.model ?? settings.defaultModel));
+    resolveModel(chat.model, settings, providers);
   const provider = providers.find((p) => p.id === ref?.providerId),
     model = provider?.models.find((m) => m.id === ref?.modelId);
   if (!ref || !provider || !model)
@@ -194,20 +195,21 @@ export function prepareSummary(
     index = path.findIndex((m) => m.id === messageId);
   const savedSummaries = summaryIndex(chat, state, path);
   const history: {
-    message_id: string;
+    turn: number;
     user_excerpt: string;
     summary?: string;
     assistant_excerpt?: string;
   }[] = [];
   let previous:
     | {
-        message_id: string;
+        turn: number;
         user_excerpt: string;
         assistant_excerpt: string;
         summary: string;
       }
     | undefined;
   let previousUser = "";
+  let turn = 0;
   for (let i = 0; i < index; i++) {
     const m = path[i]!;
     if (m.role === "user") {
@@ -215,9 +217,10 @@ export function prepareSummary(
       continue;
     }
     if (m.role !== "assistant") continue;
+    turn++;
     const saved = savedSummaries.get(m.id);
     history.push({
-      message_id: m.id,
+      turn,
       user_excerpt: excerpt(previousUser, 500),
       ...(saved?.summary
         ? { summary: saved.summary }
@@ -225,7 +228,7 @@ export function prepareSummary(
     });
     if (saved?.summary)
       previous = {
-        message_id: m.id,
+        turn,
         user_excerpt: excerpt(previousUser, 500),
         assistant_excerpt: excerpt(m.content, 2500),
         summary: saved.summary,
@@ -242,7 +245,7 @@ export function prepareSummary(
     content: JSON.stringify({
       ...(previous ? { previous_example: previous } : {}),
       current: {
-        message_id: message.id,
+        turn: turn + 1,
         user: u?.content ?? "",
         assistant: message.content,
       },

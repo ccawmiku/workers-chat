@@ -1,3 +1,4 @@
+import { recordCacheRequest } from "./cache-usage";
 import React, {
   createContext,
   useCallback,
@@ -8,7 +9,6 @@ import React, {
 } from "react";
 import { api } from "./api";
 import { deviceMode, setDeviceMode } from "./device-mode";
-import { useDialogFocus } from "./controls";
 import type { DirectTask, DirectTitleTask } from "../shared/direct";
 import {
   type CompletionOutput,
@@ -144,29 +144,7 @@ export function DeviceConnectionProvider({
       }
     >(),
   );
-  const [prompt, setPrompt] = useState<{
-    identity: ProviderIdentity;
-    resolve: (key: string) => void;
-    reject: (error: Error) => void;
-    token: number;
-  } | null>(null);
-  const promptRef = useRef(prompt);
-  promptRef.current = prompt;
-  const serial = useRef(Promise.resolve()),
-    token = useRef(0);
-  const [password, setPassword] = useState(""),
-    [error, setError] = useState(""),
-    [checking, setChecking] = useState(false);
-  const dialog = useRef<HTMLElement>(null);
-  const cancelPrompt = () => {
-    const current = promptRef.current;
-    promptRef.current = null;
-    token.current++;
-    setPrompt(null);
-    setPassword("");
-    current?.reject(Error("已取消设备直连密钥解锁"));
-  };
-  useDialogFocus(dialog, cancelPrompt, !!prompt);
+  const serial = useRef(Promise.resolve());
   const identityKey = (identity: ProviderIdentity) =>
     identity.providerId + "@" + identity.baseUrl;
   const key = useCallback(async (identity: ProviderIdentity) => {
@@ -184,23 +162,20 @@ export function DeviceConnectionProvider({
       if (requestedEpoch !== epoch.current) throw Error("设备密钥已锁定");
       const existing = vault.current.get(identityKey(identity));
       if (existing !== undefined) return existing;
-      return await new Promise<string>((resolve, reject) => {
-        setError("");
-        setPassword("");
-        setPrompt({ identity, resolve, reject, token: ++token.current });
-      });
+      const response = await api<{ apiKey: string }>(
+        "/providers/" + identity.providerId + "/device-key",
+        "POST",
+        { baseUrl: identity.baseUrl },
+      );
+      if (requestedEpoch !== epoch.current) throw Error("设备密钥已锁定");
+      vault.current.set(identityKey(identity), response.apiKey);
+      return response.apiKey;
     } finally {
       release();
     }
   }, []);
   const lock = useCallback(() => {
     epoch.current++;
-    const current = promptRef.current;
-    promptRef.current = null;
-    token.current++;
-    setPrompt(null);
-    setPassword("");
-    current?.reject(Error("设备密钥已锁定"));
     vault.current.clear();
     for (const running of active.current.values()) running.controller.abort();
     for (const controller of titleControllers.current.values())
@@ -266,6 +241,12 @@ export function DeviceConnectionProvider({
           entry.controller.signal,
           AbortSignal.timeout(30 * 60 * 1000),
         ]);
+        if (typeof task.request.model === "string")
+          recordCacheRequest(
+            task.messageId,
+            { providerId: task.providerId, modelId: task.request.model },
+            { ...task.request, model: task.request.model },
+          );
         const response = await directFetch(
           task.baseUrl,
           "/chat/completions",
@@ -430,6 +411,11 @@ export function DeviceConnectionProvider({
             entry.controller.signal,
             AbortSignal.timeout(30 * 60 * 1000),
           ]);
+          recordCacheRequest(
+            task.id,
+            { providerId: direct.providerId, modelId: direct.request.model },
+            direct.request,
+          );
           const response = await directFetch(
             direct.baseUrl,
             "/chat/completions",
@@ -534,87 +520,11 @@ export function DeviceConnectionProvider({
         if (item.task.chatId === chatId && item.status === "running") {
           found = true;
           item.controller.abort();
-          const current = promptRef.current;
-          if (current?.identity.providerId === item.task.providerId)
-            cancelPrompt();
         }
       return found;
     },
     start,
     title,
   };
-  return (
-    <Context.Provider value={connection}>
-      {children}
-      {prompt && (
-        <div className="modal-backdrop" onClick={cancelPrompt}>
-          <section
-            className="modal key-modal"
-            ref={dialog}
-            role="dialog"
-            aria-modal="true"
-            aria-label="解锁设备直连"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2>解锁设备直连</h2>
-            <p className="muted">
-              验证访问密码后，此页面可直接请求所选服务商。API Key
-              只临时保留在页面内存。
-            </p>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                const current = prompt;
-                const value = password;
-                setPassword("");
-                setChecking(true);
-                void api<{ apiKey: string }>(
-                  "/providers/" + current.identity.providerId + "/key",
-                  "POST",
-                  { password: value },
-                )
-                  .then((response) => {
-                    if (current.token !== token.current) return;
-                    vault.current.set(
-                      identityKey(current.identity),
-                      response.apiKey,
-                    );
-                    current.resolve(response.apiKey);
-                    setPrompt(null);
-                  })
-                  .catch((error) => {
-                    if (current.token === token.current)
-                      setError(error.message);
-                  })
-                  .finally(() => setChecking(false));
-              }}
-            >
-              <label>
-                访问密码
-                <input
-                  className="du-input du-input-sm"
-                  aria-label="直连验证密码"
-                  type="password"
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                />
-              </label>
-              {error && (
-                <p role="alert" className="danger-text">
-                  {error}
-                </p>
-              )}
-              <button type="button" onClick={cancelPrompt}>
-                取消
-              </button>
-              <button className="primary" disabled={checking || !password}>
-                {checking ? "验证中…" : "验证并连接"}
-              </button>
-            </form>
-          </section>
-        </div>
-      )}
-    </Context.Provider>
-  );
+  return <Context.Provider value={connection}>{children}</Context.Provider>;
 }

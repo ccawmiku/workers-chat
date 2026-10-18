@@ -39,6 +39,11 @@ export function hasReportedUsage(value: unknown) {
     "output_tokens",
     "total_tokens",
     "cached_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "cache_write_tokens",
+    "prompt_cache_hit_tokens",
+    "prompt_cache_miss_tokens",
     "reasoning_tokens",
     "thinking_tokens",
   ].some((key) => key in value);

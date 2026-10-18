@@ -1,3 +1,4 @@
+import { ActionIcons as I } from "./action-icons";
 import { useRef, useState, useEffect } from "react";
 import { Eye, X } from "lucide-react";
 import type { Provider, Settings } from "../shared/chat";
@@ -126,6 +127,7 @@ export function SettingsTools({
             )
           }
         >
+          <I.reset size={15} />
           恢复默认标题提示词
         </button>
         <p className="muted">
@@ -197,6 +199,7 @@ export function SettingsTools({
           });
         }}
       >
+        <I.download size={15} />
         导出设置备份
       </button>
       <hr />
@@ -227,7 +230,10 @@ export function SettingsTools({
           e.target.value = "";
         }}
       />
-      <button onClick={() => file.current?.click()}>选择设置备份文件</button>
+      <button onClick={() => file.current?.click()}>
+        <I.upload size={15} />
+        选择设置备份文件
+      </button>
       {backup && (
         <div className="backup-preview">
           <p>
@@ -279,9 +285,13 @@ export function SettingsTools({
               });
             }}
           >
+            <I.restore size={15} />
             确认恢复设置
           </button>
-          <button onClick={() => setBackup(null)}>取消</button>
+          <button onClick={() => setBackup(null)}>
+            <I.cancel size={15} />
+            取消
+          </button>
         </div>
       )}
       {notice && <p role="status">{notice}</p>}
@@ -363,6 +373,7 @@ export function KeyReveal({ provider, run }: { provider: Provider; run: Run }) {
                   />
                 </label>
                 <button className="primary" disabled={busy}>
+                  <I.reveal size={15} />
                   验证并显示
                 </button>
               </form>

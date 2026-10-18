@@ -1,3 +1,4 @@
+import { ActionIcons as I } from "./action-icons";
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -234,7 +235,7 @@ export function ProvidersPanel({
         )}
       </div>
       <p className="muted provider-security-note">
-        密钥加密保存；设备直连时经访问密码验证后临时解锁。修改名称或前缀可直接保存，不必连接上游。
+        密钥加密保存；设备直连时复用当前登录会话临时解锁。修改名称或前缀可直接保存，不必连接上游。
       </p>
       {form &&
         createPortal(
@@ -349,6 +350,7 @@ export function ProvidersPanel({
                     disabled={busy === "editor"}
                     onClick={close}
                   >
+                    <I.cancel size={15} />
                     取消
                   </button>
                   <button
@@ -372,6 +374,7 @@ export function ProvidersPanel({
                     }
                     disabled={busy === "editor"}
                   >
+                    <I.connect size={15} />
                     {form.id ? "保存并刷新模型" : "保存并获取模型"}
                   </button>
                 </div>

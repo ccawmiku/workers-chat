@@ -134,7 +134,7 @@ for (const mobile of [false, true]) {
       mobile ? 1.7 : 1.8,
     );
     await page.reload();
-    await expect(page.locator(".header-title")).toHaveText("界面组件验证");
+    await expect(page.locator(".chat-row.selected .chat-title")).toHaveText("界面组件验证");
     expect(
       await page
         .locator("article.assistant .markdown p")

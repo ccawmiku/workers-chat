@@ -29,10 +29,34 @@ for (const mobile of [false, true])
         string,
         unknown
       >;
-      const response = await fetch("/api/settings", {
-        method: "PUT",
+      const providerId = crypto.randomUUID();
+      const response = await fetch("/api/settings/import", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...settings, plugins }),
+        body: JSON.stringify({
+          mode: "merge",
+          data: {
+            format: "workers-chat.settings",
+            version: 1,
+            settings: { ...settings, plugins, pluginFallbackModels: [] },
+            providers: [
+              {
+                id: providerId,
+                name: "备用模型测试",
+                prefix: "FB/",
+                baseUrl: "https://fallback-fixture.invalid/v1",
+                models: [
+                  {
+                    id: "fixture-spare",
+                    enabled: true,
+                    capacity: 100000,
+                    parameters: {},
+                  },
+                ],
+              },
+            ],
+          },
+        }),
       });
       if (!response.ok) throw Error("settings fixture failed");
     }, defaultPlugins());
@@ -45,6 +69,22 @@ for (const mobile of [false, true])
       .locator(".settings-menu")
       .getByRole("button", { name: "插件", exact: true })
       .click();
+    const spare = page.getByLabel("添加共享备用模型", { exact: true });
+    await spare.selectOption({ label: "FB/fixture-spare · 备用模型测试" });
+    const remove = page.getByRole("button", {
+      name: "移除备用模型 fixture-spare",
+      exact: true,
+    });
+    await expect(remove).toBeVisible();
+    expect(
+      await page.evaluate(
+        async () =>
+          ((await (await fetch("/api/settings")).json()) as any)
+            .pluginFallbackModels.length,
+      ),
+    ).toBe(1);
+    await remove.click();
+    await expect(remove).toHaveCount(0);
     const list = page.getByRole("list", { name: "插件默认配置", exact: true });
     await expect(list.locator("li")).toHaveCount(4);
     await expect(list.getByText("内置", { exact: true })).toHaveCount(4);
@@ -88,10 +128,10 @@ for (const mobile of [false, true])
       });
     }
     await list
-      .getByRole("button", { name: "编辑插件 提问澄清", exact: true })
+      .getByRole("button", { name: "编辑插件 补充提问", exact: true })
       .click();
     let editor = page.getByRole("dialog", {
-      name: "全局 · 提问澄清",
+      name: "全局 · 补充提问",
       exact: true,
     });
     const sticky = await editor.evaluate((el) => {
@@ -141,7 +181,7 @@ for (const mobile of [false, true])
       stream: false,
     });
     await list
-      .getByRole("button", { name: "编辑插件 提问澄清", exact: true })
+      .getByRole("button", { name: "编辑插件 补充提问", exact: true })
       .click();
     await expect(
       editor.getByLabel("插件流式输出", { exact: true }),

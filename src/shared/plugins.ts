@@ -1,5 +1,6 @@
 import { replyFallback, REPLY_FALLBACK_CHAR_LIMIT } from "./reply-context";
 import { CLARIFY_PROMPT } from "./clarify-defaults";
+import { compatibleMessages } from "./upstream-compat";
 import {
   readQuestions,
   questionView,
@@ -13,6 +14,11 @@ export { upgradeLegacyPlugin } from "./plugin-migrations";
 import { summaryIndex, type SummaryState } from "./summaries";
 import { ANALYSIS_PROMPT, ANALYSIS_SCHEMA } from "./analysis-defaults";
 import {
+  legacyClarificationSubmission,
+  hasClarificationAnswers,
+  type ClarificationSubmission,
+} from "./clarification-transmission";
+import {
   type Chat,
   type ModelRef,
   type Parameters,
@@ -25,6 +31,7 @@ import {
 
 export type PluginKind = "analysis" | "clarify" | "suggest" | "rewrite";
 export type APIMessage = {
+  reasoning_content?: string;
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
   tool_call_id?: string;
@@ -54,7 +61,6 @@ export type PluginDefinition = {
   initialUser?: string;
   rewriteFormat?: "fields";
   clarifyFormat?: "questions";
-  clarifyLoop?: boolean;
   excludedCharacters?: string;
   analysisTypes?: AnalysisType[];
 };
@@ -91,6 +97,9 @@ export type PluginJobView = {
   };
 };
 export type PluginRun = {
+  submission?: ClarificationSubmission;
+  /** Failed original snapshot; later operations return to its configured model. */
+  fallbackOf?: string;
   model?: ModelRef;
   id: string;
   plugin: PluginDefinition;
@@ -158,7 +167,7 @@ export type PluginState = {
 export const emptyPluginState = (): PluginState => ({ runs: [], flows: [] });
 const names: Record<PluginKind, string> = {
   analysis: "写前分析",
-  clarify: "提问澄清",
+  clarify: "补充提问",
   suggest: "追问建议",
   rewrite: "重写提示",
 };
@@ -186,9 +195,7 @@ export function pluginDefaults(
     rawRounds: 3,
     suggestions: 3,
     ...(kind === "rewrite" ? { rewriteFormat: "fields" as const } : {}),
-    ...(kind === "clarify"
-      ? { clarifyFormat: "questions" as const, clarifyLoop: false }
-      : {}),
+    ...(kind === "clarify" ? { clarifyFormat: "questions" as const } : {}),
     ...(kind === "analysis"
       ? { excludedCharacters: "", analysisTypes: [] }
       : {}),
@@ -402,6 +409,7 @@ export function preparePlugin(
     const cleanPath = path.filter(
       (m) => m.role === "user" || m.role === "assistant",
     );
+    const positions = new Map(cleanPath.map((m, i) => [m.id, i + 1]));
     const savedSummaries = summaryIndex(chat, summaries, cleanPath);
     const history: APIMessage[] = cleanPath.map((m) => {
       if (m.role === "user") return { role: "user", content: m.content };
@@ -413,7 +421,7 @@ export function preparePlugin(
       return {
         role: "assistant",
         content: saved
-          ? JSON.stringify({ message_id: m.id, summary: saved.summary })
+          ? JSON.stringify({ summary: saved.summary })
           : replyFallback(m.content),
       };
     });
@@ -431,7 +439,6 @@ export function preparePlugin(
           role: "user",
           content: JSON.stringify({
             recent_raw_rounds: recent.map((m) => ({
-              message_id: m.id,
               role: m.role,
               content: m.content,
             })),
@@ -452,7 +459,7 @@ export function preparePlugin(
       .map((r) => ({
         id: r.id,
         text: JSON.stringify({
-          message_id: r.anchorId,
+          message: positions.get(r.anchorId!),
           ...(p.kind === "analysis"
             ? { result: r.output }
             : { question: r.output, answer: r.answer }),
@@ -462,6 +469,11 @@ export function preparePlugin(
       (n, r) => n + estimateTokens(r.text),
       0,
     );
+    // Both front plugins share the expensive raw prefix before their own references diverge.
+    if (rawSupplement) {
+      messages.push(rawSupplement);
+      section("最近原始 UA 补充", [rawSupplement]);
+    }
     if (references.length) {
       const reference: APIMessage = {
         role: "user",
@@ -471,10 +483,6 @@ export function preparePlugin(
       };
       messages.push(reference);
       section("插件历史结果", [reference]);
-    }
-    if (rawSupplement) {
-      messages.push(rawSupplement);
-      section("最近原始 UA 补充", [rawSupplement]);
     }
     if (clarifications.length) {
       const start = messages.length;
@@ -513,7 +521,11 @@ export function preparePlugin(
     messages = swappedHistory(
       path,
       p.initialUser ?? "好的",
-      render(p.prompt, { COUNT: String(p.suggestions), USER_INPUT: input }),
+      render(p.prompt, {
+        COUNT: String(p.suggestions),
+        USER_INPUT:
+          p.kind === "rewrite" ? "本轮输入见末尾任务中的原始用户指令" : input,
+      }),
       savedSummaries,
     );
     section(
@@ -522,8 +534,6 @@ export function preparePlugin(
     );
     const task = candidateTask(p.kind, p.suggestions, input);
     const last = messages.at(-1)!;
-    if (p.kind === "rewrite" && path.at(-1)?.role === "assistant")
-      last.content = "【前文正文，仅供背景，不是待重写对象】\n" + last.content;
     if (last.role === "user")
       last.content = (last.content ?? "") + "\n\n" + task;
     else messages.push({ role: "user", content: task });
@@ -534,13 +544,14 @@ export function preparePlugin(
   );
   const request: PluginRequest = {
     model: ref.modelId,
-    messages,
+    messages: compatibleMessages(ref.modelId, messages),
     stream:
       p.kind === "analysis" || p.kind === "clarify" ? p.stream !== false : true,
     ...settings.parameters,
     ...model.parameters,
     ...p.parameters,
     ...(["suggest", "rewrite"].includes(p.kind) ||
+    (p.kind === "analysis" && objectSchema(p.schema)) ||
     (p.kind === "clarify" && p.clarifyFormat === "questions")
       ? { response_format: { type: "json_object" as const } }
       : {}),
@@ -548,6 +559,13 @@ export function preparePlugin(
   };
   if (request.stream) request.stream_options = { include_usage: true };
   return { request, metrics, provider, modelRef: ref };
+}
+function objectSchema(schema: string) {
+  try {
+    return JSON.parse(schema).type === "object";
+  } catch {
+    return false;
+  }
 }
 export type PluginInjection = {
   pluginId: string;
@@ -592,10 +610,22 @@ export function injectPlugins(
 export function flowInjections(
   state: PluginState,
   flow: PluginFlow,
+  fullClarificationHistory = false,
 ): PluginInjection[] {
   return flow.results.flatMap((id) => {
     const run = state.runs.find((r) => r.id === id);
     if (!run || !["complete", "answered"].includes(run.status)) return [];
+    const submission =
+      run.plugin.kind === "clarify"
+        ? (run.submission ??
+          legacyClarificationSubmission(run.output, run.answer))
+        : undefined;
+    if (
+      submission &&
+      !fullClarificationHistory &&
+      !hasClarificationAnswers(submission)
+    )
+      return [];
     if (
       run.plugin.kind === "clarify" &&
       questionView(run.output)?.length === 0 &&
@@ -612,7 +642,11 @@ export function flowInjections(
         runId: run.id,
         content:
           run.plugin.kind === "clarify"
-            ? JSON.stringify({ questions: run.output, answer: run.answer })
+            ? JSON.stringify(
+                fullClarificationHistory
+                  ? { questions: run.output, answer: run.answer }
+                  : submission,
+              )
             : run.output,
       },
     ];
@@ -621,6 +655,7 @@ export function flowInjections(
 export function flowClarifications(
   state: PluginState,
   flow: PluginFlow,
+  fullHistory = false,
 ): PluginInjection[] {
   const ids = new Set(
     state.runs
@@ -632,5 +667,7 @@ export function flowClarifications(
       )
       .map((r) => r.id),
   );
-  return flowInjections(state, flow).filter((i) => ids.has(i.runId));
+  return flowInjections(state, flow, fullHistory).filter((i) =>
+    ids.has(i.runId),
+  );
 }

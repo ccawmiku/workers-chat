@@ -1,3 +1,7 @@
+import { hasCacheRequest, recordCacheRequest } from "./cache-usage";
+import { compatibleMessages } from "../shared/upstream-compat";
+import { ActionIcons as I } from "./action-icons";
+import { FallbackContext, FallbackButton } from "./fallback-ui";
 import type { PluginInputRequest } from "./plugin-sections-ui";
 import type { PluginRun } from "../shared/plugins";
 import { AccountUsageSidebar, AccountUsageSettings } from "./account-usage";
@@ -8,7 +12,6 @@ import {
   applyAppearance,
   type Appearance,
 } from "./appearance";
-import { MessageTokenBar } from "./usage-bar";
 import {
   ReplySummaryCard,
   SummaryTools,
@@ -91,6 +94,7 @@ import {
   markdownExport,
   estimateTokens,
   contextMessages,
+  requestPreview,
   defaultSettings,
 } from "../shared/chat";
 import { api, download, ApiError } from "./api";
@@ -463,58 +467,89 @@ function App() {
   }, []);
   const snapshotRequests = useRef(new Map<string, Promise<ChatSnapshot>>());
   const snapshotRevisions = useRef(new Map<string, number>());
-  const refresh = useCallback(async (id = idRef.current, fresh = false) => {
-    if (!id) return;
-    // A completion must not reuse a snapshot started before the final save.
-    if (fresh) await snapshotRequests.current.get(id)?.catch(() => {});
-    const pending =
-      snapshotRequests.current.get(id) ?? api<ChatSnapshot>("/chats/" + id);
-    snapshotRequests.current.set(id, pending);
-    let result;
-    try {
-      result = await pending;
-    } finally {
-      if (snapshotRequests.current.get(id) === pending)
-        snapshotRequests.current.delete(id);
-    }
-    if (idRef.current !== id) return;
-    if (result.revision < (snapshotRevisions.current.get(id) ?? 0)) return;
-    snapshotRevisions.current.set(id, result.revision);
-    setChat(connection.overlay(result.chat));
-    setJob(result.job);
-    setTitleJob(result.titleJob ?? null);
-    setPluginState(
-      connection.pluginOverlay(
-        cleanPluginState(
-          result.pluginState ?? emptyPluginState(),
-          result.chat.id,
-        ),
-      ),
-    );
-    pluginPreviewState.current = cleanPluginState(
-      result.pluginState ?? emptyPluginState(),
-      result.chat.id,
-    );
-    setPluginJob(result.pluginJob ?? null);
-    adoptSummaries(id, result.summaryState ?? { runs: [] });
-    setPostJobs(result.postJobs ?? []);
-    if (result.generation) acceptGeneration(result.generation);
-    if (
-      !result.job &&
-      result.chat.unread &&
-      document.visibilityState === "visible"
-    ) {
-      await api("/chats/" + id + "/seen", "POST", {});
-      setChat((previous) =>
-        previous?.id === id ? { ...previous, unread: false } : previous,
-      );
+  const refresh = useCallback(
+    async (id = idRef.current, fresh = false, supplied?: ChatSnapshot) => {
+      if (!id) return;
+      // A completion must not reuse a snapshot started before the final save.
+      if (fresh || supplied)
+        await snapshotRequests.current.get(id)?.catch(() => {});
+      const pending = supplied
+        ? Promise.resolve(supplied)
+        : (snapshotRequests.current.get(id) ??
+          api<ChatSnapshot>("/chats/" + id));
+      snapshotRequests.current.set(id, pending);
+      let result;
+      try {
+        result = await pending;
+      } finally {
+        if (snapshotRequests.current.get(id) === pending)
+          snapshotRequests.current.delete(id);
+      }
+      if (idRef.current !== id) return;
+      if (result.revision < (snapshotRevisions.current.get(id) ?? 0)) return;
+      snapshotRevisions.current.set(id, result.revision);
+      const c = result.chat;
       setChats((previous) =>
-        previous.map((item) =>
-          item.id === id ? { ...item, unread: false } : item,
+        previous.map((v) =>
+          v.id === id
+            ? {
+                ...v,
+                title: c.title,
+                groupId: c.groupId,
+                updatedAt: c.updatedAt,
+                pinned: c.pinned,
+                archived: c.archived,
+                deleted: c.deleted,
+                unread: c.unread,
+                status:
+                  c.pluginPending === "running"
+                    ? "running"
+                    : c.pluginPending === "error"
+                      ? "error"
+                      : c.currentId
+                        ? c.messages[c.currentId]?.status
+                        : undefined,
+              }
+            : v,
         ),
       );
-    }
-  }, []);
+      setChat(connection.overlay(result.chat));
+      setJob(result.job);
+      setTitleJob(result.titleJob ?? null);
+      setPluginState(
+        connection.pluginOverlay(
+          cleanPluginState(
+            result.pluginState ?? emptyPluginState(),
+            result.chat.id,
+          ),
+        ),
+      );
+      pluginPreviewState.current = cleanPluginState(
+        result.pluginState ?? emptyPluginState(),
+        result.chat.id,
+      );
+      setPluginJob(result.pluginJob ?? null);
+      adoptSummaries(id, result.summaryState ?? { runs: [] });
+      setPostJobs(result.postJobs ?? []);
+      if (result.generation) acceptGeneration(result.generation);
+      if (
+        !result.job &&
+        result.chat.unread &&
+        document.visibilityState === "visible"
+      ) {
+        await api("/chats/" + id + "/seen", "POST", {});
+        setChat((previous) =>
+          previous?.id === id ? { ...previous, unread: false } : previous,
+        );
+        setChats((previous) =>
+          previous.map((item) =>
+            item.id === id ? { ...item, unread: false } : item,
+          ),
+        );
+      }
+    },
+    [],
+  );
   function saveDraft(id: string, value: string) {
     const write = draftQueue.current
       .catch(() => {})
@@ -841,18 +876,21 @@ function App() {
         ? body.messageId
         : undefined;
     if (reviewMessage) pendingSummaryReviews.current.add(reviewMessage);
+    let supplied: ChatSnapshot | undefined;
     try {
-      const result = await api<{ jobId?: string }>(
+      await snapshotRequests.current.get(id)?.catch(() => {});
+      const result = await api<{ jobId?: string; snapshot?: ChatSnapshot }>(
         "/chats/" + id + "/summaries",
         "POST",
-        { action, ...body },
+        { action, ...body, includeSnapshot: true },
       );
+      supplied = result.snapshot;
       if (reviewMessage && result.jobId)
         ownedSummaryCandidates.current.add(result.jobId);
     } finally {
       if (reviewMessage) pendingSummaryReviews.current.delete(reviewMessage);
     }
-    await refresh(id, true);
+    await refresh(id, true, supplied);
   }
   useEffect(() => {
     if (!auth || !pluginJob) return;
@@ -1256,6 +1294,35 @@ function App() {
     () => (chat ? route(chat) : []),
     [chat?.messages, chat?.currentId],
   );
+  // Reconstruct the visible running main request locally; unknown snapshots remain unknown.
+  useEffect(() => {
+    const m = path.findLast(
+      (m) => m.role === "assistant" && m.status === "running",
+    );
+    if (!chat || !m || hasCacheRequest(m.id)) return;
+    try {
+      const prepared = requestPreview(
+        {
+          ...chat,
+          currentId: m.parentId,
+          model: m.model ?? chat.model,
+          parameters: m.request?.parameters ?? chat.parameters,
+          effort: m.request?.effort ?? chat.effort,
+          stream: m.request?.stream ?? chat.stream,
+        },
+        settings,
+        providers,
+      );
+      prepared.request.messages.push(...(m.toolContext?.messages ?? []));
+      prepared.request.messages = compatibleMessages(
+        prepared.model.modelId,
+        prepared.request.messages,
+      );
+      recordCacheRequest(m.id, prepared.model, prepared.request);
+    } catch {
+      /* Missing model or source data is not a zero-percent cache hit. */
+    }
+  }, [chat, path, settings, providers]);
   const summaryKeys = useMemo(() => summarySourceKeys(path), [path]);
   const summaryRuns = useMemo(() => {
     const grouped = new Map<string, SummaryRun[]>();
@@ -1274,8 +1341,12 @@ function App() {
     lastAssistant = path.findLast((m) => m.role === "assistant")?.id;
   const estimate = estimateTokens(
       chat
-        ? contextMessages(chat, draft)
-            .map((m) => m.content)
+        ? contextMessages(
+            chat,
+            draft,
+            /(^|\/)deepseek(?:[-/]|$)/i.test(selectedModel?.id ?? ""),
+          )
+            .map((m) => (m.content ?? "") + (m.reasoning_content ?? ""))
             .join("\n")
         : draft,
     ),
@@ -1380,15 +1451,16 @@ function App() {
     if (!id) return;
     try {
       setError("");
-      const response = await api<{ jobId?: string }>(
+      await snapshotRequests.current.get(id)?.catch(() => {});
+      const response = await api<{ jobId?: string; snapshot?: ChatSnapshot }>(
         "/chats/" + id + "/plugins",
         "POST",
-        { action, ...body },
+        { action, ...body, includeSnapshot: true },
       );
       if (response.jobId && ["section-generate", "retry"].includes(action))
         ownedSectionCandidates.current.add(response.jobId);
-      await refresh(id);
-      await loadNavigation();
+      await refresh(id, true, response.snapshot);
+      if (!response.snapshot) await loadNavigation();
     } catch (error) {
       setError(error instanceof Error ? error.message : "插件操作失败");
       throw error;
@@ -1574,7 +1646,7 @@ function App() {
         run={run}
       />
     );
-  return (
+  const appContent = (
     <div
       className="app"
       style={
@@ -1834,42 +1906,18 @@ function App() {
         </div>
       </aside>
       <main>
-        <header>
+        <div className="chat-corner-controls">
           {!sidebar && (
             <IconButton label="打开导航" onClick={() => setSidebar(true)}>
-              <PanelLeft size={19} />
+              <I.navigation size={19} />
             </IconButton>
           )}
-          <button
-            className="header-title"
-            onClick={() => {
-              if (chat) {
-                const title = prompt("重命名聊天", chat.title);
-                if (title) void run(() => patch({ title }));
-              }
-            }}
-          >
-            {chat?.title ?? "在线AI"}
-          </button>
-          <div className="header-actions">
-            {job && (
-              <span className="status-label">
-                <Loading small />
-                正在生成
-              </span>
-            )}
-            {chat && (
-              <>
-                <IconButton
-                  label="当前聊天设置"
-                  onClick={() => setPanel(!panel)}
-                >
-                  <SlidersHorizontal size={19} />
-                </IconButton>
-              </>
-            )}
-          </div>
-        </header>
+          {chat && (
+            <IconButton label="当前聊天设置" onClick={() => setPanel(!panel)}>
+              <I.settings size={19} />
+            </IconButton>
+          )}
+        </div>
         {loginNotice && (
           <LoginNoticeBanner
             notice={loginNotice}
@@ -1893,6 +1941,7 @@ function App() {
                   })
                 }
               >
+                <I.save size={15} />
                 重试保存回答
               </button>
             )}
@@ -2091,6 +2140,7 @@ function App() {
                                   : "展开全文";
                             }}
                           >
+                            <I.expandText size={15} />
                             展开全文
                           </button>
                         )}
@@ -2134,7 +2184,7 @@ function App() {
                                 )
                               }
                             >
-                              <RotateCcw size={14} />
+                              <I.regenerateReply size={14} />
                             </IconButton>
                           )}
                           <IconButton
@@ -2171,7 +2221,7 @@ function App() {
                                 )
                               }
                             >
-                              <RotateCcw size={15} />
+                              <I.retry size={15} />
                             </IconButton>
                           )}
                           <IconButton
@@ -2203,7 +2253,6 @@ function App() {
                           >
                             <Trash2 size={15} />
                           </IconButton>
-                          <MessageTokenBar message={m} />
                           {siblings.length > 1 && (
                             <div className="versions">
                               <IconButton
@@ -2429,6 +2478,7 @@ function App() {
                     setPluginInput(null);
                   }}
                 >
+                  <I.cancel size={15} />
                   取消操作
                 </button>
               </div>
@@ -2499,6 +2549,7 @@ function App() {
                       setSearch("");
                     }}
                   >
+                    <I.settings size={14} />
                     <span>
                       {selectedModel
                         ? selectedModel.provider.prefix + selectedModel.id
@@ -2616,6 +2667,7 @@ function App() {
                 })
               }
             >
+              <I.save size={15} />
               重试保存插件结果
             </button>
           )}
@@ -2624,12 +2676,20 @@ function App() {
               <span>
                 {rewriteError.plugin.name}：{rewriteError.error}
               </span>
+              <FallbackButton
+                disabled={!!pluginJob || !!job}
+                retry={(model) =>
+                  pluginCommand("fallback", { runId: rewriteError.id, model })
+                }
+              />
               <button
                 className="du-btn du-btn-xs"
                 disabled={!!pluginJob || !!job}
                 onClick={() =>
                   void run(async () => {
-                    await pluginCommand("dismiss", { runId: rewriteError.id });
+                    await pluginCommand("dismiss", {
+                      runId: rewriteError.id,
+                    });
                     await pluginCommand("rewrite", {
                       pluginId: rewriteError.plugin.id,
                       content: rewriteError.input,
@@ -2651,6 +2711,7 @@ function App() {
                   )
                 }
               >
+                <I.cancel size={14} />
                 关闭
               </button>
             </div>
@@ -2925,6 +2986,7 @@ function App() {
                         })
                       }
                     >
+                      <I.history size={14} />
                       <strong>版本 {index + 1}</strong>
                       <span>{item.content.slice(0, 180) || "空回答"}</span>
                     </button>
@@ -3067,6 +3129,13 @@ function App() {
       )}
     </div>
   );
+  return (
+    <FallbackContext.Provider
+      value={{ models: settings.pluginFallbackModels ?? [], providers }}
+    >
+      {appContent}
+    </FallbackContext.Provider>
+  );
 }
 const MessageMarkdown = React.memo(function MessageMarkdown({
   content,
@@ -3176,9 +3245,13 @@ function Login({
               download("在线AI-恢复码.txt", recoveryCode, "text/plain")
             }
           >
+            <I.download size={15} />
             下载恢复码
           </button>
-          <button onClick={() => setRecoveryCode("")}>已保存，返回登录</button>
+          <button onClick={() => setRecoveryCode("")}>
+            <I.confirm size={15} />
+            已保存，返回登录
+          </button>
         </section>
       </div>
     );
@@ -3267,6 +3340,7 @@ function Login({
           disabled={loading || remaining > 0}
           type="submit"
         >
+          <I.login size={15} />
           {loading
             ? "正在验证…"
             : remaining > 0
@@ -3280,6 +3354,7 @@ function Login({
           className="text-button"
           onClick={() => setRecovery(!recovery)}
         >
+          <I.password size={15} />
           {recovery ? "返回登录" : "使用恢复码"}
         </button>
       </form>
@@ -3435,7 +3510,7 @@ function SettingsPanel({
             <p className="muted">
               开启后，此设备直接通过 HTTPS
               请求服务商，流式内容即时显示。上游必须允许 CORS
-              跨域；密钥经访问密码验证后只保留在页面内存。关闭页面会中断直连生成，后台持续生成请使用服务端模式。开关只在此设备保存。
+              跨域；密钥复用当前登录会话解锁，只保留在页面内存。关闭页面会中断直连生成，后台持续生成请使用服务端模式。开关只在此设备保存。
             </p>
             <button onClick={connection.lock}>
               <LogOut size={16} />
@@ -3725,6 +3800,7 @@ function SettingsPanel({
                 })
               }
             >
+              <I.save size={15} />
               保存模板
             </button>
           </>
@@ -3751,6 +3827,7 @@ function SettingsPanel({
                     })
                   }
                 >
+                  <I.logout size={15} />
                   退出
                 </button>
               </div>
@@ -3763,6 +3840,7 @@ function SettingsPanel({
                 })
               }
             >
+              <I.logout size={15} />
               退出全部设备
             </button>
             <h3>修改密码</h3>
@@ -3791,6 +3869,7 @@ function SettingsPanel({
                 })
               }
             >
+              <I.password size={15} />
               更新离线恢复码
             </button>
             <label>
@@ -3819,6 +3898,7 @@ function SettingsPanel({
                 });
               }}
             >
+              <I.password size={15} />
               更改密码并退出全部设备
             </button>
             {recovery && (
@@ -3835,6 +3915,7 @@ function SettingsPanel({
                     recoveryRevoked ? onLogout() : setRecovery("")
                   }
                 >
+                  <I.confirm size={15} />
                   已保存{recoveryRevoked ? "，返回登录" : ""}
                 </button>
               </div>

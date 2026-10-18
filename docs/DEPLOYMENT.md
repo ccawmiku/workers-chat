@@ -10,7 +10,7 @@ npm run dev:init
 npm run dev
 ```
 
-本地地址 `http://localhost:5173`。随机本地登录密码位于 `~/.config/workers-chat/local-login.json`；`.dev.vars` 含本地散列和 AES 密钥，两者均不进入 Git。开发 D1 使用 `.cloudflare/state/v3`。`dev:init` 使用 `d1_migrations` 记录并原子应用所有未执行的本地迁移（目前 0001—0005）；后续生产迁移由 `cf d1 migrations apply` 管理，不使用开发初始化脚本。
+本地地址 `http://localhost:5173`。随机本地登录密码位于 `~/.config/workers-chat/local-login.json`；`.dev.vars` 含本地散列和 AES 密钥，两者均不进入 Git。开发 D1 使用 `.cloudflare/state/v3`。`dev:init` 使用 `d1_migrations` 记录并原子应用所有未执行的本地迁移（目前 0001—0006）；后续生产迁移由 `cf d1 migrations apply` 管理，不使用开发初始化脚本。
 
 浏览器测试需要 Chromium 和 WebKit，可运行 `npx playwright install --with-deps chromium webkit` 安装浏览器和系统依赖（Linux 安装系统依赖需要相应权限）。检测到 `/usr/bin/chromium` 时直接使用；仅跑 Chromium 可用 `npm run test:browser -- --project=chromium`。`npm run test:browser` 会启动或复用本地服务器，新增本地测试聊天，并用不含密钥的测试设置替换本地配置。请使用专用开发数据库，勿对生产运行浏览器测试。
 
@@ -65,3 +65,7 @@ npx cf deploy --secrets-file /absolute/path/to/deployment-secrets.json
 ## 摘要并行任务迁移（0005）
 
 先用 `cf d1 migrations apply` 应用新增的 `0005.sql`，再发布应用。它将旧的“同聊天只能一个活动任务”唯一索引缩小到前台任务，保留主生成/前置流程互斥，允许摘要与追问同时运行；另加活动后置任务查询索引。没有删聊天、消息或运行结果，不新增付费服务。回滚到旧应用前需先停止/等完后置任务，不在有并行任务时直接恢复旧唯一索引。
+
+## 维护索引迁移（0006，尚未生产执行）
+
+后续由维护者部署时，先用 `cf d1 migrations apply` 应用 `0006.sql`。新增标题历史复合索引、完整 jobs 外键索引和任务所属聊天的表达式索引，减少历史标题查找、任务清理及删除任意文档时的外键全表扫描。索引增加少量存储与写入维护成本；应用不删除历史数据、不改变文档格式。索引创建本身会读取现有数据，额度恢复后再安排迁移，本次任务没有访问生产数据库或部署。量化本地证据和验证限制见 [MAINTENANCE-2026-10-18.md](MAINTENANCE-2026-10-18.md)。

@@ -9,7 +9,7 @@ import {
   defaultSettings,
   uuid,
 } from "../shared/chat";
-import { Store, HttpError, summary } from "./store";
+import { Store, HttpError, summary, type Document } from "./store";
 import { decrypt, redactError } from "./security";
 import { limitedText } from "./generation";
 export type TitleJob = {
@@ -97,9 +97,11 @@ export async function queueTitle(
   chatId: string,
   manual = false,
   transport?: "device",
+  snapshot?: Document<Chat>,
 ) {
   const store = new Store(env.DB),
-    doc = await store.get<Chat>(chatId);
+    doc = snapshot ?? (await store.get<Chat>(chatId));
+  if (doc && doc.value.id !== chatId) throw new Error("标题聊天快照不匹配");
   if (!doc || doc.value.deleted) return null;
   const chat = doc.value;
   if (!manual && chat.titleManual) return null;

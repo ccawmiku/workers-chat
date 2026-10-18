@@ -159,6 +159,31 @@ test("device streams paint before completion, unlock once, save, title, stop and
   expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(
     "synthetic-device-key",
   );
+  const sendNext = async () => {
+    const before = await page.evaluate(
+      () =>
+        (window as unknown as { directFixture: { calls: number } })
+          .directFixture.calls,
+    );
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    const confirmation = page.getByRole("button", {
+      name: "继续发送",
+      exact: true,
+    });
+    await expect
+      .poll(
+        async () =>
+          (await confirmation.isVisible()) ||
+          (await page.evaluate(
+            (previous) =>
+              (window as unknown as { directFixture: { calls: number } })
+                .directFixture.calls > previous,
+            before,
+          )),
+      )
+      .toBe(true);
+    if (await confirmation.isVisible()) await confirmation.click();
+  };
   // A snapshot requested during streaming returns only after /finish. It must
   // not replace the complete local answer or satisfy the final fresh refresh.
   let releaseSnapshot!: () => void;
@@ -173,8 +198,12 @@ test("device streams paint before completion, unlock once, save, title, stop and
     await snapshotGate;
     await route.fulfill({ response });
   });
+  const finishResponse = page.waitForResponse(
+    (r) =>
+      /\/api\/device\/jobs\/[^/]+\/finish$/.test(r.url()) && r.status() === 200,
+  );
   await page.getByLabel("消息", { exact: true }).fill("快照不能覆盖完整回答");
-  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await sendNext();
   await expect(
     page.locator(".message.assistant .markdown").last(),
   ).toContainText("第一段即时内容");
@@ -182,10 +211,7 @@ test("device streams paint before completion, unlock once, save, title, stop and
     document.dispatchEvent(new Event("visibilitychange")),
   );
   await expect.poll(() => held).toBe(true);
-  await page.waitForResponse(
-    (r) =>
-      /\/api\/device\/jobs\/[^/]+\/finish$/.test(r.url()) && r.status() === 200,
-  );
+  await finishResponse;
   releaseSnapshot();
   await expect(
     page.getByRole("button", { name: "停止生成", exact: true }),
@@ -202,7 +228,7 @@ test("device streams paint before completion, unlock once, save, title, stop and
     } else await route.continue();
   });
   await page.getByLabel("消息", { exact: true }).fill("保存失败保留文字");
-  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await sendNext();
   await expect(
     page.getByRole("button", { name: "重试保存回答", exact: true }),
   ).toBeVisible();
@@ -215,7 +241,7 @@ test("device streams paint before completion, unlock once, save, title, stop and
   ).toHaveCount(0);
   await page.unroute(/\/api\/device\/jobs\/[^/]+\/finish$/);
   await page.getByLabel("消息", { exact: true }).fill("停止直连");
-  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await sendNext();
   await expect(
     page.locator(".message.assistant .markdown").last(),
   ).toContainText("第一段即时内容");
@@ -229,7 +255,7 @@ test("device streams paint before completion, unlock once, save, title, stop and
     ).directFixture.fail = true;
   });
   await page.getByLabel("消息", { exact: true }).fill("跨域拒绝时不重复发送");
-  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await sendNext();
   await expect(page.locator(".message.assistant").last()).toContainText("CORS");
   const state = await page.evaluate(
     () =>

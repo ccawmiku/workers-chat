@@ -1,5 +1,5 @@
 import { UsageBar } from "./usage-bar";
-import React, { useState, useRef } from "react";
+import { useState, useRef } from "react";
 import {
   type Chat,
   type Message,

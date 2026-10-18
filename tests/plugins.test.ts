@@ -8,24 +8,18 @@ import {
   newChat,
   addMessage,
   defaultSettings,
-  contextMessages,
   type Provider,
 } from "../src/shared/chat";
 import {
   pluginDefaults,
   preparePlugin,
   emptyPluginState,
-  injectPlugins,
   normalizePluginOutput,
   upgradeLegacyPlugin,
-  REWRITE_PROMPT,
-  SUGGEST_PROMPT,
   extractRewritePrompt,
   extractRewriteCandidates,
   definitions,
   enabledPlugins,
-  flowClarifications,
-  type PluginRun,
 } from "../src/shared/plugins";
 import {
   ANALYSIS_PROMPT,
@@ -53,31 +47,7 @@ const fixture = () => {
   chat.system = [{ id: "sys", name: "test", content: "Stable system" }];
   return { chat, settings: defaultSettings(), state: emptyPluginState() };
 };
-const run = (
-  anchorId: string,
-  kind: "analysis" | "clarify",
-  id: string,
-  input: string,
-  output: string,
-  answer?: string,
-): PluginRun => ({
-  id,
-  anchorId,
-  plugin: pluginDefaults(kind),
-  input,
-  output,
-  answer,
-  status: answer === undefined ? "complete" : "answered",
-  createdAt: 1,
-  metrics: {
-    total: 1,
-    capacity: 32000,
-    referenceTokens: 0,
-    missingSummaries: 0,
-    shortened: 0,
-    sections: [],
-  },
-});
+
 describe("plugin context assembly", () => {
   it("retains all built-ins while custom instances remain removable", () => {
     const s = defaultSettings();
@@ -170,9 +140,9 @@ describe("plugin context assembly", () => {
         prompt2: "接着写下去。",
         prompt3: "继续后面的内容。",
       };
-    expect(
-      JSON.parse(normalizePluginOutput(p, JSON.stringify(value), "继续")),
-    ).toEqual(value);
+    expect(JSON.parse(normalizePluginOutput(p, JSON.stringify(value)))).toEqual(
+      value,
+    );
     expect(
       extractRewriteCandidates(
         JSON.stringify({

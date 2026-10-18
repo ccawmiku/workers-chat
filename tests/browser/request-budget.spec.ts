@@ -81,7 +81,7 @@ test("one bootstrap, one idle request per minute, zero hidden requests and one p
   expect(calls).toHaveLength(1);
 });
 
-test("generation uses one push connection with no progress polling, and refreshes after completion", async ({
+test("generation pushes without polling and completion bypasses an older in-flight snapshot", async ({
   page,
 }) => {
   const chat = await login(page),
@@ -118,12 +118,29 @@ test("generation uses one push connection with no progress polling, and refreshe
           chat,
           job: { id: jobId, status: "running" },
           titleJob: null,
+          revision: 1,
         },
       },
     });
   });
-  await page.route("**/api/chats/" + chat.id, (route) =>
-    route.fulfill({
+  let releaseSnapshot!: () => void,
+    snapshots = 0;
+  const snapshotGate = new Promise<void>((resolve) => {
+    releaseSnapshot = resolve;
+  });
+  await page.route("**/api/chats/" + chat.id, async (route) => {
+    if (++snapshots === 1) {
+      await snapshotGate;
+      return route.fulfill({
+        json: {
+          chat,
+          job: { id: jobId, status: "running" },
+          titleJob: null,
+          revision: 1,
+        },
+      });
+    }
+    return route.fulfill({
       json: {
         chat: {
           ...chat,
@@ -136,14 +153,24 @@ test("generation uses one push connection with no progress polling, and refreshe
             },
           },
         },
+        revision: 2,
         job: null,
         titleJob: null,
       },
-    }),
-  );
+    });
+  });
   await page.routeWebSocket("**/api/jobs/*/events", (ws) => {
     socket = ws;
     connections++;
+  });
+  let releaseNavigation!: () => void;
+  const navigationGate = new Promise<void>((resolve) => {
+    releaseNavigation = resolve;
+  });
+  await page.route("**/api/navigation", async (route) => {
+    const response = await route.fetch();
+    await navigationGate;
+    await route.fulfill({ response });
   });
   await page.clock.install();
   const calls: string[] = [];
@@ -164,9 +191,25 @@ test("generation uses one push connection with no progress polling, and refreshe
   await expect(page.locator("#text-answer")).toHaveText("First second");
   await page.clock.fastForward(30000);
   expect(calls).toEqual([]); // Previously about 60 HTTP reads over 30 seconds.
+  await page.evaluate(() =>
+    document.dispatchEvent(new Event("visibilitychange")),
+  );
+  await expect.poll(() => snapshots).toBe(1);
   socket!.send(JSON.stringify({ type: "done" }));
-  await expect.poll(() => calls.length).toBe(2);
+  releaseSnapshot();
+  await expect.poll(() => snapshots).toBe(2);
+  await expect(
+    page.getByRole("button", { name: "停止生成", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.locator("#text-answer")).toHaveText("First second");
+  // Both refreshes should share the still-pending navigation request.
+  releaseNavigation();
+  await expect.poll(() => calls.length).toBe(3);
   expect(calls.sort()).toEqual(
-    ["/api/chats/" + chat.id, "/api/navigation"].sort(),
+    [
+      "/api/chats/" + chat.id,
+      "/api/chats/" + chat.id,
+      "/api/navigation",
+    ].sort(),
   );
 });

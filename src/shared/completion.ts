@@ -88,6 +88,7 @@ export async function readCompletion(
   signal: AbortSignal,
   output: CompletionOutput,
   onUpdate: () => void,
+  heartbeatMs?: number,
 ) {
   if (!response.ok)
     throw Error(
@@ -119,6 +120,11 @@ export async function readCompletion(
     if (size > 8 * 1024 * 1024) throw Error("上游回答文字超过安全上限");
     output[kind] += text;
   };
+  let lastUpdate = Date.now();
+  const notify = () => {
+    if (heartbeatMs !== undefined) lastUpdate = Date.now();
+    onUpdate();
+  };
   const consume = (block: string) => {
     const text = block
       .split("\n")
@@ -144,17 +150,38 @@ export async function readCompletion(
     if (hasReportedUsage(event))
       output.usage = responseUsage(response.headers, event, output.usage);
     if (choice?.finish_reason) finished = true;
-    onUpdate();
+    notify();
   };
   const abort = () => {
     void reader.cancel().catch(() => {});
   };
   signal.addEventListener("abort", abort, { once: true });
   try {
+    let pending = reader.read();
     while (!doneEvent) {
       signal.throwIfAborted();
-      const part = await reader.read();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let part: ReadableStreamReadResult<Uint8Array> | null;
+      try {
+        part =
+          heartbeatMs === undefined
+            ? await pending
+            : await Promise.race([
+                pending,
+                new Promise<null>((resolve) => {
+                  timer = setTimeout(() => resolve(null), heartbeatMs);
+                }),
+              ]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
       signal.throwIfAborted();
+      if (!part) {
+        // Reuse the outstanding read: a quiet upstream must not accumulate
+        // readers or make a live generation look interrupted to observers.
+        notify();
+        continue;
+      }
       // Bound the assembled answer and each event, not SSE framing/heartbeats.
       // Long streams may carry much more protocol metadata than actual text.
       buffer = (
@@ -169,10 +196,13 @@ export async function readCompletion(
         if (doneEvent) break;
       }
       if (buffer.length > 1048576) throw Error("上游 SSE 事件超过安全上限");
+      if (heartbeatMs !== undefined && Date.now() - lastUpdate >= heartbeatMs)
+        notify();
       if (part.done) {
         if (buffer.trim()) consume(buffer);
         break;
       }
+      if (!doneEvent) pending = reader.read();
     }
     if (!finished) throw Error("上游连接提前结束，已保存收到的部分");
   } finally {

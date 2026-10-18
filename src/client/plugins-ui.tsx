@@ -20,14 +20,11 @@ import {
   RotateCcw,
   Check,
   SkipForward,
-  Square,
   FileSearch,
   Pencil,
-  WandSparkles,
   MessageCircleQuestion,
   ChevronRight,
   ChevronDown,
-  Info,
   Folder,
 } from "lucide-react";
 import type { Chat, Provider, Settings, Message } from "../shared/chat";
@@ -66,7 +63,6 @@ type Command = (
   action: string,
   body?: Record<string, unknown>,
 ) => Promise<void>;
-const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 const k = formatTokenCount;
 function PluginUsage({ run }: { run: PluginRun }) {
   return (

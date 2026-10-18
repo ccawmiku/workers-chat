@@ -1,4 +1,3 @@
-import React from "react";
 import { Check, ChevronDown, Monitor, Sun, Moon } from "lucide-react";
 
 export type Appearance = {

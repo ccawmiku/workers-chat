@@ -1,21 +1,14 @@
-import { responseUsage, hasReportedUsage } from "../shared/completion";
+import { readCompletion, type CompletionOutput } from "../shared/completion";
 import type { DirectTask, GenerationStart } from "../shared/direct";
 import {
   type Chat,
   type Provider,
   type Settings,
   requestPreview,
-  route,
   contextMessages,
   addMessage,
 } from "../shared/chat";
-import {
-  Store,
-  HttpError,
-  summary,
-  chunks,
-  type DocumentHeader,
-} from "./store";
+import { Store, HttpError, summary, type DocumentHeader } from "./store";
 import { decrypt, redactError } from "./security";
 import { injectPlugins, type PluginInjection } from "../shared/plugins";
 export type JobConfig = {
@@ -300,11 +293,8 @@ export async function runGeneration(
   if (!claimed) return { skipped: true }; // Never replay a billable upstream request after a runtime restart.
   const config = JSON.parse(claimed.config) as JobConfig,
     store = new Store(env.DB);
-  let content = "",
-    reasoning = "",
-    key = "",
-    usage: Record<string, unknown> | undefined,
-    complete = false;
+  const output: CompletionOutput = { content: "", reasoning: "" };
+  let key = "";
   let seedContent = "";
   try {
     const doc = await store.get<Chat>(claimed.chat_id);
@@ -312,16 +302,20 @@ export async function runGeneration(
     const target = doc.value.messages[claimed.message_id];
     if (!target) throw new Error("回答不存在");
     const seed = config.seedId ? doc.value.messages[config.seedId] : null;
-    content = seed?.content ?? "";
-    seedContent = content;
-    if (!progress.checkpoint(content, reasoning)) {
-      await finalize(env, claimed, "stopped", content, reasoning);
+    output.content = seed?.content ?? "";
+    seedContent = output.content;
+    if (!progress.checkpoint(output.content, output.reasoning)) {
+      await finalize(env, claimed, "stopped", output.content, output.reasoning);
       return { stopped: true };
     }
     const request = requestForJob(doc.value, claimed, config);
     key = config.provider.encryptedKey
       ? await decrypt(config.provider.encryptedKey, env.ENCRYPTION_KEY)
       : "";
+    const signal = AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(30 * 60 * 1000),
+    ]);
     const response = await fetch(
       config.provider.baseUrl + "/chat/completions",
       {
@@ -332,124 +326,27 @@ export async function runGeneration(
           ...(key ? { Authorization: "Bearer " + key } : {}),
         },
         body: JSON.stringify(request),
-        signal: AbortSignal.any([
-          controller.signal,
-          AbortSignal.timeout(30 * 60 * 1000),
-        ]),
+        signal,
       },
     );
-    if (!response.ok)
-      throw new Error(
-        `上游 HTTP ${response.status}：${redactError(await limitedText(response, 8192, controller.signal), key)}`,
-      );
-    usage = responseUsage(response.headers, undefined, usage);
-    if (config.options.stream) {
-      if (!response.body) throw new Error("上游没有返回响应流");
-      const reader = response.body.getReader(),
-        decoder = new TextDecoder();
-      const abortRead = () => {
-        void reader.cancel().catch(() => {});
-      };
-      controller.signal.addEventListener("abort", abortRead, { once: true });
-      let buffer = "",
-        lastFlush = Date.now() - 2000,
-        finished = false,
-        streamDone = false;
-      const consume = (block: string) => {
-        const data = block
-          .split("\n")
-          .filter((l) => l.startsWith("data:"))
-          .map((l) => l.slice(5).trimStart())
-          .join("\n");
-        if (!data) return;
-        if (data === "[DONE]") {
-          finished = true;
-          streamDone = true;
-          return;
-        }
-        const event = JSON.parse(data) as {
-          error?: { message?: string };
-          choices?: {
-            delta?: {
-              content?: string;
-              reasoning_content?: string;
-              reasoning?: string;
-            };
-            finish_reason?: string;
-          }[];
-          usage?: Record<string, unknown>;
-        };
-        if (event.error)
-          throw new Error(
-            redactError(event.error.message ?? "上游流式错误", key),
-          );
-        const choice = event.choices?.[0];
-        content += choice?.delta?.content ?? "";
-        reasoning +=
-          choice?.delta?.reasoning_content ?? choice?.delta?.reasoning ?? "";
-        progress.publish(content, reasoning);
-        if (hasReportedUsage(event))
-          usage = responseUsage(response.headers, event, usage);
-        if (choice?.finish_reason) finished = true;
-      };
-      try {
-        let pending = reader.read();
-        while (true) {
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          const part = await Promise.race([
-            pending,
-            new Promise<null>((resolve) => {
-              timer = setTimeout(() => resolve(null), 2000);
-            }),
-          ]);
-          if (timer !== undefined) clearTimeout(timer);
-          if (part) {
-            buffer = (
-              buffer + decoder.decode(part.value, { stream: !part.done })
-            ).replace(/\r\n|\r(?!$)/g, "\n");
-            if (part.done) buffer = buffer.replace(/\r$/, "\n");
-            let split: number;
-            while ((split = buffer.indexOf("\n\n")) >= 0) {
-              if (split > 1048576) throw new Error("上游 SSE 事件超过安全上限");
-              consume(buffer.slice(0, split));
-              buffer = buffer.slice(split + 2);
-              if (streamDone) break;
-            }
-            if (buffer.length > 1048576)
-              throw new Error("上游 SSE 事件超过安全上限");
+    let lastCheckpoint = Date.now() - 2000;
+    await readCompletion(
+      response,
+      Boolean(config.options.stream),
+      signal,
+      output,
+      () => {
+        progress.publish(output.content, output.reasoning);
+        if (Date.now() - lastCheckpoint >= 2000) {
+          if (!progress.checkpoint(output.content, output.reasoning)) {
+            controller.abort();
+            signal.throwIfAborted();
           }
-          if (!part || Date.now() - lastFlush >= 2000 || part.done) {
-            if (!progress.checkpoint(content, reasoning)) {
-              controller.abort();
-              return { stopped: true };
-            }
-            lastFlush = Date.now();
-          }
-          if (part?.done || streamDone) break;
-          if (part) pending = reader.read();
+          lastCheckpoint = Date.now();
         }
-        if (!streamDone && buffer.trim()) consume(buffer);
-        if (!finished) throw new Error("上游连接提前结束，已保存收到的部分");
-      } finally {
-        controller.signal.removeEventListener("abort", abortRead);
-        await reader.cancel().catch(() => {});
-      }
-    } else {
-      const result = JSON.parse(
-        await limitedText(response, 8 * 1024 * 1024, controller.signal),
-      ) as {
-        choices?: {
-          message?: { content?: string; reasoning_content?: string };
-        }[];
-        usage?: Record<string, unknown>;
-      };
-      const message = result.choices?.[0]?.message;
-      if (!message) throw new Error("上游没有返回回答");
-      content += message.content ?? "";
-      reasoning = message.reasoning_content ?? "";
-      usage = responseUsage(response.headers, result, usage);
-    }
-    complete = true;
+      },
+      2000,
+    );
   } catch (e) {
     if (progress.isCancelled()) {
       const output = progress.output();
@@ -463,22 +360,29 @@ export async function runGeneration(
       return { stopped: true };
     }
     const error = redactError(e instanceof Error ? e.message : "生成失败", key);
-    await finalize(env, claimed, "error", content, reasoning, error, usage);
+    await finalize(
+      env,
+      claimed,
+      "error",
+      output.content,
+      output.reasoning,
+      error,
+      output.usage,
+    );
     return { status: "error" };
   } finally {
     controller.abort();
   }
-  progress.publish(content, reasoning, true);
-  if (complete)
-    await finalize(
-      env,
-      claimed,
-      "complete",
-      content,
-      reasoning,
-      undefined,
-      usage,
-    );
+  progress.publish(output.content, output.reasoning, true);
+  await finalize(
+    env,
+    claimed,
+    "complete",
+    output.content,
+    output.reasoning,
+    undefined,
+    output.usage,
+  );
   return { status: "complete" };
 }
 export async function limitedText(

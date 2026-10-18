@@ -4,6 +4,7 @@ import {
   addMessage,
   editMessage,
   defaultSettings,
+  route,
   type Provider,
 } from "../src/shared/chat";
 import {
@@ -11,6 +12,7 @@ import {
   prepareSummary,
   normalizeSummary,
   summarySourceKey,
+  summarySourceKeys,
   summaryFor,
   excerpt,
   type SummaryState,
@@ -22,7 +24,6 @@ import {
   upgradeLegacyPlugin,
   emptyPluginState,
   injectPlugins,
-  flowClarifications,
   type PluginRun,
 } from "../src/shared/plugins";
 const provider: Provider = {
@@ -75,6 +76,35 @@ function accepted(
   };
 }
 describe("reply summaries", () => {
+  it("builds all route fingerprints in one traversal and invalidates only changed prefixes", () => {
+    const { chat } = fixture();
+    for (let i = 0; i < 1000; i++)
+      addMessage(chat, i % 2 ? "assistant" : "user", "message " + i);
+    let parentReads = 0;
+    const messages = Object.values(chat.messages);
+    for (const message of messages) {
+      const parentId = message.parentId;
+      Object.defineProperty(message, "parentId", {
+        get: () => {
+          parentReads++;
+          return parentId;
+        },
+      });
+    }
+    const path = route(chat),
+      keys = summarySourceKeys(path);
+    expect(keys.size).toBe(1000);
+    expect(parentReads).toBe(1000);
+    for (const index of [0, 19, 499, 999])
+      expect(keys.get(path[index]!.id)).toBe(
+        summarySourceKey(chat, path[index]!.id),
+      );
+    path[500]!.contentVersion = "edited-version";
+    const changed = summarySourceKeys(path);
+    expect(changed.get(path[499]!.id)).toBe(keys.get(path[499]!.id));
+    expect(changed.get(path[500]!.id)).not.toBe(keys.get(path[500]!.id));
+    expect(changed.get(path[999]!.id)).not.toBe(keys.get(path[999]!.id));
+  });
   it("validates a single nonempty summary, warns rather than truncating length", () => {
     for (const raw of [
       "{}",

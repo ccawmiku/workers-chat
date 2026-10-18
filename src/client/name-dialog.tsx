@@ -1,6 +1,6 @@
-import React, { useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Check } from "lucide-react";
+import { X } from "lucide-react";
 import { IconButton, Loading, useDialogFocus } from "./controls";
 
 export function NameDialog({

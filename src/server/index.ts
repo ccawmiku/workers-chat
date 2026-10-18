@@ -21,6 +21,7 @@ import {
   sanitizeUsage,
   uuid,
   findMessage,
+  MODEL_ID_MAX_LENGTH,
 } from "../shared/chat";
 import { exportSettings, importSettings } from "./backup";
 import { importChats, exportChat } from "../shared/exchange";
@@ -64,7 +65,13 @@ import {
   finishDeviceTitle,
 } from "./titles";
 export { Progress } from "./progress";
-import { obj, str, parameters, validatedSettings } from "./validation";
+import {
+  obj,
+  str,
+  parameters,
+  validatedSettings,
+  modelRef,
+} from "./validation";
 import { requireMethod } from "./routing";
 import {
   pluginView,
@@ -78,7 +85,7 @@ import {
   selectPluginFlow,
   planPruneMessagePlugins,
 } from "./plugins";
-import { enabledPlugins, flowInjections } from "../shared/plugins";
+import { flowInjections } from "../shared/plugins";
 const publicProvider = (p: Provider) => {
   const { encryptedKey, ...safe } = p;
   return { ...safe, hasKey: !!encryptedKey };
@@ -211,7 +218,7 @@ async function chatStateBase(env: Env, id: string) {
   }
   if (!job && !chat.titleManual) {
     try {
-      const queued = await queueTitle(env, id);
+      const queued = await queueTitle(env, id, false, undefined, doc);
       if (queued && !titleJob)
         titleJob = {
           id: queued,
@@ -515,7 +522,9 @@ async function api(request: Request, env: Env) {
       if (!Array.isArray(body.models))
         throw new HttpError(400, "缺少设备获取的模型列表");
       list = {
-        data: body.models.map((item) => ({ id: str(obj(item).id, 1000) })),
+        data: body.models.map((item) => ({
+          id: str(obj(item).id, MODEL_ID_MAX_LENGTH),
+        })),
       };
     } else {
       const key = p.encryptedKey
@@ -547,13 +556,17 @@ async function api(request: Request, env: Env) {
       !Array.isArray(list.data) ||
       list.data.length > 10000 ||
       list.data.some(
-        (m) => typeof m.id !== "string" || !m.id || m.id.length > 1000,
+        (m) =>
+          typeof m.id !== "string" ||
+          !m.id ||
+          m.id.length > MODEL_ID_MAX_LENGTH,
       )
     )
       throw new HttpError(400, "上游模型列表格式无效");
+    const previousModels = new Map(p.models.map((m) => [m.id, m]));
     p.models = [...new Set(list.data.map((m) => m.id))].map(
       (id) =>
-        p.models.find((m) => m.id === id) ?? {
+        previousModels.get(id) ?? {
           id,
           enabled: false,
           capacity: 1048576,
@@ -632,9 +645,10 @@ async function api(request: Request, env: Env) {
     if (providerMatch[2] === "models") {
       if (!Array.isArray(body.models))
         throw new HttpError(400, "模型配置格式无效");
+      const modelsById = new Map(p.models.map((m) => [m.id, m]));
       for (const item of body.models) {
         const m = obj(item),
-          existing = p.models.find((v) => v.id === m.id);
+          existing = modelsById.get(m.id as string);
         if (!existing) throw new HttpError(400, "不能手动添加模型");
         if (typeof m.enabled === "boolean") existing.enabled = m.enabled;
         if (m.capacity !== undefined) {
@@ -752,7 +766,7 @@ async function api(request: Request, env: Env) {
     if (action === "title" && method === "POST") {
       if (job) throw new HttpError(409, "请等待当前回答完成");
       return Response.json(
-        { jobId: await queueTitle(env, id, true, transport) },
+        { jobId: await queueTitle(env, id, true, transport, doc) },
         { status: 202 },
       );
     }
@@ -807,14 +821,7 @@ async function api(request: Request, env: Env) {
       if (body.groupId === null || typeof body.groupId === "string")
         chat.groupId = body.groupId;
       if (body.model !== undefined) {
-        if (body.model === null) chat.model = null;
-        else {
-          const ref = obj(body.model);
-          chat.model = {
-            providerId: str(ref.providerId, 128),
-            modelId: str(ref.modelId, 500),
-          };
-        }
+        chat.model = modelRef(body.model);
       }
       if (body.effort !== undefined) {
         if (

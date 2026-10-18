@@ -30,21 +30,27 @@ export class Store {
     id: string,
     header?: DocumentHeader | null,
   ): Promise<Document<T> | null> {
-    const row =
+    if (header === null) return null;
+    // Read the current header and its immutable parts in one SQL snapshot.
+    // A supplied header deliberately pins an earlier version (readChat also
+    // selects its active job); never replace that with the current revision.
+    const { results } = await (
       header === undefined
-        ? await this.db
-            .prepare("SELECT revision,kind,summary FROM documents WHERE id=?")
+        ? this.db
+            .prepare(
+              "SELECT d.revision,d.kind,d.summary,p.value FROM documents d LEFT JOIN document_parts p ON p.id=d.id AND p.revision=d.revision WHERE d.id=? ORDER BY p.part",
+            )
             .bind(id)
-            .first<DocumentHeader>()
-        : header;
+        : this.db
+            .prepare(
+              "SELECT value FROM document_parts WHERE id=? AND revision=? ORDER BY part",
+            )
+            .bind(id, header.revision)
+    ).all<DocumentHeader & { value: string | null }>();
+    const row = header ?? results[0];
     if (!row) return null;
-    const { results } = await this.db
-      .prepare(
-        "SELECT value FROM document_parts WHERE id=? AND revision=? ORDER BY part",
-      )
-      .bind(id, row.revision)
-      .all<{ value: string }>();
-    if (!results.length) throw new HttpError(500, "存储版本不完整");
+    if (!results.length || results.some((p) => p.value === null))
+      throw new HttpError(500, "存储版本不完整");
     const value = JSON.parse(results.map((p) => p.value).join("")) as T;
     if (row.kind === "chat") {
       Object.assign(value as object, {

@@ -135,3 +135,7 @@
 ## 2026-10-18 摘要 / DO / 界面维护
 
 从用户已合并 PR #2 继续：所有缺失摘要前 300 Unicode 字符兜底，追问/重写接有效摘要后 UA 对调，摘要默认 100–150；维护 PLUGINS.md/PLUGIN_CONTEXT.md 图文。清理 DO 生成超时计时器并获得真实 Analytics 短任务驻留结果；0006.sql 已在生产发布前应用。修复色板/圆形色块、暗色提示、卡片高度与条对齐、摘要重复条、上滑跟随锁与分支01编号。无效配置/已读/重复插件状态另加跳过快照写入，保留实际内容变化的原始不可变快照。最终验证见 PRODUCTION.md/RUNTIME.md。
+
+## 2026-10-18 全账号额度
+
+设置与侧栏底部共用 Workers/DO/D1/Workflows 14 项指标。官方 Analytics 固定查询 + Cache API，复用原 bootstrap/navigation；不增加自动轮询或 D1/DO 缓存。免费额度参考、UTC 日重置、CPU 单次限制、容量峰值、未知 Workflows 总存储分别标注。122 项单元/workerd、TS/Svelte/构建通过；Chromium/WebKit 桌面/手机额度及请求预算回归通过。线上版本以 PRODUCTION.md 最新条目为准。

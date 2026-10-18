@@ -3,6 +3,7 @@ import {
   cloneSummaries,
   planPruneSummaries,
 } from "./summaries";
+import { accountUsage } from "./account-usage";
 import { postView } from "./post-tasks";
 import { deviceGeneration } from "./device-generation";
 import {
@@ -312,7 +313,7 @@ async function api(request: Request, env: Env) {
       if (path === "/api/auth/status")
         return Response.json({ authenticated: true });
       const id = url.searchParams.get("chatId");
-      const [chats, groups, providers, config, current] = await Promise.all([
+      const [chats, groups, providers, config, current, usage] = await Promise.all([
         store.list("chat"),
         store.list("group"),
         providerList(store),
@@ -323,6 +324,7 @@ async function api(request: Request, env: Env) {
               throw e;
             })
           : null,
+        accountUsage(env),
       ]);
       return Response.json({
         authenticated: true,
@@ -331,6 +333,7 @@ async function api(request: Request, env: Env) {
         providers: providers.map(publicProvider),
         settings: config,
         current,
+        accountUsage: usage,
       });
     } catch (e) {
       if (e instanceof HttpError && e.status === 401)
@@ -339,6 +342,8 @@ async function api(request: Request, env: Env) {
     }
   }
   const session = await authenticate(request, env);
+  if (path === "/api/account-usage")
+    return Response.json(await accountUsage(env, url.searchParams.get("refresh") === "1"));
   const pluginDevice = path.match(
     /^\/api\/plugins\/jobs\/([^/]+)\/(checkpoint|finish)$/,
   );
@@ -347,11 +352,12 @@ async function api(request: Request, env: Env) {
       await devicePluginSave(env, pluginDevice[1]!, pluginDevice[2]!, body),
     );
   if (path === "/api/navigation") {
-    const [chats, groups] = await Promise.all([
+    const [chats, groups, usage] = await Promise.all([
       store.list("chat"),
       store.list("group"),
+      accountUsage(env),
     ]);
-    return Response.json({ chats, groups });
+    return Response.json({ chats, groups, accountUsage: usage });
   }
   if (path === "/api/config") {
     const [providers, config] = await Promise.all([

@@ -58,3 +58,15 @@
 
 
 最终生产生命周期补验：关闭浏览器 35 秒后真实任务仍在运行，44.32 秒后 4,761 字符和末尾标记完整保存，并自动生成已采用摘要。这验证了可清理超时仍允许服务端任务独立于页面存活；该证据来自真实上游，不是本地延迟 mock。首个快速模型样本不足 30 秒，没有计作此项通过。
+
+## 全账号额度面板（2026-10-18）
+
+设置“账号额度”和聊天侧栏底部共用同一份账号级数据，固定查询 Workers、SQLite DO、D1、Workflows；不按本站脚本、命名空间或数据库筛选。来源为 Cloudflare 官方 GraphQL Analytics，因为这些消费量跨多个资源，不能用单个数据库的 REST 元数据当作全账号账单。服务端固定查询，不接收客户端任意 GraphQL。
+
+- 数据随已有 bootstrap/navigation 返回，没有新增自动轮询。Cache API 保存 5 分钟软缓存，不写 D1/DO；手动刷新最快每分钟一次，页面也拦截重复点击。失败保留上次成功值，首次失败显示未知，UTC 跨日使用新缓存键。
+- 日用量与长期容量分开。CPU 显示累计时间，不与每次调用的 CPU 上限作比例。Workflows 调用共享 Workers 请求额度，单独展示启动次数，不凭未经验证的关系重复相加；step.do 参考额度为 3k/天。
+- 存储是近 24 小时各 D1 数据库 / DO 命名空间的最大样本之和，明确标为峰值，可能高于当前存储；空样本不当成零。Workflows storageRate 不是总存储，状态存储无可靠账号总量时显示“暂无数据”。没有付费升级或购买功能。
+- API 凭证仅使用 `CF_ANALYTICS_TOKEN`、`CF_ANALYTICS_ACCOUNT_ID` Worker secrets，登录后的数据不含账号 ID、Token、资源 ID 或原始 API 错误；不进入设置备份。推荐单账号 Account Analytics Read 令牌。开发初始化仅补 disabled 占位，未配置时仍可正常聊天。
+- Workers fetch 使用 `redirect: manual` 并拒绝非 2xx，8 秒超时显式清理，响应限制 1 MiB；不把凭证随重定向发到其他主机。
+
+参考：[Analytics Token 权限](https://developers.cloudflare.com/analytics/graphql-api/getting-started/authentication/api-token-auth/)、[Workers 价格](https://developers.cloudflare.com/workers/platform/pricing/)、[DO 价格](https://developers.cloudflare.com/durable-objects/platform/pricing/)、[D1 价格](https://developers.cloudflare.com/d1/platform/pricing/)、[Workflows 价格](https://developers.cloudflare.com/workflows/reference/pricing/)。界面参考免费套餐上限，不宣称统计是实时计费明细；Analytics 延迟、采样和按数据集的可用性仍适用。

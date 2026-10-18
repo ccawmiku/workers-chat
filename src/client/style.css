@@ -3476,6 +3476,53 @@ main {
   border-radius: 999px;
   margin: 0 0 12px;
 }
+
+/* Account analytics reuse bootstrap/navigation; these components add no poller. */
+.account-quota-sidebar.du-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  padding: 9px 10px;
+  margin-bottom: 5px;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 400;
+  border: 1px solid var(--line-color);
+  border-radius: 12px;
+}
+.quota-sidebar-title { display: flex; align-items: center; gap: 6px; }
+.quota-sidebar-title small { margin-left: auto; color: var(--muted); font-size: 10px; }
+.quota-sidebar-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.quota-mini { display: grid; grid-template-columns: 1fr auto; text-align: left; gap: 3px 5px; min-width: 0; }
+.quota-mini b { font-weight: 400; font-variant-numeric: tabular-nums; }
+.quota-mini .du-progress { grid-column: 1 / -1; height: 3px; }
+.quota-product-0 { --quota-color: #60a5fa; }
+.quota-product-1 { --quota-color: #b18af8; }
+.quota-product-2 { --quota-color: #39bb97; }
+.quota-product-3 { --quota-color: #d7ac43; }
+.quota-progress.du-progress { color: var(--quota-color, var(--accent)); width: 100%; }
+.quota-progress.quota-high { color: var(--danger); }
+.quota-high-text, .quota-stale { color: var(--danger); }
+.account-quota-settings { max-width: 1080px; }
+.account-quota-settings > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 20px; }
+.account-quota-settings h2 { margin: 0 0 8px; }
+.account-quota-settings header p { margin: 0; }
+.quota-update, .quota-source { line-height: 1.7; font-size: 12px; }
+.quota-products { display: grid; grid-template-columns: 1fr 1fr; align-items: start; gap: 16px; margin-top: 24px; }
+.quota-product.du-card { display: block; border: 1px solid var(--line-color); padding: 18px; border-radius: 16px; }
+.quota-product h3 { margin: 0 0 8px; color: var(--text); font-size: 16px; }
+.quota-metric { padding: 12px 0; }
+.quota-metric + .quota-metric { border-top: 1px solid var(--line-color); }
+.quota-metric-title { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.quota-metric-title b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.quota-amount { margin: 7px 0; font-size: 12px; color: var(--muted); }
+.quota-amount strong { font-size: 16px; font-weight: 500; color: var(--text); }
+.quota-metric .du-progress { display: block; height: 5px; margin-bottom: 7px; }
+.quota-metric small { display: block; line-height: 1.6; font-size: 11px; }
+@media (max-width: 760px) { .quota-products { grid-template-columns: 1fr; } }
 .settings-search input {
   min-width: 0;
   width: 100%;

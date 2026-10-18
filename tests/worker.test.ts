@@ -145,6 +145,8 @@ beforeAll(async () => {
               type: "text",
               value: randomBytes(32).toString("hex"),
             },
+            CF_ANALYTICS_TOKEN: { type: "text", value: "synthetic-analytics-token" },
+            CF_ANALYTICS_ACCOUNT_ID: { type: "text", value: "1".repeat(32) },
           },
           exports: {
             TitleGeneration: { type: "workflow", name: "test-titles" },
@@ -157,6 +159,15 @@ beforeAll(async () => {
             type: "fetcher",
             handler: async (req) => {
               const url = new URL(req.url);
+              if (url.hostname === "api.cloudflare.com" && url.pathname === "/client/v4/graphql")
+                return MFResponse.json({data:{viewer:{accounts:[{
+                  workers:[{sum:{requests:1000,cpuTimeUs:5000}}],
+                  doRequests:[{sum:{requests:500}}],
+                  doUsage:[{sum:{duration:14620.54,rowsRead:1000,rowsWritten:200}}],
+                  d1:[{sum:{rowsRead:10000,rowsWritten:100}}],
+                  workflows:[{sum:{stepCount:20,cpuTime:10}}],workflowStarts:[{count:10}],
+                  d1Storage:[{max:{databaseSizeBytes:1000}}],doStorage:[{max:{storedBytes:2000}}],
+                }]}}});
               if (url.pathname.endsWith("/models"))
                 return MFResponse.json({
                   data: [{ id: "Gemini3.8flash-low" }, { id: "other" }],
@@ -1225,6 +1236,19 @@ describe("workerd HTTP + D1 + Workflows", () => {
       .first<{ value: string }>();
     expect(JSON.parse(current!.value).draft).toBe("");
   });
+  it("authenticates quota access, shares bootstrap/navigation data and rejects user-supplied query mutations", async () => {
+    expect((await request("/account-usage", "GET", undefined, false)).status).toBe(401);
+    expect((await request("/account-usage", "POST", {query:"arbitrary mutation"})).status).toBe(405);
+    const direct = await value<{scope:string;metrics:{id:string;value:number|null;limit:number|null}[]}>("/account-usage?refresh=1");
+    expect(direct.scope).toBe("account");
+    expect(direct.metrics.find(m=>m.id==="do-duration")).toMatchObject({value:14620.54,limit:13000});
+    expect(direct.metrics.find(m=>m.id==="workflow-storage")?.value).toBeNull();
+    const bootstrap=await value<{accountUsage:typeof direct}>("/bootstrap");
+    const navigation=await value<{accountUsage:typeof direct}>("/navigation");
+    expect(bootstrap.accountUsage).toEqual(direct);
+    expect(navigation.accountUsage).toEqual(direct);
+    expect(JSON.stringify(direct)).not.toContain("synthetic-analytics-token");
+  });
   it("does not rewrite multipart chat snapshots for repeated seen or unchanged validated configuration", async () => {
     const imported = await value<{ ids: string[] }>("/import", "POST", {
       data: { title: "snapshot fixture", messages: [
@@ -1637,6 +1661,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(nav).toEqual({
       chats: await value("/chats"),
       groups: await value("/groups"),
+      accountUsage: await value("/account-usage"),
     });
     expect(await value("/config")).toEqual({
       providers: await value("/providers"),

@@ -200,3 +200,10 @@ Windows 文件 ACL 已确认只允许本机用户、Administrators 与 SYSTEM。
 生产补验：约 24 万字的合成历史连续三次已读 + 三次相同配置，revision 与 updatedAt 不变；真实改温度只增加一个版本。未生成摘要的长 A 只取前 300 字进入重写，真实返回 prompt1/2/3，6 项检查通过。读取 sqlite_master 确认三个索引，cf migrations list 返回空列表。
 
 真实关闭页面后台测试：单独选已有 gemini-3.8-flash-low 发起长回复，开始流式后关闭浏览器；35 秒后任务仍为 running，最终耗时 44,320ms，4,761 个 Unicode 字符与结束标记全部保存，随后摘要自动采用（5 项断言）。初次使用 Flash Lite 的任务在 30 秒内已完成，未用它冒充 >30 秒的后台证据；随后这次测试确实跨过 30 秒。所有合成聊天与会话清理，服务商和整体设置保留。
+
+## 2026-10-18 全账号额度发布准备
+
+- 新增 CF_ANALYTICS_TOKEN / CF_ANALYTICS_ACCOUNT_ID Worker secrets，保留原三项认证/加密 Secret、数据库、域名、Workflow 与 DO 绑定。无新增数据库迁移。
+- 推荐专用 Account Analytics Read 令牌；当前部署复用用户授权的已保存 Cloudflare Token，其账号 Analytics 查询权限已实测。该 Token 权限比只读 Analytics 更广，没有谎称已创建专用只读令牌；现有凭证不能读取令牌权限组，未新建或修改账号令牌。实际值仅存本机私有部署文件与 Worker secrets。
+- 本地 122 项单元/workerd、TS/Svelte/构建通过，额度四项桌面/手机 Chromium/WebKit 测试和四项请求预算回归通过。WebKit 假时钟测试修正为等待响应完成后推进下一分钟，避免把响应头到达当成客户端同步完成。
+- 数据覆盖整个账号；不把近 24 小时存储峰值当成当前容量，不把累计 CPU 与单次上限相除，不把未知统计填零。技术依据与缓存规则见 RUNTIME.md。

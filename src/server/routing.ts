@@ -4,7 +4,7 @@ const routes: [RegExp, string[]][] = [
   [/^\/api\/chats\/[^/]+\/summaries$/, ["POST"]],
   [/^\/api\/plugins\/jobs\/[^/]+\/(checkpoint|finish)$/, ["POST"]],
   [/^\/api\/chats\/[^/]+\/plugins$/, ["POST"]],
-  [/^\/api\/(bootstrap|navigation|config)$/, ["GET"]],
+  [/^\/api\/(bootstrap|navigation|config|account-usage)$/, ["GET"]],
   [/^\/api\/jobs\/[^/]+\/events$/, ["GET"]],
   [/^\/api\/device\/titles\/[^/]+\/(claim|finish)$/, ["POST"]],
   [/^\/api\/device\/jobs\/[^/]+\/(checkpoint|finish)$/, ["POST"]],

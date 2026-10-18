@@ -51,6 +51,8 @@ export default defineConfig({
       PASSWORD_HASH: bindings.secret(),
       RECOVERY_HASH: bindings.secret(),
       ENCRYPTION_KEY: bindings.secret(),
+      CF_ANALYTICS_TOKEN: bindings.secret(),
+      CF_ANALYTICS_ACCOUNT_ID: bindings.secret(),
     },
   },
 });

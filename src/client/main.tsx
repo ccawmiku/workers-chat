@@ -1,3 +1,5 @@
+import { AccountUsageSidebar, AccountUsageSettings } from "./account-usage";
+import type { AccountUsage } from "../shared/account-usage";
 import {
   AppearanceSettings,
   readAppearance,
@@ -29,6 +31,7 @@ import React, {
 import { createRoot } from "react-dom/client";
 import {
   Plus,
+  Gauge,
   Cable,
   Server,
   Boxes,
@@ -267,6 +270,14 @@ function App() {
     [groupMenu, setGroupMenu] = useState<string | null>(null),
     [scrollBottom, setScrollBottom] = useState(false);
   const [settingsTab, setSettingsTab] = useState("providers");
+  const [quota, updateQuota] = useState<AccountUsage | null>(null);
+  const setQuota = (value: AccountUsage | null) => updateQuota(previous =>
+    previous && value && (previous.day > value.day ||
+      (previous.day === value.day && (previous.fetchedAt ?? 0) > (value.fetchedAt ?? 0))) ? previous : value);
+  const refreshQuota = async () => {
+    if (quota && Date.now() < quota.nextRefreshAt) return;
+    setQuota(await api<AccountUsage>("/account-usage?refresh=1"));
+  };
   const [appearance, setAppearance] = useState(() => readAppearance());
   const dialogRef = useRef<HTMLElement>(null);
   useDialogFocus(dialogRef, () => setModal(""), !!modal);
@@ -341,11 +352,13 @@ function App() {
   const navigationRequest = useRef<Promise<{
     chats: Brief[];
     groups: Group[];
+    accountUsage?: AccountUsage;
   }> | null>(null);
   const loadNavigation = useCallback(async () => {
     const pending = (navigationRequest.current ??= api<{
       chats: Brief[];
       groups: Group[];
+      accountUsage?: AccountUsage;
     }>("/navigation"));
     let data;
     try {
@@ -356,6 +369,7 @@ function App() {
     }
     const { chats: c, groups: g } = data;
     setChats(c);
+    if (data.accountUsage) setQuota(data.accountUsage);
     setChat((previous) => {
       const current = c.find((item) => item.id === previous?.id);
       return previous && current
@@ -548,6 +562,7 @@ function App() {
   };
   type Bootstrap = {
     requestedChatId?: string | null;
+    accountUsage?: AccountUsage;
     authenticated: boolean;
     chats: Brief[];
     groups: Group[];
@@ -592,6 +607,7 @@ function App() {
           return;
         }
         setChats(data.chats);
+        setQuota(data.accountUsage ?? null);
         setGroups(data.groups);
         setProviders(data.providers);
         setSettings(data.settings);
@@ -1598,6 +1614,7 @@ function App() {
           )}
         </div>
         <div className="nav-footer">
+          <AccountUsageSidebar usage={quota} open={() => showSettings("usage")} />
           <AccountMenu
             items={[
               {
@@ -2620,6 +2637,8 @@ function App() {
               <SettingsPanel
                 close={() => setModal("")}
                 initialTab={settingsTab}
+                usage={quota}
+                refreshUsage={refreshQuota}
                 providers={providers}
                 settings={settings}
                 appearance={appearance}
@@ -3032,6 +3051,8 @@ function Login({
 function SettingsPanel({
   close,
   initialTab,
+  usage,
+  refreshUsage,
   providers,
   settings,
   appearance,
@@ -3045,6 +3066,8 @@ function SettingsPanel({
 }: {
   close: () => void;
   initialTab: string;
+  usage: AccountUsage | null;
+  refreshUsage: () => Promise<void>;
   providers: ProviderView[];
   settings: Settings;
   appearance: Appearance;
@@ -3124,6 +3147,7 @@ function SettingsPanel({
               <HardDriveDownload size={17} aria-hidden="true" />,
             ],
             ["appearance", "外观", <Palette size={17} aria-hidden="true" />],
+            ["usage", "账号额度", <Gauge size={17} aria-hidden="true" />],
             ["security", "账号与设备", <Shield size={17} aria-hidden="true" />],
             ["about", "关于", <Info size={17} aria-hidden="true" />],
           ] as const
@@ -3145,6 +3169,7 @@ function SettingsPanel({
           ))}
       </nav>
       <div className="settings-content">
+        {tab === "usage" && <AccountUsageSettings usage={usage} refresh={refreshUsage} />}
         {tab === "plugins" && (
           <GlobalPlugins
             settings={settings}

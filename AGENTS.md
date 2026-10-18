@@ -82,3 +82,5 @@
 - 外观强调色与深浅色分别保存的背景/前景仅存本设备；默认 accent #f077af，浅色 surface #fcfcfc / ink #0d0d0d，深色 surface #000000 / ink #ededed。设置采用独立页面、桌面左侧导航，手机紧凑导航。自定义颜色需要保证主要按钮文字可读；组件优先使用 daisyUI。生产自定义域名 chat.yaemiko.lol 在 cloudflare.config.ts 的 domains 声明，不新建 Wrangler 配置。
 
 - 2026-10-18 最新：所有插件请求中的缺失/失败/未确认/失效 A 摘要统一回退真实 A 前 300 Unicode 字符；追问/重写现在优先有效摘要后 UA 对调（替代旧 200 字符固定截取），U0 与原 U 仍完整。澄清/分析 rawRounds 的原始 UA 尾部补充保留；摘要器 history 缺 S 用 assistant_excerpt，不能伪装成摘要或示例。摘要默认 100–150 字，精确迁移旧内置提示词并保留自定义。插件卡片紧凑对齐，截取统计仅详情，移除追问列表播放入口与摘要用量行重复条。颜色选择使用 react-colorful + daisyUI，圆形色块；上滑累计 48px 暂停跟随，主动回底恢复。Fork 新标题采用分支01/02，超过99顺延100，识别旧字母后缀避免叠加。DO 超时必须在所有退出路径显式清理。
+
+- 全账号额度放设置与侧栏底部，复用 bootstrap/navigation，无自动额度轮询；Cache API 缓存 5 分钟，手动至少间隔 1 分钟，不用 D1/DO 存统计缓存。凭证只在 Worker secrets，优先 Account Analytics Read。仅固定账号级查询，不加入本站资源过滤；空值不得伪装零，CPU 单次限制与日累计分开，Workflows 共享请求额度不重复相加，存储峰值与未知量明确标注。参见 docs/RUNTIME.md。

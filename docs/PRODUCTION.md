@@ -207,3 +207,7 @@ Windows 文件 ACL 已确认只允许本机用户、Administrators 与 SYSTEM。
 - 推荐专用 Account Analytics Read 令牌；当前部署复用用户授权的已保存 Cloudflare Token，其账号 Analytics 查询权限已实测。该 Token 权限比只读 Analytics 更广，没有谎称已创建专用只读令牌；现有凭证不能读取令牌权限组，未新建或修改账号令牌。实际值仅存本机私有部署文件与 Worker secrets。
 - 本地 122 项单元/workerd、TS/Svelte/构建通过，额度四项桌面/手机 Chromium/WebKit 测试和四项请求预算回归通过。WebKit 假时钟测试修正为等待响应完成后推进下一分钟，避免把响应头到达当成客户端同步完成。
 - 数据覆盖整个账号；不把近 24 小时存储峰值当成当前容量，不把累计 CPU 与单次上限相除，不把未知统计填零。技术依据与缓存规则见 RUNTIME.md。
+
+已发布应用提交 25ba4fe，CF Version e5a745d1-a1da-4969-a1d0-62f64dbbe2b2，主域名和原 workers.dev 均 HTTPS 正常。生产 24 项 API/Chromium 桌面/WebKit 手机检查通过：14 项指标定义、13 项实际数值、未知 Workflows 总存储、账号范围、鉴权/方法限制、缓存完全复用、页面与冷却期刷新零新增额度请求、无页面错误和横向溢出。实际 Worker 绑定核对五项均为 secret_text；未暴露 Token 或账号 ID。零模型调用，整体设置和服务商未改，测试会话已注销。
+
+本次账号数据样本：DO 今日驻留约 14.52 GB·s、70 次请求，D1 约 5.2k 行读 / 1.3k 行写；数据具有 Analytics 延迟，不能把此时点样本当成全天节省比例。此前真实 44 秒后台测试窗口另查 4 个相关对象共约 6.0232 GB·s，主任务/摘要分别 activeTime 43.887 秒 / 2.261 秒，未出现旧 900 秒拖尾。

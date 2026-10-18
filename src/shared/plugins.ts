@@ -14,6 +14,11 @@ export { upgradeLegacyPlugin } from "./plugin-migrations";
 import { summaryIndex, type SummaryState } from "./summaries";
 import { ANALYSIS_PROMPT, ANALYSIS_SCHEMA } from "./analysis-defaults";
 import {
+  legacyClarificationSubmission,
+  hasClarificationAnswers,
+  type ClarificationSubmission,
+} from "./clarification-transmission";
+import {
   type Chat,
   type ModelRef,
   type Parameters,
@@ -56,7 +61,6 @@ export type PluginDefinition = {
   initialUser?: string;
   rewriteFormat?: "fields";
   clarifyFormat?: "questions";
-  clarifyLoop?: boolean;
   excludedCharacters?: string;
   analysisTypes?: AnalysisType[];
 };
@@ -93,6 +97,7 @@ export type PluginJobView = {
   };
 };
 export type PluginRun = {
+  submission?: ClarificationSubmission;
   /** Failed original snapshot; later operations return to its configured model. */
   fallbackOf?: string;
   model?: ModelRef;
@@ -162,7 +167,7 @@ export type PluginState = {
 export const emptyPluginState = (): PluginState => ({ runs: [], flows: [] });
 const names: Record<PluginKind, string> = {
   analysis: "写前分析",
-  clarify: "提问澄清",
+  clarify: "补充提问",
   suggest: "追问建议",
   rewrite: "重写提示",
 };
@@ -190,9 +195,7 @@ export function pluginDefaults(
     rawRounds: 3,
     suggestions: 3,
     ...(kind === "rewrite" ? { rewriteFormat: "fields" as const } : {}),
-    ...(kind === "clarify"
-      ? { clarifyFormat: "questions" as const, clarifyLoop: false }
-      : {}),
+    ...(kind === "clarify" ? { clarifyFormat: "questions" as const } : {}),
     ...(kind === "analysis"
       ? { excludedCharacters: "", analysisTypes: [] }
       : {}),
@@ -607,10 +610,22 @@ export function injectPlugins(
 export function flowInjections(
   state: PluginState,
   flow: PluginFlow,
+  fullClarificationHistory = false,
 ): PluginInjection[] {
   return flow.results.flatMap((id) => {
     const run = state.runs.find((r) => r.id === id);
     if (!run || !["complete", "answered"].includes(run.status)) return [];
+    const submission =
+      run.plugin.kind === "clarify"
+        ? (run.submission ??
+          legacyClarificationSubmission(run.output, run.answer))
+        : undefined;
+    if (
+      submission &&
+      !fullClarificationHistory &&
+      !hasClarificationAnswers(submission)
+    )
+      return [];
     if (
       run.plugin.kind === "clarify" &&
       questionView(run.output)?.length === 0 &&
@@ -627,7 +642,11 @@ export function flowInjections(
         runId: run.id,
         content:
           run.plugin.kind === "clarify"
-            ? JSON.stringify({ questions: run.output, answer: run.answer })
+            ? JSON.stringify(
+                fullClarificationHistory
+                  ? { questions: run.output, answer: run.answer }
+                  : submission,
+              )
             : run.output,
       },
     ];
@@ -636,6 +655,7 @@ export function flowInjections(
 export function flowClarifications(
   state: PluginState,
   flow: PluginFlow,
+  fullHistory = false,
 ): PluginInjection[] {
   const ids = new Set(
     state.runs
@@ -647,5 +667,7 @@ export function flowClarifications(
       )
       .map((r) => r.id),
   );
-  return flowInjections(state, flow).filter((i) => ids.has(i.runId));
+  return flowInjections(state, flow, fullHistory).filter((i) =>
+    ids.has(i.runId),
+  );
 }

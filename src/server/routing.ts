@@ -17,7 +17,7 @@ const routes: [RegExp, string[]][] = [
   [/^\/api\/settings\/(export|import)$/, ["POST"]],
   [/^\/api\/providers$/, ["GET", "POST"]],
   [/^\/api\/providers\/[^/]+$/, ["DELETE"]],
-  [/^\/api\/providers\/[^/]+\/(key|test)$/, ["POST"]],
+  [/^\/api\/providers\/[^/]+\/(key|device-key|test)$/, ["POST"]],
   [/^\/api\/providers\/[^/]+\/models$/, ["PUT"]],
   [/^\/api\/groups$/, ["GET", "POST"]],
   [/^\/api\/groups\/[^/]+$/, ["PATCH", "DELETE"]],

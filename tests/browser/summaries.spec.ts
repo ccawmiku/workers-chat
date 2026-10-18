@@ -203,8 +203,8 @@ for (const mobile of [false, true])
     await expect(latest).toContainText("输入 18.9k");
     await expect(latest).toContainText("输出 424");
     await expect(latest).toContainText("缓存率 85.8%");
-    await expect(latest.locator(".plugin-usage .usage-stack")).toHaveCount(0);
-    const composition = page.locator(".summary-context-chip .usage-stack");
+    await expect(latest.locator(".plugin-usage .usage-ring")).toHaveCount(1);
+    const composition = page.locator(".summary-context-chip .usage-ring");
     await expect(composition.locator(".usage-segment")).toHaveCount(4);
     expect(
       await composition
@@ -224,27 +224,30 @@ for (const mobile of [false, true])
       "rgb(250, 204, 21)",
       "rgb(240, 119, 175)",
     ]);
-    const segmentsWidth = await composition.evaluate((node) => ({
-      whole: node.getBoundingClientRect().width,
-      sum: Array.from(node.children).reduce(
-        (n, c) => n + c.getBoundingClientRect().width,
-        0,
-      ),
-      gap: getComputedStyle(node).gap,
-    }));
-    expect(Math.abs(segmentsWidth.whole - segmentsWidth.sum)).toBeLessThan(1);
-    expect(segmentsWidth.gap).toBe("0px");
+    const arcs = await composition
+      .locator(".usage-segment")
+      .evaluateAll((nodes) =>
+        nodes.map((n) => ({
+          dash: n.getAttribute("stroke-dasharray")!,
+          offset: Number(n.getAttribute("stroke-dashoffset")),
+        })),
+      );
+    expect(
+      arcs.reduce((sum, a) => sum + Number(a.dash.split(" ")[0]), 0),
+    ).toBeCloseTo(100, 4);
+    expect(arcs[0]!.offset).toBe(0);
+    expect(arcs[1]!.offset).toBeLessThan(0);
     const chips = page.locator(".plugin-chip");
     await expect(chips).toHaveCount(5);
     const dimensions = await chips.evaluateAll((nodes) =>
       nodes.map((node) => {
         const r = node.getBoundingClientRect(),
-          bars = node.querySelectorAll(".du-progress");
+          bars = node.querySelectorAll(".plugin-context-ring");
         return {
           height: r.height,
           capacity: bars[0]!.getBoundingClientRect().y - r.y,
           composition:
-            node.querySelector(".usage-stack")!.getBoundingClientRect().y - r.y,
+            node.querySelector(".usage-ring")!.getBoundingClientRect().y - r.y,
         };
       }),
     );
@@ -308,16 +311,12 @@ for (const mobile of [false, true])
     await context
       .getByRole("button", { name: "关闭插件窗口", exact: true })
       .click();
-    const actions = page.locator(".message-actions");
-    await expect(actions.locator(".usage-stack.compact")).toHaveCount(4);
-    expect(
-      await actions
-        .last()
-        .locator("button[aria-label='删除消息']")
-        .evaluate((e) =>
-          e.nextElementSibling?.classList.contains("usage-stack"),
-        ),
-    ).toBe(true);
+    await expect(page.locator(".message-actions .usage-ring")).toHaveCount(0);
+    await expect(
+      page.locator(
+        ".message.assistant > .message-body > .message-meta .message-model > .usage-ring",
+      ),
+    ).toHaveCount(2);
     await page
       .getByRole("button", { name: "当前聊天设置", exact: true })
       .click();
@@ -367,6 +366,11 @@ for (const mobile of [false, true])
       name: "当前聊天 · 回复摘要",
       exact: true,
     });
+    await expect(
+      settings
+        .getByRole("button", { name: "取消", exact: true })
+        .locator("svg"),
+    ).toHaveCount(1);
     await expect(settings.getByLabel("温度", { exact: true })).toHaveValue(
       "0.3",
     );

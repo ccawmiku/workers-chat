@@ -40,6 +40,10 @@ import {
   type AnalysisType,
 } from "../shared/plugin-sections";
 import { ANALYSIS_SCHEMA } from "../shared/analysis-defaults";
+import {
+  clarificationSubmission,
+  legacyClarificationSubmission,
+} from "../shared/clarification-transmission";
 import { CONTINUE_CLARIFY_TASK } from "../shared/clarify-defaults";
 import { fallbackRequest } from "./fallback-model";
 import { compatibleMessages } from "../shared/upstream-compat";
@@ -114,7 +118,7 @@ async function frozenClarification(
     throw e;
   }
   const task = prepared.request.messages.pop();
-  const answers = flowClarifications(state, flow);
+  const answers = flowClarifications(state, flow, true);
   prepared.request.messages = injectPlugins(
     [...prepared.request.messages, { role: "user", content: source.input }],
     answers,
@@ -242,9 +246,7 @@ async function signature(chat: Chat, settings: Settings) {
       chat.rounds,
       enabledPlugins(chat, settings)
         .filter((p) => p.kind === "analysis" || p.kind === "clarify")
-        .map(
-          ({ analysisTypes, clarifyLoop, ...requestConfig }) => requestConfig,
-        ),
+        .map(({ analysisTypes, ...requestConfig }) => requestConfig),
     ]),
   );
 }
@@ -496,7 +498,9 @@ async function enqueue(
         stateDoc.value,
         input,
         anchorId,
-        flow ? flowClarifications(stateDoc.value, flow) : [],
+        flow
+          ? flowClarifications(stateDoc.value, flow, p.kind === "clarify")
+          : [],
         (await summaryState(env, chat.id)).value,
       );
   const id = queuedId ?? crypto.randomUUID(),
@@ -1182,7 +1186,7 @@ export async function pluginEndpoint(
       content: JSON.stringify({
         original_task: originalTask?.content?.split("\n\nJSON Schema：")[0],
         output_contract:
-          '原任务只作为资料和内容规则参考，原任务中的完整字段/全量输出要求在本次无效。只输出 JSON {"type":"类型名称","content":"该块内容","instruction":"仅新增类型时填写可复用通用规则，不包含本轮人物/剧情方向"}；不要输出 id、其他块或完整分析。类型名称和内容不能为空。指定块的 type 必须保持原样。不得生成主角或“你”的第一人称想法；不编造已有状态。',
+          '原任务只作为资料和内容规则参考，原任务中的完整字段/全量输出要求在本次无效。只输出 JSON {"type":"类型名称","content":"该块内容","instruction":"仅新增类型时填写可复用通用规则，不包含本轮人物/剧情方向"}；不要输出 id、其他块或完整分析。类型名称和内容不能为空。指定块的 type 必须保持原样。不得生成主角、玩家或“你”的第一人称想法。只涉及当前明确在场的角色；忽略不在场、已离场或位置不明的角色，不列缺席名单，不输出“某某不在场”的说明或占位。不编造已有状态。',
         excluded_characters: source.plugin.excludedCharacters ?? "",
         current_sections: sections,
         task: targetId
@@ -1415,34 +1419,6 @@ export async function pluginEndpoint(
     await saveState(env, chat.id, state, extra);
     return { ok: true };
   }
-  if (action === "clarify-loop") {
-    if (
-      !run ||
-      run.plugin.kind !== "clarify" ||
-      run.status !== "waiting" ||
-      !flow ||
-      flow.status !== "waiting" ||
-      flow.results.at(-1) !== run.id
-    )
-      throw new HttpError(409, "当前没有待处理提问");
-    const enabled = body.enabled === true;
-    run.plugin.clarifyLoop = enabled;
-    flow.definitions = flow.definitions.map((p) =>
-      p.id === run.plugin.id ? { ...p, clarifyLoop: enabled } : p,
-    );
-    chat.plugins = (chat.plugins ?? []).map((p) =>
-      p.id === run.plugin.id
-        ? { ...p, overrides: { ...p.overrides, clarifyLoop: enabled } }
-        : p,
-    );
-    await saveState(
-      env,
-      chat.id,
-      state,
-      store.planSave(chat.id, "chat", chat, chatDoc.revision, summary(chat)),
-    );
-    return { ok: true };
-  }
   if (action === "rewrite" || action === "suggest") {
     const { settings } = await config(env),
       p = enabledPlugins(chat, settings).find(
@@ -1621,6 +1597,11 @@ export async function pluginEndpoint(
     if (!answer.trim() && action !== "finish-clarify" && structured === null)
       throw new HttpError(400, "请填写回答");
     run.answer = answer;
+    run.submission = clarificationSubmission(
+      run.output,
+      body.selections,
+      freeText,
+    );
     run.status = "answered";
     for (const other of state.value.runs)
       if (
@@ -1629,10 +1610,7 @@ export async function pluginEndpoint(
         ["candidate", "error"].includes(other.status)
       )
         other.status = "superseded";
-    const repeat =
-      action !== "finish-clarify" &&
-      run.plugin.clarifyLoop &&
-      structured?.length !== 0;
+    const repeat = action !== "finish-clarify";
     if (!repeat) flow.index++;
     flow.status = "running";
     await saveState(env, chat.id, state);
@@ -1784,7 +1762,17 @@ export async function pluginEndpoint(
           anchorId: copy.id,
           contextAnchorId: copy.parentId,
           ...(id === run.id && typeof body.answer === "string"
-            ? { answer: body.answer }
+            ? {
+                answer: body.answer,
+                ...(old.plugin.kind === "clarify"
+                  ? {
+                      submission: legacyClarificationSubmission(
+                        old.output,
+                        body.answer,
+                      ),
+                    }
+                  : {}),
+              }
             : {}),
         };
         state.value.runs.push(cloned);

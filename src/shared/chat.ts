@@ -3,6 +3,7 @@ export const MODEL_ID_MAX_LENGTH = 1000;
 import { DEFAULT_TITLE_PROMPT } from "./default-title-prompt";
 import type { APIMessage, PluginBinding, PluginDefinition } from "./plugins";
 import { compatibleMessages } from "./upstream-compat";
+import { cleanLegacyClarificationTools } from "./clarification-transmission";
 export type Role = "user" | "assistant" | "system";
 export type Effort = "inherit" | "none" | "low" | "medium" | "high" | "max";
 export type Parameters = {
@@ -377,7 +378,11 @@ export function contextMessages(chat: Chat, draft?: string, reasoning = false) {
       m.toolContext?.parentId === previous.id &&
       m.parentId === previous.id
     )
-      messages.push(...m.toolContext.messages.map((v) => structuredClone(v)));
+      messages.push(
+        ...cleanLegacyClarificationTools(m.toolContext.messages).map((v) =>
+          structuredClone(v),
+        ),
+      );
     messages.push({
       role: m.role,
       content: m.content,

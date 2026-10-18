@@ -334,7 +334,6 @@ export function AnalysisSections({
             }
           >
             <I.cancel size={14} />
-            <I.cancel size={15} />
             取消
           </button>
         </div>
@@ -400,7 +399,6 @@ export function AnalysisSections({
                       onClick={() => setEditing(null)}
                     >
                       <I.cancel size={13} />
-                      <I.cancel size={15} />
                       取消
                     </button>
                   </div>

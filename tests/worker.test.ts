@@ -615,6 +615,41 @@ describe("workerd HTTP + D1 + Workflows", () => {
         password: fixturePassword,
       }),
     ).toEqual({ apiKey: "synthetic-fixture-key" });
+    const deviceKeyPath = "/providers/" + provider.id + "/device-key";
+    expect(
+      (
+        await request(
+          deviceKeyPath,
+          "POST",
+          { baseUrl: provider.baseUrl },
+          false,
+        )
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await request(
+          deviceKeyPath,
+          "POST",
+          { baseUrl: provider.baseUrl },
+          true,
+          "https://other.test",
+        )
+      ).status,
+    ).toBe(403);
+    const unlocked = await request(deviceKeyPath, "POST", {
+      baseUrl: provider.baseUrl,
+    });
+    expect(unlocked.headers.get("Cache-Control")).toBe("no-store");
+    expect(await unlocked.json()).toEqual({ apiKey: "synthetic-fixture-key" });
+    expect((await request(deviceKeyPath, "GET")).status).toBe(405);
+    expect(
+      (
+        await request(deviceKeyPath, "POST", {
+          baseUrl: "https://different.test/v1",
+        })
+      ).status,
+    ).toBe(409);
     const sessions = await value<{ id: string }[]>("/auth/sessions");
     expect(sessions[0]!.id).not.toBe(cookie.replace("session=", ""));
   });
@@ -2068,7 +2103,6 @@ describe("workerd HTTP + D1 + Workflows", () => {
     controls.mode = "clarify-loop";
     const p = {
       ...pluginDefaults("clarify"),
-      clarifyLoop: true,
       prompt: "[PLUGIN_TEST_clarify]\n" + pluginDefaults("clarify").prompt,
     };
     await value("/settings", "PUT", { ...settings, plugins: [p] });
@@ -2193,7 +2227,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(s.pluginState.runs[0]?.usage?.cache_hit_rate).toBe("80%");
     const question = s.pluginState.runs[0]!;
     await value("/chats/" + chat.id + "/plugins", "POST", {
-      action: "answer",
+      action: "finish-clarify",
       runId: question.id,
       content: "轻松幽默",
     });
@@ -2284,7 +2318,8 @@ describe("workerd HTTP + D1 + Workflows", () => {
       analysis.some(
         (m) =>
           m.role === "tool" &&
-          m.content.includes(JSON.stringify(question.output)),
+          m.content.includes("轻松幽默") &&
+          !m.content.includes(JSON.stringify(question.output)),
       ),
     ).toBe(true);
     const main = upstreamCalls[before + 3]!.messages as {
@@ -2753,7 +2788,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     let s = await wait((s) => s.chat.pluginPending === "waiting");
     const originalRun = s.pluginState.runs.find((r) => r.status === "waiting")!;
     await value("/chats/" + chat.id + "/plugins", "POST", {
-      action: "answer",
+      action: "finish-clarify",
       runId: originalRun.id,
       content: "旧偏好",
     });
@@ -2790,7 +2825,8 @@ describe("workerd HTTP + D1 + Workflows", () => {
       analysisRequest.messages.some(
         (m) =>
           m.role === "tool" &&
-          m.content.includes(JSON.stringify(originalRun.output)),
+          m.content.includes("旧偏好") &&
+          !m.content.includes(JSON.stringify(originalRun.output)),
       ),
     ).toBe(true);
     expect(JSON.stringify(upstreamCalls.at(-1)?.messages)).toContain("旧偏好");
@@ -2861,6 +2897,11 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(
       s.pluginState.runs.findLast((r) => r.status === "answered")?.answer,
     ).toBe("新的偏好");
+    const rewrittenTools = (
+      upstreamCalls.at(-1)?.messages as { role: string; content: string }[]
+    ).filter((m) => m.role === "tool");
+    expect(JSON.stringify(rewrittenTools)).toContain("新的偏好");
+    expect(JSON.stringify(rewrittenTools)).not.toContain("旧偏好");
     const fork = await value<Chat>("/chats/" + chat.id + "/fork", "POST", {
         messageId: originalAssistant,
       }),

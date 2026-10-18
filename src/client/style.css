@@ -2729,14 +2729,15 @@ main {
 .plugin-chip {
   flex: 0 0 auto;
   display: grid;
-  grid-template-rows: 18px 4px 4px 12px;
-  align-items: stretch;
-  height: 60px;
-  min-height: 60px;
-  gap: 3px;
-  min-width: 108px;
-  max-width: 180px;
-  padding: 5px 9px;
+  grid-template-columns: auto auto;
+  grid-template-rows: 16px 20px;
+  align-items: center;
+  height: 46px;
+  min-height: 46px;
+  gap: 2px 6px;
+  min-width: 130px;
+  max-width: 200px;
+  padding: 4px 9px;
   border: 1px solid var(--line-color);
   border-radius: 9px;
   text-align: left;
@@ -3352,65 +3353,6 @@ main {
 }
 
 /* Adjacent daisyUI progress segments share one clipped track. Reasoning is split from output. */
-.usage-stack {
-  display: inline-flex;
-  align-items: stretch;
-  gap: 0;
-  width: 100%;
-  min-width: 0;
-  height: 4px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: var(--line-color);
-  vertical-align: middle;
-  flex-shrink: 0;
-}
-.usage-stack.compact {
-  width: 96px;
-  height: 8px;
-  margin-inline: 8px;
-}
-.usage-stack .usage-segment {
-  margin: 0;
-  min-width: 0;
-  flex: none;
-  height: 100%;
-  border: 0;
-  border-radius: 0;
-  background: currentColor;
-}
-.usage-stack .usage-input {
-  color: #2563eb;
-}
-.usage-stack .usage-cached {
-  color: #93c5fd;
-}
-.usage-stack .usage-thinking {
-  color: #facc15;
-}
-.usage-stack .usage-output {
-  color: #f077af;
-}
-.usage-segment::-webkit-progress-value,
-.usage-segment::-webkit-progress-bar {
-  border-radius: 0;
-  transition: none;
-}
-.usage-segment::-moz-progress-bar {
-  border-radius: 0;
-  transition: none;
-}
-.message-meta > .usage-stack {
-  flex-basis: 100%;
-  max-width: 240px;
-  margin-block: 6px;
-}
-.plugin-chip .usage-stack {
-  margin: 0;
-}
-.plugin-chip > small {
-  white-space: nowrap;
-}
 .plugin-bar.empty:has(.summary-context-chip) {
   display: block;
 }
@@ -3954,11 +3896,6 @@ main {
   .appearance-group {
     padding-inline: 12px;
   }
-  .usage-stack.compact {
-    width: 72px;
-    height: 7px;
-    margin-inline: 6px;
-  }
 }
 
 .settings-search,
@@ -4025,16 +3962,6 @@ main {
   padding: 12px 0 0;
   border-top: 1px solid var(--line-color);
   background: var(--panel);
-}
-.plugin-chip {
-  height: 42px;
-  min-height: 42px;
-  grid-template-rows: 18px 4px 4px;
-  gap: 2px;
-  padding: 4px 9px;
-}
-.plugin-chip:has(> small:not(:empty)) {
-  height: 42px;
 }
 .plugin-chip > small:empty {
   display: none;
@@ -4174,11 +4101,6 @@ main {
   color: var(--accent-ink);
   border-color: var(--accent);
 }
-.plugin-chips:has(.plugin-chip-cache) .plugin-chip {
-  height: 54px;
-  min-height: 54px;
-  grid-template-rows: 18px 4px 4px 10px;
-}
 .plugin-chip .plugin-chip-cache {
   line-height: 10px;
   font-size: 10px;
@@ -4194,23 +4116,6 @@ main {
   width: 20px;
   min-width: 20px;
   padding: 0;
-}
-.plugin-bar.chips-collapsed .plugin-chip {
-  height: 19px;
-  min-height: 19px;
-  grid-template-rows: 4px 4px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  gap: 3px;
-}
-.plugin-bar.chips-collapsed .plugin-chip > span:first-child,
-.plugin-bar.chips-collapsed .plugin-chip > small {
-  display: none;
-}
-.plugin-bar.chips-collapsed .chips-toggle {
-  top: 0;
-  height: 21px;
-  min-height: 21px;
 }
 .fallback-control,
 .fallback-options {
@@ -4260,4 +4165,93 @@ main {
 .section-candidate .du-btn-primary {
   background: var(--accent);
   color: var(--accent-ink);
+}
+
+/* Context fill and usage composition share one SVG ring each. */
+.usage-ring,
+.plugin-context-ring {
+  width: 20px;
+  height: 20px;
+  display: inline-block;
+  flex: none;
+  vertical-align: middle;
+  overflow: visible;
+}
+.usage-ring.compact {
+  width: 22px;
+  height: 22px;
+  margin-inline-start: 5px;
+}
+.ring-track {
+  stroke: var(--line-color);
+}
+.usage-ring .usage-input {
+  color: #2563eb;
+}
+.usage-ring .usage-cached {
+  color: #93c5fd;
+}
+.usage-ring .usage-thinking {
+  color: #facc15;
+}
+.usage-ring .usage-output {
+  color: #f077af;
+}
+.plugin-context-ring {
+  color: var(--accent);
+}
+.plugin-context-ring.over-budget {
+  color: var(--danger);
+}
+.message-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+.plugin-chip .plugin-chip-heading {
+  grid-column: 1/-1;
+}
+.plugin-chip .plugin-chip-meters {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  grid-row: 2;
+  grid-column: 1;
+}
+.plugin-chip .plugin-chip-cache {
+  grid-row: 2;
+  grid-column: 2;
+  justify-self: end;
+}
+.plugin-bar.chips-collapsed .plugin-chips {
+  width: fit-content;
+  max-width: 100%;
+  gap: 2px;
+  padding: 2px 5px;
+  border: 1px solid var(--line-color);
+  border-radius: 999px;
+  background: var(--panel);
+}
+.plugin-bar.chips-collapsed .plugin-chip {
+  display: flex;
+  justify-content: center;
+  flex: 0 0 44px;
+  min-width: 44px;
+  max-width: 44px;
+  height: 24px;
+  min-height: 24px;
+  padding: 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.plugin-bar.chips-collapsed .plugin-chip .plugin-chip-heading,
+.plugin-bar.chips-collapsed .plugin-chip > small {
+  display: none;
+}
+.plugin-bar.chips-collapsed .chips-toggle {
+  top: 3px;
+  height: 24px;
+  min-height: 24px;
 }

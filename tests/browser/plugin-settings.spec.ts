@@ -128,10 +128,10 @@ for (const mobile of [false, true])
       });
     }
     await list
-      .getByRole("button", { name: "编辑插件 提问澄清", exact: true })
+      .getByRole("button", { name: "编辑插件 补充提问", exact: true })
       .click();
     let editor = page.getByRole("dialog", {
-      name: "全局 · 提问澄清",
+      name: "全局 · 补充提问",
       exact: true,
     });
     const sticky = await editor.evaluate((el) => {
@@ -181,7 +181,7 @@ for (const mobile of [false, true])
       stream: false,
     });
     await list
-      .getByRole("button", { name: "编辑插件 提问澄清", exact: true })
+      .getByRole("button", { name: "编辑插件 补充提问", exact: true })
       .click();
     await expect(
       editor.getByLabel("插件流式输出", { exact: true }),

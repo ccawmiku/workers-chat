@@ -235,7 +235,7 @@ export function ProvidersPanel({
         )}
       </div>
       <p className="muted provider-security-note">
-        密钥加密保存；设备直连时经访问密码验证后临时解锁。修改名称或前缀可直接保存，不必连接上游。
+        密钥加密保存；设备直连时复用当前登录会话临时解锁。修改名称或前缀可直接保存，不必连接上游。
       </p>
       {form &&
         createPortal(

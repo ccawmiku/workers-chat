@@ -1,5 +1,5 @@
 import { useCacheReading } from "./cache-usage";
-import { UsageBar } from "./usage-bar";
+import { MessageUsageRing } from "./usage-bar";
 import { useState, useRef } from "react";
 import {
   type Chat,
@@ -366,11 +366,9 @@ function object(value: unknown): Record<string, unknown> {
 export function MessageUsage({
   message,
   historical = false,
-  showBar = false,
 }: {
   message: Message;
   historical?: boolean;
-  showBar?: boolean;
 }) {
   const cache = useCacheReading(message.usage, message.id);
   const usage = message.usage ?? {},
@@ -387,7 +385,10 @@ export function MessageUsage({
     <div
       className={"message-meta " + (historical && !cache ? "historical" : "")}
     >
-      <span>{message.model?.modelId ?? String(message.raw?.model ?? "")}</span>
+      <span className="message-model">
+        {message.model?.modelId ?? String(message.raw?.model ?? "")}
+        <MessageUsageRing message={message} />
+      </span>
       {message.elapsedMs !== undefined && (
         <span> · {(message.elapsedMs / 1000).toFixed(1)} 秒</span>
       )}
@@ -400,7 +401,6 @@ export function MessageUsage({
           </span>
         ))}
       {rows.some((r) => r[1] !== undefined) && <span> Token</span>}
-      {showBar && <UsageBar usage={usage} cacheId={message.id} />}
       {cache && (
         <span title={cache.source}>
           {" "}

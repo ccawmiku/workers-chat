@@ -1,4 +1,4 @@
-import { UsageBar } from "./usage-bar";
+import { UsageRing, ContextRing } from "./usage-bar";
 import { ActionIcons as I } from "./action-icons";
 import { FallbackButton } from "./fallback-ui";
 import { CacheIndicator } from "./cache-indicator";
@@ -202,7 +202,6 @@ export function SummaryEditor({
             </button>
           )}
           <button className="du-btn du-btn-ghost" type="button" onClick={close}>
-            <I.cancel size={15} />
             <I.cancel size={15} />
             取消
           </button>
@@ -620,24 +619,26 @@ export function SummaryContextChip({
         aria-label="回复摘要上下文"
         onClick={() => setOpen(true)}
       >
-        <span>
+        <span className="plugin-chip-heading">
           <span className="plugin-chip-name">回复摘要</span>
           <b>{message ? formatTokenCount(tokens) : "待回复"}</b>
         </span>
-        <progress
-          className="du-progress du-progress-primary"
-          max={capacity}
-          value={Math.min(tokens, capacity)}
-        />
-        <UsageBar
-          usage={run?.usage}
-          cacheId={run?.id}
-          fallback={
-            tokens
-              ? { input: tokens, thinking: 0, output: 0, total: tokens }
-              : undefined
-          }
-        />
+        <span className="plugin-chip-meters">
+          <ContextRing
+            used={tokens}
+            capacity={capacity}
+            label="回复摘要上下文"
+          />
+          <UsageRing
+            usage={run?.usage}
+            cacheId={run?.id}
+            fallback={
+              tokens
+                ? { input: tokens, thinking: 0, output: 0, total: tokens }
+                : undefined
+            }
+          />
+        </span>
         <CacheIndicator
           usage={run?.usage}
           id={run?.id}
@@ -671,7 +672,7 @@ export function SummaryContextChip({
                 value={Math.min(tokens, capacity)}
                 max={capacity}
               />
-              <UsageBar
+              <UsageRing
                 usage={run?.usage}
                 fallback={
                   tokens

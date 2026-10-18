@@ -12,7 +12,6 @@ import {
   applyAppearance,
   type Appearance,
 } from "./appearance";
-import { MessageTokenBar } from "./usage-bar";
 import {
   ReplySummaryCard,
   SummaryTools,
@@ -2254,7 +2253,6 @@ function App() {
                           >
                             <Trash2 size={15} />
                           </IconButton>
-                          <MessageTokenBar message={m} />
                           {siblings.length > 1 && (
                             <div className="versions">
                               <IconButton
@@ -3512,7 +3510,7 @@ function SettingsPanel({
             <p className="muted">
               开启后，此设备直接通过 HTTPS
               请求服务商，流式内容即时显示。上游必须允许 CORS
-              跨域；密钥经访问密码验证后只保留在页面内存。关闭页面会中断直连生成，后台持续生成请使用服务端模式。开关只在此设备保存。
+              跨域；密钥复用当前登录会话解锁，只保留在页面内存。关闭页面会中断直连生成，后台持续生成请使用服务端模式。开关只在此设备保存。
             </p>
             <button onClick={connection.lock}>
               <LogOut size={16} />

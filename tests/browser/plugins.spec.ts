@@ -256,7 +256,7 @@ for (const mobile of [false, true])
         .getByRole("button", { name: "插件", exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "插件", exact: true }).click();
-    for (const name of ["写前分析", "提问澄清", "追问建议", "重写提示"]) {
+    for (const name of ["写前分析", "补充提问", "追问建议", "重写提示"]) {
       await page.getByLabel("启用 " + name, { exact: true }).check();
       await expect(
         page.getByRole("button", { name: name + "上下文", exact: true }),
@@ -290,10 +290,26 @@ for (const mobile of [false, true])
         .locator(".plugin-chip")
         .first()
         .evaluate((el) => el.getBoundingClientRect().height),
-    ).toBeLessThan(24);
+    ).toBeLessThanOrEqual(28);
     expect(
       await page.evaluate(() => localStorage.getItem("plugin-chips-collapsed")),
     ).toBe("1");
+    await expect(
+      page.locator(".plugin-chips .plugin-context-ring"),
+    ).toHaveCount(5);
+    await expect(page.locator(".plugin-chips .usage-ring")).toHaveCount(5);
+    for (const ring of await page.locator(".plugin-chips svg").all())
+      await expect(ring).toBeVisible();
+    expect(
+      await page
+        .locator(".plugin-chip")
+        .first()
+        .evaluate((el) => getComputedStyle(el).borderTopWidth),
+    ).toBe("0px");
+    await page.screenshot({
+      path: `test-results/collapsed-rings-${mobile ? "phone" : "desktop"}-${test.info().project.name}.png`,
+    });
+
     await page
       .getByRole("button", { name: "展开插件上下文", exact: true })
       .click();
@@ -408,26 +424,10 @@ for (const mobile of [false, true])
       expect(Math.abs(questionBoxes[0]!.y - questionBoxes[1]!.y)).toBeLessThan(
         2,
       );
-    const mutationRequests: string[] = [];
-    const mutationCounter = (r: any) => {
-      const path = new URL(r.url()).pathname;
-      if (
-        [
-          "/api/chats/" + id,
-          "/api/chats/" + id + "/plugins",
-          "/api/navigation",
-        ].includes(path)
-      )
-        mutationRequests.push(r.method() + " " + path);
-    };
-    page.on("request", mutationCounter);
-    const loopToggle = page
-      .locator(".plugin-question[open]")
-      .getByLabel("反复问", { exact: true });
-    await loopToggle.check();
-    await expect(loopToggle).toBeEnabled();
-    page.off("request", mutationCounter);
-    expect(mutationRequests).toEqual(["POST /api/chats/" + id + "/plugins"]);
+    await expect(page.getByLabel("反复问", { exact: true })).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "提交并继续", exact: true }),
+    ).toBeVisible();
     await page
       .locator(".question-section")
       .first()
@@ -464,11 +464,9 @@ for (const mobile of [false, true])
     ).toBeVisible();
     await expect(page.locator(".plugin-question[open]")).toHaveCount(1);
     await expect(
-      page.getByRole("button", { name: "结束追问并继续", exact: true }),
+      page.getByRole("button", { name: "提交并结束", exact: true }),
     ).toHaveClass(/du-btn-primary/);
-    await page
-      .getByRole("button", { name: "结束追问并继续", exact: true })
-      .click();
+    await page.getByRole("button", { name: "提交并结束", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "确认并继续", exact: true }),
     ).toBeVisible();
@@ -637,9 +635,17 @@ for (const mobile of [false, true])
     );
     expect(
       analysisCall.messages.filter((m: any) => m.role === "tool"),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(JSON.stringify(analysisCall.messages)).toContain("轻松幽默");
     expect(JSON.stringify(analysisCall.messages)).toContain("哪种风格");
+    expect(JSON.stringify(analysisCall.messages)).not.toContain(
+      "后续希望优先处理哪一项？",
+    );
+    const transmitted = analysisCall.messages.filter(
+      (m: any) => m.role === "tool",
+    );
+    expect(JSON.stringify(transmitted)).not.toContain('"options"');
+
     await expect(page.locator(".plugin-chips")).not.toContainText("预计");
     for (const value of await page.locator(".plugin-chip b").allTextContents())
       expect(value).toMatch(/^(?:\d+|\d+\.\dk|待回复)$/);
@@ -775,14 +781,16 @@ for (const mobile of [false, true])
       result.chat.messages[result.chat.currentId].toolContext.messages.filter(
         (m: any) => m.role === "tool",
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     const cleanExport = await page.evaluate(
       async (id) => await (await fetch("/api/chats/" + id + "/export")).json(),
       id,
     );
     expect(JSON.stringify(cleanExport)).not.toMatch(/轻松幽默|toolContext/);
     const cachedBar = page
-      .locator(".message.assistant .message-actions .usage-cached")
+      .locator(
+        ".message.assistant > .message-body > .message-meta .usage-cached",
+      )
       .first();
     await expect(cachedBar).toHaveAttribute("data-tokens", "1287");
     expect(await cachedBar.evaluate((el) => getComputedStyle(el).color)).toBe(

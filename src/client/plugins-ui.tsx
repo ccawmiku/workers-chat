@@ -4,7 +4,7 @@ import {
   type PluginInputRequest,
 } from "./plugin-sections-ui";
 import { questionView, type AnalysisType } from "../shared/plugin-sections";
-import { UsageBar } from "./usage-bar";
+import { UsageRing, ContextRing } from "./usage-bar";
 import { ActionIcons as I } from "./action-icons";
 import { FallbackSettings, FallbackButton } from "./fallback-ui";
 import { CacheIndicator } from "./cache-indicator";
@@ -76,7 +76,6 @@ function PluginUsage({ run }: { run: PluginRun }) {
   return (
     <div className="plugin-usage">
       <MessageUsage
-        showBar
         message={{
           id: run.id,
           parentId: null,
@@ -265,21 +264,6 @@ export function PluginEditor({
                 </details>
               )}
             </>
-          )}
-          {p.kind === "clarify" && (
-            <label className="plugin-stream-toggle">
-              反复问
-              <input
-                className="du-toggle du-toggle-sm"
-                type="checkbox"
-                aria-label="反复问"
-                checked={p.clarifyLoop === true}
-                onChange={(e) => update({ clarifyLoop: e.target.checked })}
-              />
-              <small>
-                提交回答后再检查是否还有必要的问题，没有新问题时等待确认继续。
-              </small>
-            </label>
           )}
           <fieldset className="du-fieldset plugin-editor-section">
             <legend className="du-fieldset-legend">基本设置</legend>
@@ -727,7 +711,7 @@ function ContextDetails({
                 value={Math.min(m.total, m.capacity)}
                 aria-label="插件上下文用量"
               />
-              <UsageBar
+              <UsageRing
                 usage={usageRun?.usage}
                 fallback={{
                   input: m.total,
@@ -1164,34 +1148,31 @@ export function PluginBar({
                 aria-label={p.name + "上下文"}
                 onClick={() => setContext(p.id)}
               >
-                <span>
+                <span className="plugin-chip-heading">
                   <span className="plugin-chip-name">{p.name}</span>
                   <b>{metrics ? k(metrics.total) : "未选模型"}</b>
                 </span>
-                <progress
-                  className={
-                    "du-progress " +
-                    (metrics && metrics.total > metrics.capacity
-                      ? "du-progress-error"
-                      : "du-progress-primary")
-                  }
-                  max={metrics?.capacity ?? 1}
-                  value={Math.min(metrics?.total ?? 0, metrics?.capacity ?? 1)}
-                />
-                <UsageBar
-                  usage={(run ?? usageRun)?.usage}
-                  cacheId={run?.id ?? usageRun?.id}
-                  fallback={
-                    metrics
-                      ? {
-                          input: metrics.total,
-                          thinking: 0,
-                          output: 0,
-                          total: metrics.total,
-                        }
-                      : undefined
-                  }
-                />
+                <span className="plugin-chip-meters">
+                  <ContextRing
+                    used={metrics?.total ?? 0}
+                    capacity={metrics?.capacity ?? 1}
+                    label={p.name + "上下文"}
+                  />
+                  <UsageRing
+                    usage={(run ?? usageRun)?.usage}
+                    cacheId={run?.id ?? usageRun?.id}
+                    fallback={
+                      metrics
+                        ? {
+                            input: metrics.total,
+                            thinking: 0,
+                            output: 0,
+                            total: metrics.total,
+                          }
+                        : undefined
+                    }
+                  />
+                </span>
                 <CacheIndicator
                   usage={(run ?? usageRun)?.usage}
                   id={run?.id ?? usageRun?.id}
@@ -1248,7 +1229,7 @@ export function PluginBar({
                   </IconButton>
                 </div>
                 <p className="muted">
-                  提问澄清 → 写前分析 → 主回答。追问和 user 重写独立触发。
+                  补充提问 → 写前分析 → 主回答。追问和 user 重写独立触发。
                 </p>
                 {list.map((p) => {
                   const binding = bindings.find((b) => b.id === p.id),
@@ -1382,11 +1363,6 @@ function ResultCard({
     [error, setError] = useState(""),
     [saving, setSaving] = useState(false);
   const [context, setContext] = useState(false);
-  const [loop, setLoop] = useState(run.plugin.clarifyLoop === true);
-  useEffect(
-    () => setLoop(run.plugin.clarifyLoop === true),
-    [run.plugin.clarifyLoop],
-  );
   const act = async (action: string, body: Record<string, unknown> = {}) => {
     setError("");
     setSaving(true);
@@ -1468,48 +1444,22 @@ function ResultCard({
         )}
         {question && active && run.status === "waiting" && (
           <div className="plugin-card-actions">
-            <label className="section-save-choice">
-              <input
-                className="du-toggle du-toggle-sm"
-                aria-label="反复问"
-                type="checkbox"
-                checked={loop}
-                disabled={busy || saving}
-                onChange={(e) => {
-                  const enabled = e.target.checked;
-                  setLoop(enabled);
-                  setSaving(true);
-                  void command("clarify-loop", { runId: run.id, enabled })
-                    .catch((e) => {
-                      setLoop(!enabled);
-                      setError(e.message);
-                    })
-                    .finally(() => setSaving(false));
-                }}
-              />
-              反复问
-            </label>
             <button
               className="du-btn du-btn-primary du-btn-sm"
+              disabled={busy || saving}
+              onClick={() => answer(run, true)}
+            >
+              <I.confirm size={14} />
+              提交并结束
+            </button>
+            <button
+              className="du-btn du-btn-sm"
               disabled={busy || saving}
               onClick={() => answer(run, false)}
             >
               <I.submit size={14} />
-              {questionView(run.output)?.length === 0
-                ? "继续写前分析"
-                : "提交回答"}
+              提交并继续
             </button>
-            {run.plugin.clarifyLoop &&
-              questionView(run.output)?.length !== 0 && (
-                <button
-                  className="du-btn du-btn-primary du-btn-sm"
-                  disabled={busy || saving}
-                  onClick={() => answer(run, true)}
-                >
-                  <I.confirm size={14} />
-                  结束追问并继续
-                </button>
-              )}
           </div>
         )}
         {run.answer !== undefined && (
@@ -1572,7 +1522,6 @@ function ResultCard({
                 onClick={() => void act("dismiss").catch(() => {})}
               >
                 <I.cancel size={14} />
-                <I.cancel size={15} />
                 取消
               </button>
             </>

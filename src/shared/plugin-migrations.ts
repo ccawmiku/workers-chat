@@ -1,6 +1,7 @@
 import type { PluginDefinition } from "./plugins";
 import {
   ANALYSIS_PROMPT,
+  PRE_PRESENT_ANALYSIS_PROMPT,
   ANALYSIS_SCHEMA,
   LEGACY_ANALYSIS_PROMPT,
   LEGACY_ANALYSIS_SCHEMA,
@@ -34,10 +35,17 @@ export function upgradeLegacyPlugin(p: PluginDefinition): PluginDefinition {
     highWater,
     lowWater,
     injection,
+    clarifyLoop,
     ...clean
   } = legacy;
   p = {
     ...clean,
+    ...(p.kind === "clarify" && p.name === "提问澄清"
+      ? { name: "补充提问" }
+      : {}),
+    ...(p.kind === "clarify" && p.cardTitle === "提问澄清"
+      ? { cardTitle: "补充提问" }
+      : {}),
     ...(p.kind === "analysis" && p.name === "JSON 分析"
       ? { name: "写前分析" }
       : {}),
@@ -52,6 +60,7 @@ export function upgradeLegacyPlugin(p: PluginDefinition): PluginDefinition {
     p.kind === "analysis" &&
     [
       LEGACY_ANALYSIS_PROMPT,
+      PRE_PRESENT_ANALYSIS_PROMPT,
       ANALYSIS_PROMPT,
       PRE_BLOCK_ANALYSIS_PROMPT,
     ].includes(p.prompt)

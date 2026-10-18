@@ -49,8 +49,7 @@ test("upward gestures pause a live reply even within 100px of bottom, explicit r
   await page.locator(".new-chat").click();
   await page.getByLabel("消息",{exact:true}).fill("测试上滑暂停跟随");
   await page.getByRole("button",{name:"发送",exact:true}).click();
-  await page.getByLabel("直连验证密码",{exact:true}).fill(password);
-  await page.getByRole("button",{name:"验证并连接",exact:true}).click();
+  await expect(page.getByLabel("直连验证密码",{exact:true})).toHaveCount(0);
   const scroll=page.locator(".message-scroll");
   const position=()=>scroll.evaluate(e=>({top:e.scrollTop,gap:e.scrollHeight-e.clientHeight-e.scrollTop}));
   await expect.poll(async()=>(await position()).top).toBeGreaterThan(400);

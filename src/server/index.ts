@@ -586,12 +586,26 @@ async function api(request: Request, env: Env) {
     return Response.json(publicProvider(p));
   }
   const providerMatch = path.match(
-    /^\/api\/providers\/([^/]+)(?:\/(key|models|test))?$/,
+    /^\/api\/providers\/([^/]+)(?:\/(key|device-key|models|test))?$/,
   );
   if (providerMatch) {
     const doc = await store.get<Provider>(providerMatch[1]!);
     if (!doc || !doc.value.models) throw new HttpError(404, "服务商不存在");
     const p = doc.value;
+    if (providerMatch[2] === "device-key") {
+      if (method !== "POST")
+        throw new HttpError(405, "请使用POST获取本页直连密钥");
+      if (body.baseUrl !== p.baseUrl)
+        throw new HttpError(409, "服务商地址已变化，请刷新后重新连接");
+      return Response.json(
+        {
+          apiKey: p.encryptedKey
+            ? await decrypt(p.encryptedKey, env.ENCRYPTION_KEY)
+            : "",
+        },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
     if (providerMatch[2] === "key") {
       await confirmPassword(request, env, body.password);
       return Response.json({

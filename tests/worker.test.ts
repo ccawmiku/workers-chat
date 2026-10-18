@@ -1225,6 +1225,45 @@ describe("workerd HTTP + D1 + Workflows", () => {
       .first<{ value: string }>();
     expect(JSON.parse(current!.value).draft).toBe("");
   });
+  it("does not rewrite multipart chat snapshots for repeated seen or unchanged validated configuration", async () => {
+    const imported = await value<{ ids: string[] }>("/import", "POST", {
+      data: { title: "snapshot fixture", messages: [
+        { id: "u", role: "user", content: "question" },
+        { id: "a", role: "assistant", content: "original reply ".repeat(50000) },
+      ] },
+    });
+    const id = imported.ids[0]!, db = await mf.getD1Database("DB");
+    const state = async () => {
+      const head = await db.prepare("SELECT revision FROM documents WHERE id=?").bind(id).first<{ revision: number }>();
+      const parts = await db.prepare("SELECT count(*) AS count,sum(length(value)) AS bytes FROM document_parts WHERE id=?").bind(id).first<{ count: number; bytes: number }>();
+      return { ...head, ...parts };
+    };
+    const chat = (await value<{ chat: Chat }>("/chats/" + id)).chat;
+    const before = await state();
+    expect(before.count).toBeGreaterThan(1);
+    for (let i=0;i<3;i++) {
+      await value("/chats/"+id+"/seen", "POST", {});
+      const unchanged = await value<Chat>("/chats/"+id,"PATCH", {
+        parameters: chat.parameters, model: chat.model, effort: chat.effort,
+        stream: chat.stream, system: chat.system, rounds: chat.rounds ?? null,
+      });
+      expect(unchanged.updatedAt).toBe(chat.updatedAt);
+    }
+    expect(await state()).toEqual(before);
+    await value("/chats/"+id,"PATCH",{parameters:{temperature:0.4}});
+    const changed=await state();
+    expect(changed.revision).toBe(before.revision!+1);
+    await value("/chats/"+id,"PATCH",{parameters:{temperature:0.4}});
+    expect(await state()).toEqual(changed);
+    const invalid=await request("/chats/"+id,"PATCH",{rounds:0});
+    expect(invalid.status).toBe(400);
+    expect(await state()).toEqual(changed);
+    // Same-text explicit renaming still invalidates a pending model title.
+    const renamed=await value<Chat>("/chats/"+id,"PATCH",{title:chat.title});
+    expect(renamed.titleManual).toBe(true);
+    expect(renamed.titleRevision).not.toBe(chat.titleRevision);
+    expect((await state()).revision).toBe(changed.revision!+1);
+  });
   it("generates an automatic title once and bounds the explicit fallback without overriding a manual rename", async () => {
     const before = titleCalls.length,
       chat = await value<Chat>("/chats", "POST", {});

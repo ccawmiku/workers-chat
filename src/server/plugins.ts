@@ -149,7 +149,7 @@ async function markChat(env: Env, id: string, pending: Chat["pluginPending"]) {
   const store = new Store(env.DB);
   for (let i = 0; i < 4; i++) {
     const doc = await store.get<Chat>(id);
-    if (!doc) return;
+    if (!doc || doc.value.pluginPending === pending) return;
     doc.value.pluginPending = pending;
     try {
       await store.save(id, "chat", doc.value, doc.revision, summary(doc.value));

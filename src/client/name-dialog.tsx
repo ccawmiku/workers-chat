@@ -1,3 +1,4 @@
+import { ActionIcons as I } from "./action-icons";
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
@@ -81,6 +82,7 @@ export function NameDialog({
               onClick={close}
             >
               <X size={15} />
+              <I.cancel size={15} />
               取消
             </button>
             <button

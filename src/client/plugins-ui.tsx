@@ -5,6 +5,9 @@ import {
 } from "./plugin-sections-ui";
 import { questionView, type AnalysisType } from "../shared/plugin-sections";
 import { UsageBar } from "./usage-bar";
+import { ActionIcons as I } from "./action-icons";
+import { FallbackSettings, FallbackButton } from "./fallback-ui";
+import { CacheIndicator } from "./cache-indicator";
 import {
   GlobalSummarySettings,
   SummaryTools,
@@ -254,6 +257,7 @@ export function PluginEditor({
                           })
                         }
                       >
+                        <I.delete size={15} />
                         移除保存的定义（保留本轮结果）
                       </button>
                     </div>
@@ -552,6 +556,7 @@ export function PluginEditor({
             className="du-btn du-btn-ghost"
             onClick={onClose}
           >
+            <I.cancel size={15} />
             取消
           </button>
           <button className="du-btn du-btn-primary" disabled={saving}>
@@ -590,6 +595,7 @@ export function GlobalPlugins({
         providers={providers}
         save={save}
       />
+      <FallbackSettings settings={settings} providers={providers} save={save} />
       <h3>插件默认配置</h3>
       <p className="muted">
         四种内置能力支持多个配置实例。聊天内开关和覆盖设置在发送框左下角；这里的修改不会覆盖已有结果。
@@ -1103,13 +1109,38 @@ export function PluginBar({
           (!!r.anchorId && route(chat!).some((m) => m.id === r.anchorId))) &&
         ["running", "waiting"].includes(r.status),
     );
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("plugin-chips-collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
   return (
     <>
       <div
-        className={"plugin-bar" + (selected.length ? "" : " empty")}
+        className={
+          "plugin-bar" +
+          (selected.length ? "" : " empty") +
+          (collapsed ? " chips-collapsed" : "")
+        }
         data-chat-id={chat?.id ?? ""}
         aria-label="插件栏"
       >
+        <button
+          className="du-btn du-btn-ghost du-btn-square du-btn-xs chips-toggle"
+          aria-label={collapsed ? "展开插件上下文" : "折叠插件上下文"}
+          aria-expanded={!collapsed}
+          onClick={() => {
+            const next = !collapsed;
+            setCollapsed(next);
+            try {
+              localStorage.setItem("plugin-chips-collapsed", next ? "1" : "0");
+            } catch {}
+          }}
+        >
+          {collapsed ? <I.expand size={15} /> : <I.collapse size={15} />}
+        </button>
         <div className="plugin-chips">
           {selected.map((p) => {
             const usageRun = state.runs.findLast(
@@ -1148,7 +1179,8 @@ export function PluginBar({
                   value={Math.min(metrics?.total ?? 0, metrics?.capacity ?? 1)}
                 />
                 <UsageBar
-                  usage={usageRun?.usage}
+                  usage={(run ?? usageRun)?.usage}
+                  cacheId={run?.id ?? usageRun?.id}
                   fallback={
                     metrics
                       ? {
@@ -1160,11 +1192,18 @@ export function PluginBar({
                       : undefined
                   }
                 />
-                {cacheHitRate(usageRun?.usage?.cache_hit_rate) && (
-                  <small className="plugin-chip-cache">
-                    缓存 {cacheHitRate(usageRun?.usage?.cache_hit_rate)}
-                  </small>
-                )}
+                <CacheIndicator
+                  usage={(run ?? usageRun)?.usage}
+                  id={run?.id ?? usageRun?.id}
+                  preview={
+                    run?.status === "running" &&
+                    run.model?.providerId ===
+                      previews.get(p.id)?.modelRef.providerId &&
+                    run.model?.modelId === previews.get(p.id)?.modelRef.modelId
+                      ? (previews.get(p.id) ?? undefined)
+                      : undefined
+                  }
+                />
               </button>
             );
           })}
@@ -1455,6 +1494,7 @@ function ResultCard({
               disabled={busy || saving}
               onClick={() => answer(run, false)}
             >
+              <I.submit size={14} />
               {questionView(run.output)?.length === 0
                 ? "继续写前分析"
                 : "提交回答"}
@@ -1462,10 +1502,11 @@ function ResultCard({
             {run.plugin.clarifyLoop &&
               questionView(run.output)?.length !== 0 && (
                 <button
-                  className="du-btn du-btn-sm"
+                  className="du-btn du-btn-primary du-btn-sm"
                   disabled={busy || saving}
                   onClick={() => answer(run, true)}
                 >
+                  <I.confirm size={14} />
                   结束追问并继续
                 </button>
               )}
@@ -1499,7 +1540,11 @@ function ResultCard({
                   ).catch(() => {})
                 }
               >
-                <RotateCcw size={14} />
+                {question ? (
+                  <I.regenerateQuestions size={14} />
+                ) : (
+                  <I.regenerateAnalysis size={14} />
+                )}
                 {question ? "重新生成问题" : "全部重新生成"}
               </button>
               <button
@@ -1526,12 +1571,18 @@ function ResultCard({
                 className="du-btn du-btn-sm"
                 onClick={() => void act("dismiss").catch(() => {})}
               >
+                <I.cancel size={14} />
+                <I.cancel size={15} />
                 取消
               </button>
             </>
           )}
           {run.status === "error" && active && (
             <>
+              <FallbackButton
+                disabled={busy || saving}
+                retry={(model) => act("fallback", { model })}
+              />
               <button
                 className="du-btn du-btn-sm"
                 disabled={busy}
@@ -1627,6 +1678,7 @@ function ResultCard({
           {error && <p role="alert">{error}</p>}
           <footer>
             <button className="du-btn" onClick={() => setEditing(false)}>
+              <I.cancel size={15} />
               取消
             </button>
             <button
@@ -1649,6 +1701,7 @@ function ResultCard({
               }}
             >
               {" "}
+              <I.confirm size={15} />
               {question ? "确认并重新生成" : "校验并保存"}
             </button>
           </footer>
@@ -1801,6 +1854,12 @@ function SuggestionSet({
           {run.error}
         </p>
       )}
+      {run.status === "error" && (
+        <FallbackButton
+          disabled={busy}
+          retry={(model) => command("fallback", { runId: run.id, model })}
+        />
+      )}
       {run.status !== "running" && (
         <button
           className="du-btn du-btn-ghost du-btn-xs"
@@ -1809,7 +1868,7 @@ function SuggestionSet({
             void command("suggest", { pluginId: run.plugin.id }).catch(() => {})
           }
         >
-          <RotateCcw size={13} />
+          <I.regenerateCandidates size={13} />
           换一组
         </button>
       )}
@@ -1909,7 +1968,7 @@ export function RewriteReview({
           {starting || regenerating ? (
             <Loading small />
           ) : (
-            <RotateCcw size={15} />
+            <I.regenerateCandidates size={15} />
           )}
           重新生成结果
         </button>
@@ -1922,6 +1981,7 @@ export function RewriteReview({
             )
           }
         >
+          <I.cancel size={15} />
           取消
         </button>
         <button
@@ -1973,6 +2033,7 @@ export function MessageDeleteDialog({
       )}
       <footer>
         <button className="du-btn" disabled={busy} onClick={close}>
+          <I.cancel size={15} />
           取消
         </button>
         <button
@@ -2017,6 +2078,7 @@ export function DraftReplacement({
       </div>
       <footer>
         <button className="du-btn" onClick={close}>
+          <I.cancel size={15} />
           取消
         </button>
         <button className="du-btn du-btn-primary" onClick={apply}>
@@ -2069,6 +2131,7 @@ export function GroupPicker({
         )}
         {error && <p role="alert">{error}</p>}
         <button className="du-btn" disabled={busy} onClick={close}>
+          <I.cancel size={15} />
           取消
         </button>
       </div>

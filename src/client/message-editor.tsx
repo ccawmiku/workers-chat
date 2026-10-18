@@ -1,3 +1,4 @@
+import { ActionIcons as I } from "./action-icons";
 import React, { useRef } from "react";
 import { createPortal } from "react-dom";
 import { Expand, Minimize2 } from "lucide-react";
@@ -64,9 +65,11 @@ export function MessageEditor({
           <div className="edit-rewrite-actions">{rewriteActions}</div>
         )}
         <button disabled={saving} onClick={onCancel}>
+          <I.cancel size={15} />
           取消
         </button>
         <button className="primary" disabled={saving || busy} onClick={onSave}>
+          <I.save size={15} />
           {saving ? "保存中…" : user ? "保存为新分支" : "保存"}
         </button>
       </div>

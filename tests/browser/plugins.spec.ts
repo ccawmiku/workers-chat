@@ -43,6 +43,7 @@ for (const mobile of [false, true])
             settings: {
               defaultModel: { providerId, modelId: "plugin-model" },
               plugins,
+              pluginFallbackModels: [{ providerId, modelId: "plugin-spare" }],
             },
             providers: [
               {
@@ -51,6 +52,12 @@ for (const mobile of [false, true])
                 baseUrl: "https://plugin-fixture.invalid/v1",
                 prefix: "FX/",
                 models: [
+                  {
+                    id: "plugin-spare",
+                    enabled: true,
+                    capacity: 1048576,
+                    parameters: {},
+                  },
                   {
                     id: "plugin-model",
                     enabled: true,
@@ -66,6 +73,7 @@ for (const mobile of [false, true])
         await api("/chats/" + chat.id, "PATCH", {
           title: "四插件实际界面测试",
         });
+        localStorage.removeItem("plugin-chips-collapsed");
         localStorage.setItem("lastChat", chat.id);
         localStorage.setItem("device-direct", "true");
         return chat.id;
@@ -116,7 +124,19 @@ for (const mobile of [false, true])
             questions:
               ledger.some((l) => l.kind === "clarify") ||
               messages.some((m) => (m as any).role === "tool")
-                ? []
+                ? [
+                    {
+                      id: "q3",
+                      question: "后续希望优先处理哪一项？",
+                      multiple: false,
+                      options: [
+                        { id: "A", text: "延续互动" },
+                        { id: "B", text: "解释背景" },
+                        { id: "C", text: "推进动作" },
+                        { id: "D", text: "暂不指定" },
+                      ],
+                    },
+                  ]
                 : [
                     {
                       id: "q1",
@@ -126,6 +146,7 @@ for (const mobile of [false, true])
                         { id: "A", text: "轻松" },
                         { id: "B", text: "正式" },
                         { id: "C", text: "其他" },
+                        { id: "D", text: "不限定" },
                       ],
                     },
                     {
@@ -136,6 +157,7 @@ for (const mobile of [false, true])
                         { id: "A", text: "甲" },
                         { id: "B", text: "乙" },
                         { id: "C", text: "都不指定" },
+                        { id: "D", text: "其他角色" },
                       ],
                     },
                   ],
@@ -155,7 +177,14 @@ for (const mobile of [false, true])
             prompt3: "旧草稿不要动",
           });
         }
-        ledger.push({ kind, messages });
+        ledger.push({ kind, messages, model: body.model } as any);
+        if (kind === "rewrite" && (window as any).failRewriteOnce) {
+          (window as any).failRewriteOnce = false;
+          return Response.json(
+            { error: { message: "synthetic model failure" } },
+            { status: 400 },
+          );
+        }
         if (!body.stream)
           return Response.json({
             choices: [{ message: { content }, finish_reason: "stop" }],
@@ -193,14 +222,14 @@ for (const mobile of [false, true])
                           usage: {
                             input_tokens: 1500,
                             output_tokens: 424,
-                            cached_tokens: 80,
+                            cached_tokens: kind === "main" ? 1287 : 80,
                             cache_hit_rate:
                               kind === "suggest"
                                 ? 22
                                 : kind === "rewrite"
                                   ? "22"
                                   : kind === "main"
-                                    ? "85.8%"
+                                    ? undefined
                                     : "80.0%",
                           },
                         }) +
@@ -218,7 +247,7 @@ for (const mobile of [false, true])
       };
     });
     await page.reload();
-    await expect(page.locator(".header-title")).toHaveText(
+    await expect(page.locator(".chat-row.selected .chat-title")).toHaveText(
       "四插件实际界面测试",
     );
     await expect(
@@ -247,6 +276,27 @@ for (const mobile of [false, true])
     ).toHaveCount(0);
     await page.getByRole("button", { name: "关闭插件列表" }).click();
     await expect(page.locator(".plugin-chips .plugin-chip")).toHaveCount(5);
+    await expect(page.locator("main > header")).toHaveCount(0);
+    expect(
+      await page
+        .locator(".model-trigger > span")
+        .evaluate((el) => el.getBoundingClientRect().width),
+    ).toBeGreaterThan(40);
+    await page
+      .getByRole("button", { name: "折叠插件上下文", exact: true })
+      .click();
+    expect(
+      await page
+        .locator(".plugin-chip")
+        .first()
+        .evaluate((el) => el.getBoundingClientRect().height),
+    ).toBeLessThan(24);
+    expect(
+      await page.evaluate(() => localStorage.getItem("plugin-chips-collapsed")),
+    ).toBe("1");
+    await page
+      .getByRole("button", { name: "展开插件上下文", exact: true })
+      .click();
     const placement = await page
       .locator(".composer-area")
       .evaluate((wrapper) => {
@@ -325,7 +375,7 @@ for (const mobile of [false, true])
     );
     await expect(
       page.locator(".plugin-question[open] .question-options button"),
-    ).toHaveCount(8);
+    ).toHaveCount(10);
     await expect(
       page.locator(".plugin-question[open] .plugin-usage"),
     ).toContainText("缓存率 80.0%");
@@ -358,10 +408,26 @@ for (const mobile of [false, true])
       expect(Math.abs(questionBoxes[0]!.y - questionBoxes[1]!.y)).toBeLessThan(
         2,
       );
-    await page
+    const mutationRequests: string[] = [];
+    const mutationCounter = (r: any) => {
+      const path = new URL(r.url()).pathname;
+      if (
+        [
+          "/api/chats/" + id,
+          "/api/chats/" + id + "/plugins",
+          "/api/navigation",
+        ].includes(path)
+      )
+        mutationRequests.push(r.method() + " " + path);
+    };
+    page.on("request", mutationCounter);
+    const loopToggle = page
       .locator(".plugin-question[open]")
-      .getByLabel("反复问", { exact: true })
-      .check();
+      .getByLabel("反复问", { exact: true });
+    await loopToggle.check();
+    await expect(loopToggle).toBeEnabled();
+    page.off("request", mutationCounter);
+    expect(mutationRequests).toEqual(["POST /api/chats/" + id + "/plugins"]);
     await page
       .locator(".question-section")
       .first()
@@ -382,14 +448,26 @@ for (const mobile of [false, true])
           }),
       )
       .toBe(true);
+    const skip = page
+      .locator(".question-section")
+      .nth(1)
+      .getByRole("button", { name: "跳过本题", exact: true });
+    await skip.click();
+    await expect(skip).toHaveAttribute("aria-pressed", "true");
+    await expect(skip).toHaveClass(/du-btn-primary/);
     await page.getByLabel("消息", { exact: true }).fill("**轻松幽默**");
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await expect(
-      page.getByText("没有需要继续澄清的问题，确认后继续。", { exact: true }),
+      page
+        .locator(".plugin-question[open]")
+        .getByText("后续希望优先处理哪一项？", { exact: true }),
     ).toBeVisible();
     await expect(page.locator(".plugin-question[open]")).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "结束追问并继续", exact: true }),
+    ).toHaveClass(/du-btn-primary/);
     await page
-      .getByRole("button", { name: "继续写前分析", exact: true })
+      .getByRole("button", { name: "结束追问并继续", exact: true })
       .click();
     await expect(
       page.getByRole("button", { name: "确认并继续", exact: true }),
@@ -559,7 +637,7 @@ for (const mobile of [false, true])
     );
     expect(
       analysisCall.messages.filter((m: any) => m.role === "tool"),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(JSON.stringify(analysisCall.messages)).toContain("轻松幽默");
     expect(JSON.stringify(analysisCall.messages)).toContain("哪种风格");
     await expect(page.locator(".plugin-chips")).not.toContainText("预计");
@@ -687,8 +765,29 @@ for (const mobile of [false, true])
       result.pluginState.runs.filter(
         (r: any) => r.status === "answered" && r.answer?.trim(),
       ),
-    ).toHaveLength(1);
-    expect(JSON.stringify(result.chat.messages)).not.toContain("轻松幽默");
+    ).toHaveLength(2);
+    expect(
+      Object.values(result.chat.messages)
+        .map((m: any) => m.content)
+        .join("\n"),
+    ).not.toContain("轻松幽默");
+    expect(
+      result.chat.messages[result.chat.currentId].toolContext.messages.filter(
+        (m: any) => m.role === "tool",
+      ),
+    ).toHaveLength(3);
+    const cleanExport = await page.evaluate(
+      async (id) => await (await fetch("/api/chats/" + id + "/export")).json(),
+      id,
+    );
+    expect(JSON.stringify(cleanExport)).not.toMatch(/轻松幽默|toolContext/);
+    const cachedBar = page
+      .locator(".message.assistant .message-actions .usage-cached")
+      .first();
+    await expect(cachedBar).toHaveAttribute("data-tokens", "1287");
+    expect(await cachedBar.evaluate((el) => getComputedStyle(el).color)).toBe(
+      "rgb(147, 197, 253)",
+    );
     const originalUser = page.locator(".message.user").first();
     await originalUser
       .getByRole("button", { name: "编辑消息", exact: true })
@@ -737,6 +836,26 @@ for (const mobile of [false, true])
     await expect(
       originalUser.locator(".message-body > .markdown"),
     ).toContainText("写一个短故事");
+    await page.evaluate(() => {
+      (window as any).failRewriteOnce = true;
+    });
+    await rewriteButton.click();
+    const fallback = page
+      .locator(".plugin-flow-controls[role=alert]")
+      .getByRole("button", { name: "切换备用模型", exact: true });
+    await expect(fallback).toBeVisible();
+    await fallback.click();
+    await page
+      .getByLabel("本次备用模型", { exact: true })
+      .selectOption({ label: "FX/plugin-spare · 插件合成接口" });
+    await expect(comparison).toBeVisible();
+    await expect(comparison.locator(".plugin-usage")).toContainText(
+      "plugin-spare",
+    );
+    expect(
+      await page.evaluate(() => (window as any).pluginLedger.at(-1).model),
+    ).toBe("plugin-spare");
+    await comparison.getByRole("button", { name: "取消", exact: true }).click();
     await page
       .locator(".message.assistant")
       .getByRole("button", { name: "删除消息", exact: true })

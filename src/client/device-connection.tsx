@@ -1,3 +1,5 @@
+import { ActionIcons as I } from "./action-icons";
+import { recordCacheRequest } from "./cache-usage";
 import React, {
   createContext,
   useCallback,
@@ -266,6 +268,12 @@ export function DeviceConnectionProvider({
           entry.controller.signal,
           AbortSignal.timeout(30 * 60 * 1000),
         ]);
+        if (typeof task.request.model === "string")
+          recordCacheRequest(
+            task.messageId,
+            { providerId: task.providerId, modelId: task.request.model },
+            { ...task.request, model: task.request.model },
+          );
         const response = await directFetch(
           task.baseUrl,
           "/chat/completions",
@@ -430,6 +438,11 @@ export function DeviceConnectionProvider({
             entry.controller.signal,
             AbortSignal.timeout(30 * 60 * 1000),
           ]);
+          recordCacheRequest(
+            task.id,
+            { providerId: direct.providerId, modelId: direct.request.model },
+            direct.request,
+          );
           const response = await directFetch(
             direct.baseUrl,
             "/chat/completions",
@@ -606,9 +619,11 @@ export function DeviceConnectionProvider({
                 </p>
               )}
               <button type="button" onClick={cancelPrompt}>
+                <I.cancel size={15} />
                 取消
               </button>
               <button className="primary" disabled={checking || !password}>
+                <I.connect size={15} />
                 {checking ? "验证中…" : "验证并连接"}
               </button>
             </form>

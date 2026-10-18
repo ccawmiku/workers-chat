@@ -1,7 +1,8 @@
 import type { SummaryConfig } from "./summaries";
 export const MODEL_ID_MAX_LENGTH = 1000;
 import { DEFAULT_TITLE_PROMPT } from "./default-title-prompt";
-import type { PluginBinding, PluginDefinition } from "./plugins";
+import type { APIMessage, PluginBinding, PluginDefinition } from "./plugins";
+import { compatibleMessages } from "./upstream-compat";
 export type Role = "user" | "assistant" | "system";
 export type Effort = "inherit" | "none" | "low" | "medium" | "high" | "max";
 export type Parameters = {
@@ -31,6 +32,8 @@ export type Message = {
   elapsedMs?: number;
   error?: string;
   raw?: Record<string, unknown>;
+  /** Exact request-only prelude; deliberately excluded from ordinary export. */
+  toolContext?: { parentId: string; messages: APIMessage[] };
 };
 export type Chat = {
   summaryOverrides?: Partial<SummaryConfig>;
@@ -76,6 +79,7 @@ export type Provider = {
   }[];
 };
 export type Settings = {
+  pluginFallbackModels?: ModelRef[];
   replySummary?: SummaryConfig;
   plugins?: PluginDefinition[];
   defaultModel: ModelRef | null;
@@ -85,6 +89,7 @@ export type Settings = {
   titleModel: ModelRef | null;
 };
 export const defaultSettings = (): Settings => ({
+  pluginFallbackModels: [],
   defaultModel: null,
   parameters: {},
   templates: [],
@@ -266,7 +271,8 @@ export function forkChat(chat: Chat, id: string, titles: string[]): Chat {
   const copy = structuredClone({ ...chat, messages: {} }),
     base = chat.title.replace(/ · 分支(?:[A-Z]+|\d+)$/u, "");
   const taken = new Set(titles);
-  let n = 0, title: string;
+  let n = 0,
+    title: string;
   do {
     title = `${base} · 分支${String(++n).padStart(2, "0")}`;
   } while (taken.has(title));
@@ -277,6 +283,8 @@ export function forkChat(chat: Chat, id: string, titles: string[]): Chat {
       const v = structuredClone(m);
       v.id = remap.get(m.id)!;
       v.parentId = m.parentId ? remap.get(m.parentId)! : null;
+      if (v.toolContext)
+        v.toolContext.parentId = remap.get(v.toolContext.parentId) ?? "";
       return [v.id, v];
     }),
   );
@@ -297,6 +305,9 @@ export function duplicateChat(chat: Chat, titles: string[]): Chat {
       const cloned = structuredClone(message);
       cloned.id = ids.get(message.id)!;
       cloned.parentId = message.parentId ? ids.get(message.parentId)! : null;
+      if (cloned.toolContext)
+        cloned.toolContext.parentId =
+          ids.get(cloned.toolContext.parentId) ?? "";
       return [cloned.id, cloned];
     }),
   );
@@ -338,7 +349,7 @@ export function contextTurns(chat: Chat) {
   return turns;
 }
 
-export function contextMessages(chat: Chat, draft?: string) {
+export function contextMessages(chat: Chat, draft?: string, reasoning = false) {
   // Legacy exclusion flags are retained for JSON exchange, but no longer affect requests.
   let path = contextTurns(chat).flat();
   if (chat.rounds && chat.rounds > 0) {
@@ -351,13 +362,30 @@ export function contextMessages(chat: Chat, draft?: string) {
     }
     path = path.slice(index);
   }
-  const messages: { role: Role; content: string }[] = [];
+  const messages: APIMessage[] = [];
   const system = chat.system
     .map((t) => t.content)
     .filter(Boolean)
     .join("\n\n");
   if (system) messages.push({ role: "system", content: system });
-  messages.push(...path.map((m) => ({ role: m.role, content: m.content })));
+  for (let i = 0; i < path.length; i++) {
+    const m = path[i]!,
+      previous = path[i - 1];
+    if (
+      m.role === "assistant" &&
+      previous?.role === "user" &&
+      m.toolContext?.parentId === previous.id &&
+      m.parentId === previous.id
+    )
+      messages.push(...m.toolContext.messages.map((v) => structuredClone(v)));
+    messages.push({
+      role: m.role,
+      content: m.content,
+      ...(reasoning && m.role === "assistant" && m.reasoning
+        ? { reasoning_content: m.reasoning }
+        : {}),
+    });
+  }
   if (draft) messages.push({ role: "user", content: draft });
   return messages;
 }
@@ -370,7 +398,14 @@ export function requestPreview(
   const model = resolveModel(chat.model, settings, providers),
     provider = providers.find((p) => p.id === model.providerId)!;
   const modelSettings = provider.models.find((m) => m.id === model.modelId)!;
-  const messages = contextMessages(chat, draft);
+  const messages = compatibleMessages(
+    model.modelId,
+    contextMessages(
+      chat,
+      draft,
+      /(^|\/)deepseek(?:[-/]|$)/i.test(model.modelId),
+    ),
+  );
   const request = {
     model: model.modelId,
     messages,
@@ -388,7 +423,11 @@ export function requestPreview(
     provider,
     request,
     capacity: modelSettings.capacity,
-    estimatedTokens: estimateTokens(messages.map((m) => m.content).join("\n")),
+    estimatedTokens: estimateTokens(
+      messages
+        .map((m) => (m.content ?? "") + (m.reasoning_content ?? ""))
+        .join("\n"),
+    ),
   };
 }
 export function estimateTokens(text: string) {
@@ -446,6 +485,11 @@ export function sanitizeUsage(
     "input_tokens",
     "output_tokens",
     "cached_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "cache_write_tokens",
+    "prompt_cache_hit_tokens",
+    "prompt_cache_miss_tokens",
     "reasoning_tokens",
     "thinking_tokens",
   ]) {
@@ -472,6 +516,7 @@ export function sanitizeUsage(
         if (
           [
             "cached_tokens",
+            "cache_write_tokens",
             "reasoning_tokens",
             "audio_tokens",
             "accepted_prediction_tokens",

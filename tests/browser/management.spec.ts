@@ -122,7 +122,7 @@ test("settings restore, model identity, template copies, groups and mobile long 
     .toBe(12);
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.locator(".new-chat").click();
-  await expect(page.locator(".header-title")).toHaveText("新聊天");
+  await expect(page.locator(".chat-row.selected .chat-title")).toHaveText("新聊天");
   const chatId = await page.evaluate(() => localStorage.getItem("lastChat"));
   await page.locator(".model-trigger").click();
   await page.getByLabel("搜索模型", { exact: true }).fill("Two/");
@@ -289,7 +289,7 @@ test("settings restore, model identity, template copies, groups and mobile long 
     "删除",
   ]);
   await chatMenu.getByRole("button", { name: "复制", exact: true }).click();
-  await expect(page.locator(".header-title")).toContainText("副本");
+  await expect(page.locator(".chat-row.selected .chat-title")).toContainText("副本");
   await expect(page.locator(".batch-bar")).toHaveCount(0);
   const duplicateId = await page.evaluate(() =>
     localStorage.getItem("lastChat"),

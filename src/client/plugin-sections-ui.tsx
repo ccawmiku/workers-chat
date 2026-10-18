@@ -11,6 +11,8 @@ import {
 import type { PluginRun, PluginState } from "../shared/plugins";
 import { Loading } from "./controls";
 import { MessageUsage } from "./chat-controls";
+import { ActionIcons as I } from "./action-icons";
+import { FallbackButton } from "./fallback-ui";
 
 export type PluginInputRequest = {
   runId: string;
@@ -87,15 +89,27 @@ export function QuestionSections({
                   }
                 >
                   <b>{o.id}</b>
+                  {selected && <I.confirm size={13} />}
                   <span>{o.text}</span>
                 </button>
               );
             })}
             <button
-              className="du-btn du-btn-ghost du-btn-xs"
+              className={
+                "du-btn du-btn-sm " +
+                (Object.hasOwn(selections, q.id) &&
+                selections[q.id]!.length === 0
+                  ? "du-btn-primary"
+                  : "")
+              }
+              aria-pressed={
+                Object.hasOwn(selections, q.id) &&
+                selections[q.id]!.length === 0
+              }
               disabled={!enabled}
               onClick={() => select(q.id, [])}
             >
+              <I.cancel size={13} />
               跳过本题
             </button>
           </div>
@@ -288,6 +302,14 @@ export function AnalysisSections({
           )
         )}
         <div className="plugin-card-actions">
+          {candidate.status === "error" && (
+            <FallbackButton
+              disabled={locked || !enabled}
+              retry={(model) =>
+                command("fallback", { runId: candidate.id, model })
+              }
+            />
+          )}
           <button
             className="du-btn du-btn-sm"
             disabled={locked || candidate.status === "running" || !enabled}
@@ -301,7 +323,7 @@ export function AnalysisSections({
                 .catch((e) => setError(e.message))
             }
           >
-            <RotateCcw size={14} />
+            <I.regenerateSection size={14} />
             重新生成结果
           </button>
           <button
@@ -311,6 +333,8 @@ export function AnalysisSections({
               void act("discard-sections", { runIds: [candidate.id] })
             }
           >
+            <I.cancel size={14} />
+            <I.cancel size={15} />
             取消
           </button>
         </div>
@@ -368,12 +392,15 @@ export function AnalysisSections({
                           setEditing(null);
                       }}
                     >
+                      <I.save size={13} />
                       保存此块
                     </button>
                     <button
                       className="du-btn du-btn-sm"
                       onClick={() => setEditing(null)}
                     >
+                      <I.cancel size={13} />
+                      <I.cancel size={15} />
                       取消
                     </button>
                   </div>
@@ -394,7 +421,7 @@ export function AnalysisSections({
                       })
                     }
                   >
-                    <RotateCcw size={13} />
+                    <I.regenerateSection size={13} />
                     重新生成此块
                   </button>
                   <button
@@ -402,6 +429,7 @@ export function AnalysisSections({
                     disabled={locked}
                     onClick={() => start(section)}
                   >
+                    <I.instruct size={13} />
                     附要求修改
                   </button>
                   <button
@@ -443,6 +471,7 @@ export function AnalysisSections({
                         })
                       }
                     >
+                      <I.delete size={13} />
                       同时移除
                       {templates.find((t) => t.id === section.id)?.scope ===
                       "global"

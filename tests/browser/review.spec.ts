@@ -120,7 +120,7 @@ test("large imports and delayed send preserve newer cloud drafts", async ({
   await page.evaluate((id) => localStorage.setItem("lastChat", id), id);
   await page.reload();
   const composer = page.getByLabel("消息", { exact: true });
-  await expect(page.locator(".header-title")).toContainText(prefix);
+  await expect(page.locator(".chat-row.selected .chat-title")).toContainText(prefix);
   let releaseDraft!: () => void,
     releaseSend!: () => void,
     observedDraft!: () => void,

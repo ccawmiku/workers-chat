@@ -1,3 +1,4 @@
+import { ActionIcons as I } from "./action-icons";
 import { Check, ChevronDown, Monitor, Sun, Moon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { HexColorPicker, HexColorInput } from "react-colorful";
@@ -25,21 +26,48 @@ function useColorDropdown() {
   }, []);
   return ref;
 }
-function ColorControl({ label, color, onChange }: {
-  label: string; color: string; onChange: (color: string) => void;
+function ColorControl({
+  label,
+  color,
+  onChange,
+}: {
+  label: string;
+  color: string;
+  onChange: (color: string) => void;
 }) {
   const ref = useColorDropdown();
-  return <details className="du-dropdown du-dropdown-end color-control" ref={ref}>
-    <summary className="du-btn du-btn-ghost du-btn-sm color-value" aria-label={label + "选择器"}>
-      <i className="color-swatch" style={{ background: color }} aria-hidden="true" />
-      <span>{color.toUpperCase()}</span>
-    </summary>
-    <div className="du-dropdown-content du-card color-popover" aria-label={label + "面板"}>
-      <HexColorPicker color={color} onChange={onChange} aria-label={label + "色板"} />
-      <HexColorInput className="du-input du-input-sm" aria-label={label} color={color}
-        onChange={onChange} prefixed />
-    </div>
-  </details>;
+  return (
+    <details className="du-dropdown du-dropdown-end color-control" ref={ref}>
+      <summary
+        className="du-btn du-btn-ghost du-btn-sm color-value"
+        aria-label={label + "选择器"}
+      >
+        <i
+          className="color-swatch"
+          style={{ background: color }}
+          aria-hidden="true"
+        />
+        <span>{color.toUpperCase()}</span>
+      </summary>
+      <div
+        className="du-dropdown-content du-card color-popover"
+        aria-label={label + "面板"}
+      >
+        <HexColorPicker
+          color={color}
+          onChange={onChange}
+          aria-label={label + "色板"}
+        />
+        <HexColorInput
+          className="du-input du-input-sm"
+          aria-label={label}
+          color={color}
+          onChange={onChange}
+          prefixed
+        />
+      </div>
+    </details>
+  );
 }
 
 export type Appearance = {
@@ -214,7 +242,10 @@ export function AppearanceSettings({
         </div>
         <div className="appearance-row">
           <span>强调色</span>
-          <details className="du-dropdown du-dropdown-end accent-picker" ref={accentRef}>
+          <details
+            className="du-dropdown du-dropdown-end accent-picker"
+            ref={accentRef}
+          >
             <summary className="du-btn du-btn-sm du-btn-ghost">
               <i className="color-swatch" style={{ background: a.accent }} />
               {preset?.[0] ?? "自定义"}
@@ -237,8 +268,11 @@ export function AppearanceSettings({
               ))}
               <li>
                 <span className="custom-color">自定义</span>
-                <ColorControl label="自定义强调色" color={a.accent}
-                  onChange={(accent) => update({ ...a, accent })} />
+                <ColorControl
+                  label="自定义强调色"
+                  color={a.accent}
+                  onChange={(accent) => update({ ...a, accent })}
+                />
               </li>
             </ul>
           </details>
@@ -252,15 +286,15 @@ export function AppearanceSettings({
           <div className="appearance-row" key={key}>
             <span>{label}</span>
             <ColorControl
-                label={label + "颜色"}
-                color={a[key]?.[variant] ?? themeDefaults[variant][key]}
-                onChange={(color) =>
-                  update({
-                    ...a,
-                    [key]: { ...a[key], [variant]: color },
-                  })
-                }
-              />
+              label={label + "颜色"}
+              color={a[key]?.[variant] ?? themeDefaults[variant][key]}
+              onChange={(color) =>
+                update({
+                  ...a,
+                  [key]: { ...a[key], [variant]: color },
+                })
+              }
+            />
           </div>
         ))}
       </section>
@@ -313,6 +347,7 @@ export function AppearanceSettings({
             className="du-btn du-btn-sm du-btn-ghost"
             onClick={() => update({ ...defaults, theme: a.theme })}
           >
+            <I.reset size={15} />
             恢复默认外观
           </button>
           <p className="muted">仅保存在此设备。</p>

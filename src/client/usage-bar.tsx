@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { formatTokenCount, estimateTokens, type Message } from "../shared/chat";
 import { tokenBreakdown, type TokenBreakdown } from "../shared/usage";
+import { useCacheReading } from "./cache-usage";
 export function MessageTokenBar({ message: m }: { message: Message }) {
   const fallback = useMemo(() => {
     const content = estimateTokens(m.content),
@@ -9,19 +10,24 @@ export function MessageTokenBar({ message: m }: { message: Message }) {
       ? { input: content, thinking: 0, output: 0, total: content }
       : { input: 0, thinking, output: content, total: thinking + content };
   }, [m.content, m.reasoning, m.role]);
-  return <UsageBar usage={m.usage} fallback={fallback} compact />;
+  return (
+    <UsageBar usage={m.usage} fallback={fallback} cacheId={m.id} compact />
+  );
 }
 export function UsageBar({
   usage,
   fallback,
   compact = false,
   label = "Token 用量组成",
+  cacheId,
 }: {
   usage?: unknown;
   fallback?: TokenBreakdown;
   compact?: boolean;
   label?: string;
+  cacheId?: string;
 }) {
+  const cache = useCacheReading(usage, cacheId);
   const value = tokenBreakdown(usage) ?? fallback;
   if (!value || value.total <= 0)
     return (
@@ -30,9 +36,20 @@ export function UsageBar({
         aria-label={label + "：暂无用量"}
       />
     );
+  const cached = Math.min(
+    value.input,
+    cache?.cached ?? (cache ? Math.round(value.input * cache.ratio) : 0),
+  );
+  const segments = {
+    input: value.input - cached,
+    cached,
+    thinking: value.thinking,
+    output: value.output,
+  };
   const title =
     `输入 ${formatTokenCount(value.input)} · 思考 ${formatTokenCount(value.thinking)} · 输出 ${formatTokenCount(value.output)} · 合计 ${formatTokenCount(value.total)} Token` +
-    (tokenBreakdown(usage) ? "" : "（按文本计算）");
+    (tokenBreakdown(usage) ? "" : "（按文本计算）") +
+    (cache ? ` · ${cache.source} ${cache.percent}` : "");
   return (
     <span
       className={"usage-stack " + (compact ? "compact" : "")}
@@ -40,8 +57,8 @@ export function UsageBar({
       aria-label={label + "：" + title}
       title={title}
     >
-      {(["input", "thinking", "output"] as const)
-        .filter((key) => value[key] > 0)
+      {(["input", "cached", "thinking", "output"] as const)
+        .filter((key) => segments[key] > 0)
         .map((key) => (
           <progress
             key={key}
@@ -56,9 +73,9 @@ export function UsageBar({
             }
             value={1}
             max={1}
-            style={{ width: `${(value[key] / value.total) * 100}%` }}
+            style={{ width: `${(segments[key] / value.total) * 100}%` }}
             data-kind={key}
-            data-tokens={value[key]}
+            data-tokens={segments[key]}
             aria-hidden="true"
           />
         ))}

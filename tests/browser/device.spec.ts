@@ -142,7 +142,7 @@ test("device streams paint before completion, unlock once, save, title, stop and
   await expect(
     page.getByRole("button", { name: "停止生成", exact: true }),
   ).toBeVisible();
-  await expect(page.locator(".header-title")).toHaveText("📱 直连测试");
+  await expect(page.locator(".chat-row.selected .chat-title")).toHaveText("📱 直连测试");
   await expect(page.locator(".message.assistant .markdown")).toHaveText(
     "第一段即时内容，第二段完整回答",
   );

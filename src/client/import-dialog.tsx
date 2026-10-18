@@ -1,3 +1,4 @@
+import { ActionIcons as I } from "./action-icons";
 import { useRef, useState } from "react";
 import { api } from "./api";
 import { useDialogFocus } from "./controls";
@@ -107,6 +108,7 @@ export function ImportDialog({
         {notice && <p role="alert">{notice}</p>}
         <p className="muted">每次导入都会新增独立会话。</p>
         <button disabled={busy} onClick={close}>
+          <I.cancel size={15} />
           {result ? "关闭导入结果" : "取消"}
         </button>
         {!result && (
@@ -115,6 +117,7 @@ export function ImportDialog({
             disabled={busy || !preview.count}
             onClick={() => void start()}
           >
+            <I.upload size={15} />
             确认导入有效聊天
           </button>
         )}

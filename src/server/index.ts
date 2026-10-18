@@ -313,19 +313,20 @@ async function api(request: Request, env: Env) {
       if (path === "/api/auth/status")
         return Response.json({ authenticated: true });
       const id = url.searchParams.get("chatId");
-      const [chats, groups, providers, config, current, usage] = await Promise.all([
-        store.list("chat"),
-        store.list("group"),
-        providerList(store),
-        settings(store),
-        id
-          ? chatState(env, id).catch((e) => {
-              if (e instanceof HttpError && e.status === 404) return null;
-              throw e;
-            })
-          : null,
-        accountUsage(env),
-      ]);
+      const [chats, groups, providers, config, current, usage] =
+        await Promise.all([
+          store.list("chat"),
+          store.list("group"),
+          providerList(store),
+          settings(store),
+          id
+            ? chatState(env, id).catch((e) => {
+                if (e instanceof HttpError && e.status === 404) return null;
+                throw e;
+              })
+            : null,
+          accountUsage(env),
+        ]);
       return Response.json({
         authenticated: true,
         chats,
@@ -343,7 +344,9 @@ async function api(request: Request, env: Env) {
   }
   const session = await authenticate(request, env);
   if (path === "/api/account-usage")
-    return Response.json(await accountUsage(env, url.searchParams.get("refresh") === "1"));
+    return Response.json(
+      await accountUsage(env, url.searchParams.get("refresh") === "1"),
+    );
   const pluginDevice = path.match(
     /^\/api\/plugins\/jobs\/([^/]+)\/(checkpoint|finish)$/,
   );
@@ -763,12 +766,19 @@ async function api(request: Request, env: Env) {
     const { doc, job } = await readChat(env, id);
     if (!doc || !doc.value.messages) throw new HttpError(404, "聊天不存在");
     const chat = doc.value;
-    if (action === "summaries")
-      return Response.json(await summaryEndpoint(env, doc, body));
-    if (action === "plugins")
+    if (action === "summaries" || action === "plugins") {
+      const result =
+        action === "summaries"
+          ? await summaryEndpoint(env, doc, body)
+          : await pluginEndpoint(env, doc, body, job, transport);
+      // Opt in: existing clients keep the original shape. The current UI can
+      // consume the same snapshot without another Worker round trip.
       return Response.json(
-        await pluginEndpoint(env, doc, body, job, transport),
+        body.includeSnapshot === true
+          ? { ...result, snapshot: await chatState(env, id) }
+          : result,
       );
+    }
     if (action === "title" && method === "POST") {
       if (job) throw new HttpError(409, "请等待当前回答完成");
       return Response.json(
@@ -860,8 +870,7 @@ async function api(request: Request, env: Env) {
         if (body.rounds === null) {
           if (chat.rounds !== undefined) changed = true;
           delete chat.rounds;
-        }
-        else if (
+        } else if (
           typeof body.rounds === "number" &&
           Number.isSafeInteger(body.rounds) &&
           body.rounds > 0
@@ -872,14 +881,17 @@ async function api(request: Request, env: Env) {
       if (body.system !== undefined) {
         if (!Array.isArray(body.system))
           throw new HttpError(400, "模板格式无效");
-        set("system", body.system.map((v) => {
-          const t = obj(v);
-          return {
-            id: str(t.id, 128),
-            name: str(t.name, 200),
-            content: str(t.content),
-          };
-        }));
+        set(
+          "system",
+          body.system.map((v) => {
+            const t = obj(v);
+            return {
+              id: str(t.id, 128),
+              name: str(t.name, 200),
+              content: str(t.content),
+            };
+          }),
+        );
       }
       if (body.templateMode === "replace" || body.templateMode === "append")
         set("templateMode", body.templateMode);

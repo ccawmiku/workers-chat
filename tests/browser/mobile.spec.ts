@@ -98,7 +98,7 @@ async function seed(page: Page) {
     return result.ids;
   });
   await page.reload();
-  await expect(page.locator(".header-title")).toHaveText("独立手机测试 0");
+  await expect(page.locator(".chat-row.selected .chat-title")).toHaveText("独立手机测试 0");
   return ids;
 }
 
@@ -282,7 +282,7 @@ test("mobile boundary navigation discards another chat's message editor", async 
     .filter({ hasText: "独立手机测试 1" })
     .first()
     .tap();
-  await expect(page.locator(".header-title")).toHaveText("独立手机测试 1");
+  await expect(page.locator(".chat-row.selected .chat-title")).toHaveText("独立手机测试 1");
   await expect(page.locator(".sidebar-scrim")).toHaveCount(0);
   await expect(page.locator(".edit-area")).toHaveCount(0);
   await expect(page.locator(".message.user")).toContainText("手机构造测试 1");

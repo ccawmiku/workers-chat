@@ -3380,7 +3380,10 @@ main {
   background: currentColor;
 }
 .usage-stack .usage-input {
-  color: #60a5fa;
+  color: #2563eb;
+}
+.usage-stack .usage-cached {
+  color: #93c5fd;
 }
 .usage-stack .usage-thinking {
   color: #facc15;
@@ -4179,6 +4182,73 @@ main {
 .plugin-chip .plugin-chip-cache {
   line-height: 10px;
   font-size: 10px;
+}
+.plugin-bar {
+  position: relative;
+  padding-left: 23px;
+}
+.chips-toggle.du-btn {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: 20px;
+  min-width: 20px;
+  padding: 0;
+}
+.plugin-bar.chips-collapsed .plugin-chip {
+  height: 19px;
+  min-height: 19px;
+  grid-template-rows: 4px 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  gap: 3px;
+}
+.plugin-bar.chips-collapsed .plugin-chip > span:first-child,
+.plugin-bar.chips-collapsed .plugin-chip > small {
+  display: none;
+}
+.plugin-bar.chips-collapsed .chips-toggle {
+  top: 0;
+  height: 21px;
+  min-height: 21px;
+}
+.fallback-control,
+.fallback-options {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+}
+.fallback-options .du-select {
+  max-width: min(320px, 100%);
+}
+.fallback-settings {
+  padding: 12px;
+  border: 1px solid var(--line-color);
+  margin-block: 12px;
+}
+.fallback-settings h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chat-corner-controls {
+  position: absolute;
+  top: 6px;
+  inset-inline: 8px;
+  z-index: 25;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.chat-corner-controls > button {
+  pointer-events: auto;
+  background: var(--bg);
+  opacity: 0.82;
+}
+.chat-corner-controls > button:last-child {
+  margin-inline-start: auto;
 }
 .plugin-card-actions {
   align-items: center;

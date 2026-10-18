@@ -1,3 +1,4 @@
+import { ActionIcons as I } from "./action-icons";
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -349,6 +350,7 @@ export function ProvidersPanel({
                     disabled={busy === "editor"}
                     onClick={close}
                   >
+                    <I.cancel size={15} />
                     取消
                   </button>
                   <button
@@ -372,6 +374,7 @@ export function ProvidersPanel({
                     }
                     disabled={busy === "editor"}
                   >
+                    <I.connect size={15} />
                     {form.id ? "保存并刷新模型" : "保存并获取模型"}
                   </button>
                 </div>

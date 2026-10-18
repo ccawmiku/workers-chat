@@ -98,6 +98,7 @@ for (const mobile of [false, true])
         inputTokens: 18929,
         usage: {
           input_tokens: 18929,
+          cached_tokens: 16247,
           output_tokens: 424,
           completion_tokens_details: { reasoning_tokens: 100 },
           total_tokens: 19353,
@@ -111,7 +112,10 @@ for (const mobile of [false, true])
       backfilled = false;
     const decorate = (snapshot: any) => ({
       ...snapshot,
-      chat: { ...snapshot.chat, plugins: defaultPlugins().map(p => ({id:p.id,enabled:true})) },
+      chat: {
+        ...snapshot.chat,
+        plugins: defaultPlugins().map((p) => ({ id: p.id, enabled: true })),
+      },
       pluginState: emptyPluginState(),
       summaryState: state,
       postJobs: pending
@@ -201,38 +205,84 @@ for (const mobile of [false, true])
     await expect(latest).toContainText("缓存率 85.8%");
     await expect(latest.locator(".plugin-usage .usage-stack")).toHaveCount(0);
     const composition = page.locator(".summary-context-chip .usage-stack");
-    await expect(composition.locator(".usage-segment")).toHaveCount(3);
-    expect(await composition.locator(".usage-segment").evaluateAll(segments => segments.map(s => Number(s.getAttribute("data-tokens"))))).toEqual([18929,100,324]);
-    const colors = await composition.locator(".usage-segment").evaluateAll(segments => segments.map(s => getComputedStyle(s).color));
-    expect(colors).toEqual(["rgb(96, 165, 250)", "rgb(250, 204, 21)", "rgb(240, 119, 175)"]);
-    const segmentsWidth = await composition.evaluate(node => ({
+    await expect(composition.locator(".usage-segment")).toHaveCount(4);
+    expect(
+      await composition
+        .locator(".usage-segment")
+        .evaluateAll((segments) =>
+          segments.map((s) => Number(s.getAttribute("data-tokens"))),
+        ),
+    ).toEqual([2682, 16247, 100, 324]);
+    const colors = await composition
+      .locator(".usage-segment")
+      .evaluateAll((segments) =>
+        segments.map((s) => getComputedStyle(s).color),
+      );
+    expect(colors).toEqual([
+      "rgb(37, 99, 235)",
+      "rgb(147, 197, 253)",
+      "rgb(250, 204, 21)",
+      "rgb(240, 119, 175)",
+    ]);
+    const segmentsWidth = await composition.evaluate((node) => ({
       whole: node.getBoundingClientRect().width,
-      sum: Array.from(node.children).reduce((n,c) => n+c.getBoundingClientRect().width,0),
+      sum: Array.from(node.children).reduce(
+        (n, c) => n + c.getBoundingClientRect().width,
+        0,
+      ),
       gap: getComputedStyle(node).gap,
     }));
-    expect(Math.abs(segmentsWidth.whole-segmentsWidth.sum)).toBeLessThan(1);
+    expect(Math.abs(segmentsWidth.whole - segmentsWidth.sum)).toBeLessThan(1);
     expect(segmentsWidth.gap).toBe("0px");
     const chips = page.locator(".plugin-chip");
     await expect(chips).toHaveCount(5);
-    const dimensions = await chips.evaluateAll(nodes => nodes.map(node => {
-      const r=node.getBoundingClientRect(), bars=node.querySelectorAll(".du-progress");
-      return {height:r.height, capacity:bars[0]!.getBoundingClientRect().y-r.y, composition:node.querySelector(".usage-stack")!.getBoundingClientRect().y-r.y};
-    }));
-    expect(new Set(dimensions.map(v=>v.height)).size).toBe(1);
+    const dimensions = await chips.evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const r = node.getBoundingClientRect(),
+          bars = node.querySelectorAll(".du-progress");
+        return {
+          height: r.height,
+          capacity: bars[0]!.getBoundingClientRect().y - r.y,
+          composition:
+            node.querySelector(".usage-stack")!.getBoundingClientRect().y - r.y,
+        };
+      }),
+    );
+    expect(new Set(dimensions.map((v) => v.height)).size).toBe(1);
     expect(dimensions[0]!.height).toBeLessThanOrEqual(60);
-    expect(new Set(dimensions.map(v=>v.capacity)).size).toBe(1);
-    expect(new Set(dimensions.map(v=>v.composition)).size).toBe(1);
-    await expect(page.locator(".plugin-chips")).not.toContainText(/截\s*\d+\s*条/);
+    expect(new Set(dimensions.map((v) => v.capacity)).size).toBe(1);
+    expect(new Set(dimensions.map((v) => v.composition)).size).toBe(1);
+    await expect(page.locator(".plugin-chips")).not.toContainText(
+      /截\s*\d+\s*条/,
+    );
     const warning = latest.locator(".du-alert-warning");
-    expect(await warning.evaluate(node => {
-      const style=getComputedStyle(node), parse=(s:string)=>s.match(/[\d.]+/g)!.slice(0,3).map(Number);
-      const luminance=(c:number[])=>c.map(x=>{x/=255;return x<=.04045?x/12.92:((x+.055)/1.055)**2.4}).reduce((n,v,i)=>n+v*[.2126,.7152,.0722][i]!,0);
-      const fg=luminance(parse(style.color)), bg=luminance(parse(style.backgroundColor));
-      return (Math.max(fg,bg)+.05)/(Math.min(fg,bg)+.05);
-    })).toBeGreaterThan(4.5);
-    await page.getByRole("button",{name:"插件",exact:true}).click();
-    await expect(page.getByRole("button",{name:"运行 追问建议",exact:true})).toHaveCount(0);
-    await page.getByRole("button",{name:"关闭插件列表",exact:true}).click();
+    expect(
+      await warning.evaluate((node) => {
+        const style = getComputedStyle(node),
+          parse = (s: string) =>
+            s
+              .match(/[\d.]+/g)!
+              .slice(0, 3)
+              .map(Number);
+        const luminance = (c: number[]) =>
+          c
+            .map((x) => {
+              x /= 255;
+              return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+            })
+            .reduce((n, v, i) => n + v * [0.2126, 0.7152, 0.0722][i]!, 0);
+        const fg = luminance(parse(style.color)),
+          bg = luminance(parse(style.backgroundColor));
+        return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+      }),
+    ).toBeGreaterThan(4.5);
+    await page.getByRole("button", { name: "插件", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "运行 追问建议", exact: true }),
+    ).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "关闭插件列表", exact: true })
+      .click();
     await expect(
       page.getByRole("button", { name: "回复摘要上下文", exact: true }),
     ).toContainText("18.9k");

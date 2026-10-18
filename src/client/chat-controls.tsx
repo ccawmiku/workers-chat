@@ -1,3 +1,4 @@
+import { useCacheReading } from "./cache-usage";
 import { UsageBar } from "./usage-bar";
 import { useState, useRef } from "react";
 import {
@@ -371,6 +372,7 @@ export function MessageUsage({
   historical?: boolean;
   showBar?: boolean;
 }) {
+  const cache = useCacheReading(message.usage, message.id);
   const usage = message.usage ?? {},
     outputDetails = object(
       usage.completion_tokens_details ?? usage.output_tokens_details,
@@ -383,10 +385,7 @@ export function MessageUsage({
   ];
   return (
     <div
-      className={
-        "message-meta " +
-        (historical && !cacheHitRate(usage.cache_hit_rate) ? "historical" : "")
-      }
+      className={"message-meta " + (historical && !cache ? "historical" : "")}
     >
       <span>{message.model?.modelId ?? String(message.raw?.model ?? "")}</span>
       {message.elapsedMs !== undefined && (
@@ -401,9 +400,13 @@ export function MessageUsage({
           </span>
         ))}
       {rows.some((r) => r[1] !== undefined) && <span> Token</span>}
-      {showBar && <UsageBar usage={usage} />}
-      {cacheHitRate(usage.cache_hit_rate) !== undefined && (
-        <span> · 缓存率 {cacheHitRate(usage.cache_hit_rate)}</span>
+      {showBar && <UsageBar usage={usage} cacheId={message.id} />}
+      {cache && (
+        <span title={cache.source}>
+          {" "}
+          · {cache.source.startsWith("本地") ? "前缀约" : "缓存率"}{" "}
+          {cache.percent}
+        </span>
       )}
     </div>
   );

@@ -11,6 +11,7 @@ import {
   CLARIFY_PROMPT,
   LEGACY_CLARIFY_PROMPT,
   PRE_QUESTIONS_CLARIFY_PROMPT,
+  THREE_OPTIONS_CLARIFY_PROMPT,
 } from "./clarify-defaults";
 const names = { rewrite: "重写提示" };
 const PRE_UA_REWRITE_PROMPT =
@@ -74,6 +75,7 @@ export function upgradeLegacyPlugin(p: PluginDefinition): PluginDefinition {
     [
       LEGACY_CLARIFY_PROMPT,
       PRE_QUESTIONS_CLARIFY_PROMPT,
+      THREE_OPTIONS_CLARIFY_PROMPT,
       CLARIFY_PROMPT,
     ].includes(p.prompt)
   )

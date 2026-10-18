@@ -50,7 +50,19 @@ export function validatedSettings(v: unknown): Settings {
     throw new HttpError(400, "插件最多 32 个，包含 4 个内置插件");
   if (!Array.isArray(input.templates) || input.templates.length > 100)
     throw new HttpError(400, "模板格式无效");
+  if (
+    !Array.isArray(input.pluginFallbackModels) ||
+    input.pluginFallbackModels.length > 16
+  )
+    throw new HttpError(400, "备用模型最多 16 个");
+  const fallbacks = input.pluginFallbackModels.map(modelRef);
+  if (
+    fallbacks.some((m) => !m) ||
+    new Set(fallbacks.map((m) => JSON.stringify(m))).size !== fallbacks.length
+  )
+    throw new HttpError(400, "备用模型不能为空或重复");
   return {
+    pluginFallbackModels: fallbacks as ModelRef[],
     plugins,
     replySummary: validatedSummaryConfig(input.replySummary ?? {}),
     defaultModel: modelRef(input.defaultModel),

@@ -63,6 +63,21 @@ export function validatedPlugins(value: unknown): PluginDefinition[] {
       parameters: parameters(p.parameters),
       effort: p.effort as PluginDefinition["effort"],
       stream: p.stream !== false,
+      ...(kind === "clarify"
+        ? {
+            clarifyFormat:
+              p.clarifyFormat === "questions"
+                ? ("questions" as const)
+                : undefined,
+            clarifyLoop: p.clarifyLoop === true,
+          }
+        : {}),
+      ...(kind === "analysis"
+        ? {
+            excludedCharacters: str(p.excludedCharacters ?? "", 1000),
+            analysisTypes: validateAnalysisTypes(p.analysisTypes),
+          }
+        : {}),
       prompt: str(p.prompt, 100000),
       schema,
       example: str(p.example, 100000),
@@ -73,6 +88,22 @@ export function validatedPlugins(value: unknown): PluginDefinition[] {
       ...(kind === "rewrite" ? { rewriteFormat: "fields" as const } : {}),
       ...(["suggest", "rewrite"].includes(String(kind)) ? { initialUser } : {}),
     };
+  });
+}
+function validateAnalysisTypes(value: unknown) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 64)
+    throw new HttpError(400, "保存类型数量无效");
+  const ids = new Set<string>();
+  return value.map((item) => {
+    const v = obj(item),
+      id = str(v.id, 128),
+      type = str(v.type, 100),
+      instruction = str(v.instruction, 10000);
+    if (!id.trim() || !type.trim() || ids.has(id))
+      throw new HttpError(400, "保存类型名称或 ID 无效");
+    ids.add(id);
+    return { id, type, instruction };
   });
 }
 export function validatedBindings(

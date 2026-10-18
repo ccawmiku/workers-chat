@@ -1,3 +1,4 @@
+import { generationDeadline } from "./deadline";
 import {
   type Chat,
   type Settings,
@@ -335,14 +336,12 @@ export async function runSummary(
   const output: CompletionOutput = { content: "", reasoning: "" };
   let key = "",
     lastCheckpoint = 0;
+  const disposeDeadline = generationDeadline(controller);
   try {
     key = task.provider.encryptedKey
       ? await decrypt(task.provider.encryptedKey, env.ENCRYPTION_KEY)
       : "";
-    const signal = AbortSignal.any([
-      controller.signal,
-      AbortSignal.timeout(30 * 60 * 1000),
-    ]);
+    const signal = controller.signal;
     const response = await fetch(task.provider.baseUrl + "/chat/completions", {
       method: "POST",
       redirect: "manual",
@@ -370,6 +369,8 @@ export async function runSummary(
       progress.isCancelled() ? "stopped" : "error",
       redactError(e instanceof Error ? e.message : "摘要生成失败", key),
     );
+  } finally {
+    disposeDeadline();
   }
   return { status: "summary-complete" };
 }

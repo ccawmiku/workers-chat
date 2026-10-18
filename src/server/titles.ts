@@ -1,3 +1,4 @@
+import { generationDeadline } from "./deadline";
 import type { DirectTitleTask } from "../shared/direct";
 import { renderTitlePrompt, extractTitle } from "../shared/title-template";
 import {
@@ -243,12 +244,14 @@ export async function runTitle(env: Env, id: string): Promise<string> {
     let title = "",
       error = "没有可用的标题模型或默认聊天模型";
     for (const candidate of config.candidates) {
+      const controller = new AbortController(),
+        disposeDeadline = generationDeadline(controller, 120000);
       let key = "";
       try {
         key = candidate.provider.encryptedKey
           ? await decrypt(candidate.provider.encryptedKey, env.ENCRYPTION_KEY)
           : "";
-        const signal = AbortSignal.timeout(120000);
+        const signal = controller.signal;
         const response = await fetch(
           candidate.provider.baseUrl + "/chat/completions",
           {
@@ -286,6 +289,8 @@ export async function runTitle(env: Env, id: string): Promise<string> {
           key,
         );
         title = "";
+      } finally {
+        disposeDeadline();
       }
     }
     if (!title) throw new Error(error);

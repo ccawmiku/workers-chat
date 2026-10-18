@@ -42,7 +42,8 @@ test("one bootstrap, one idle request per minute, zero hidden requests and one p
   for (let i = 0; i < 5; i++) {
     const response = page.waitForResponse("**/api/navigation");
     await page.clock.fastForward(60000);
-    await response;
+    // The next timeout is installed after response.json(), not when headers arrive.
+    await (await response).finished();
     await page.waitForTimeout(10);
   }
   expect(calls).toHaveLength(5); // Previously 100 requests during the same five minutes.

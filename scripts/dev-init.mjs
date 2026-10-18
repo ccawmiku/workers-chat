@@ -1,5 +1,5 @@
 import { Miniflare } from "miniflare";
-import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir, readdir } from "node:fs/promises";
 import { randomBytes, pbkdf2Sync } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -32,6 +32,12 @@ try {
     { mode: 0o600 },
   );
 }
+// Local development stays unconfigured unless an explicit Analytics token is supplied.
+const localVars = await readFile(".dev.vars", "utf8");
+const missingAnalytics = ["CF_ANALYTICS_TOKEN", "CF_ANALYTICS_ACCOUNT_ID"]
+  .filter(name => !new RegExp("^" + name + "=", "m").test(localVars));
+if (missingAnalytics.length)
+  await appendFile(".dev.vars", "\n" + missingAnalytics.map(name => name + "=disabled").join("\n") + "\n");
 const mf = new Miniflare({
   resourcePersistencePath: ".cloudflare/state/v3",
   workers: [

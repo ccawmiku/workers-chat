@@ -11,3 +11,5 @@ Cloudflare 官方技能、文档和运行时用于 API/生命周期/配置核对
 图标后续统一：新增 @lucide/svelte 1.57.0（ISC），与 React 图标使用同一 Lucide 图标集；替换概述原布局/固定图标，保留 Open WebUI 来源和适配记录。
 
 实际发布包的主要前端依赖许可同时随网站分发于 `/licenses/ui-components.txt`，保留包内原始版权/许可全文，不只依赖构建机的 node_modules。
+
+颜色面板采用 react-colorful 5.8.1（MIT），使用其 HexColorPicker/HexColorInput，外层复用 daisyUI Dropdown/Card，保留键盘与触屏支持；许可全文附于公开 ui-components.txt。

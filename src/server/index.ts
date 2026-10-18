@@ -3,6 +3,7 @@ import {
   cloneSummaries,
   planPruneSummaries,
 } from "./summaries";
+import { accountUsage } from "./account-usage";
 import { postView } from "./post-tasks";
 import { deviceGeneration } from "./device-generation";
 import {
@@ -312,7 +313,7 @@ async function api(request: Request, env: Env) {
       if (path === "/api/auth/status")
         return Response.json({ authenticated: true });
       const id = url.searchParams.get("chatId");
-      const [chats, groups, providers, config, current] = await Promise.all([
+      const [chats, groups, providers, config, current, usage] = await Promise.all([
         store.list("chat"),
         store.list("group"),
         providerList(store),
@@ -323,6 +324,7 @@ async function api(request: Request, env: Env) {
               throw e;
             })
           : null,
+        accountUsage(env),
       ]);
       return Response.json({
         authenticated: true,
@@ -331,6 +333,7 @@ async function api(request: Request, env: Env) {
         providers: providers.map(publicProvider),
         settings: config,
         current,
+        accountUsage: usage,
       });
     } catch (e) {
       if (e instanceof HttpError && e.status === 401)
@@ -339,6 +342,8 @@ async function api(request: Request, env: Env) {
     }
   }
   const session = await authenticate(request, env);
+  if (path === "/api/account-usage")
+    return Response.json(await accountUsage(env, url.searchParams.get("refresh") === "1"));
   const pluginDevice = path.match(
     /^\/api\/plugins\/jobs\/([^/]+)\/(checkpoint|finish)$/,
   );
@@ -347,11 +352,12 @@ async function api(request: Request, env: Env) {
       await devicePluginSave(env, pluginDevice[1]!, pluginDevice[2]!, body),
     );
   if (path === "/api/navigation") {
-    const [chats, groups] = await Promise.all([
+    const [chats, groups, usage] = await Promise.all([
       store.list("chat"),
       store.list("group"),
+      accountUsage(env),
     ]);
-    return Response.json({ chats, groups });
+    return Response.json({ chats, groups, accountUsage: usage });
   }
   if (path === "/api/config") {
     const [providers, config] = await Promise.all([
@@ -774,8 +780,10 @@ async function api(request: Request, env: Env) {
       return Response.json(await titleStatus(env, id));
     if (action === "export") return Response.json(exportChat(chat));
     if (action === "seen") {
-      chat.unread = false;
-      await store.save(id, "chat", chat, doc.revision, summary(chat));
+      if (chat.unread) {
+        chat.unread = false;
+        await store.save(id, "chat", chat, doc.revision, summary(chat));
+      }
       return Response.json({ ok: true });
     }
     if (action === "preview")
@@ -811,17 +819,29 @@ async function api(request: Request, env: Env) {
       return Response.json({ ok: true });
     }
     if (action === "" && method === "PATCH") {
+      let changed = false;
+      // Compare only the supplied configuration, never serialize the whole
+      // message tree just to decide whether an immutable snapshot is needed.
+      const set = <K extends keyof Chat>(key: K, value: Chat[K]) => {
+        if (JSON.stringify(chat[key]) !== JSON.stringify(value)) {
+          chat[key] = value;
+          changed = true;
+        }
+      };
       if (body.title !== undefined) {
         chat.title = str(body.title, 500);
         chat.titleManual = true;
         chat.titleRevision = uuid();
+        // Explicit renaming must supersede an in-flight automatic title even
+        // when the selected text happens to match the current title.
+        changed = true;
       }
       for (const k of ["pinned", "archived", "deleted", "unread"] as const)
-        if (typeof body[k] === "boolean") chat[k] = body[k];
+        if (typeof body[k] === "boolean") set(k, body[k]);
       if (body.groupId === null || typeof body.groupId === "string")
-        chat.groupId = body.groupId;
+        set("groupId", body.groupId);
       if (body.model !== undefined) {
-        chat.model = modelRef(body.model);
+        set("model", modelRef(body.model));
       }
       if (body.effort !== undefined) {
         if (
@@ -830,36 +850,40 @@ async function api(request: Request, env: Env) {
           )
         )
           throw new HttpError(400, "思考强度无效");
-        chat.effort = body.effort as Chat["effort"];
+        set("effort", body.effort as Chat["effort"]);
       }
       if (body.parameters !== undefined)
-        chat.parameters = parameters(body.parameters);
+        set("parameters", parameters(body.parameters));
       for (const k of ["stream"] as const)
-        if (typeof body[k] === "boolean") chat[k] = body[k];
+        if (typeof body[k] === "boolean") set(k, body[k]);
       if (body.rounds !== undefined) {
-        if (body.rounds === null) delete chat.rounds;
+        if (body.rounds === null) {
+          if (chat.rounds !== undefined) changed = true;
+          delete chat.rounds;
+        }
         else if (
           typeof body.rounds === "number" &&
           Number.isSafeInteger(body.rounds) &&
           body.rounds > 0
         )
-          chat.rounds = body.rounds;
+          set("rounds", body.rounds);
         else throw new HttpError(400, "上下文轮数无效");
       }
       if (body.system !== undefined) {
         if (!Array.isArray(body.system))
           throw new HttpError(400, "模板格式无效");
-        chat.system = body.system.map((v) => {
+        set("system", body.system.map((v) => {
           const t = obj(v);
           return {
             id: str(t.id, 128),
             name: str(t.name, 200),
             content: str(t.content),
           };
-        });
+        }));
       }
       if (body.templateMode === "replace" || body.templateMode === "append")
-        chat.templateMode = body.templateMode;
+        set("templateMode", body.templateMode);
+      if (!changed) return Response.json(chat);
       chat.updatedAt = Date.now();
       await store.save(id, "chat", chat, doc.revision, summary(chat));
       return Response.json(chat);

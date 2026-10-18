@@ -1,3 +1,4 @@
+import { generationDeadline } from "./deadline";
 import { readCompletion, type CompletionOutput } from "../shared/completion";
 import type { DirectTask, GenerationStart } from "../shared/direct";
 import {
@@ -296,6 +297,7 @@ export async function runGeneration(
   const output: CompletionOutput = { content: "", reasoning: "" };
   let key = "";
   let seedContent = "";
+  const disposeDeadline = generationDeadline(controller);
   try {
     const doc = await store.get<Chat>(claimed.chat_id);
     if (!doc) throw new Error("聊天不存在");
@@ -312,10 +314,7 @@ export async function runGeneration(
     key = config.provider.encryptedKey
       ? await decrypt(config.provider.encryptedKey, env.ENCRYPTION_KEY)
       : "";
-    const signal = AbortSignal.any([
-      controller.signal,
-      AbortSignal.timeout(30 * 60 * 1000),
-    ]);
+    const signal = controller.signal;
     const response = await fetch(
       config.provider.baseUrl + "/chat/completions",
       {
@@ -371,7 +370,7 @@ export async function runGeneration(
     );
     return { status: "error" };
   } finally {
-    controller.abort();
+    disposeDeadline();
   }
   progress.publish(output.content, output.reasoning, true);
   await finalize(

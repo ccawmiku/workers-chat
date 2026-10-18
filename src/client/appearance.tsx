@@ -1,4 +1,46 @@
 import { Check, ChevronDown, Monitor, Sun, Moon } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { HexColorPicker, HexColorInput } from "react-colorful";
+
+function useColorDropdown() {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const outside = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node) && ref.current)
+        ref.current.open = false;
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && ref.current?.open) {
+        ref.current.open = false;
+        ref.current.querySelector("summary")?.focus();
+        e.stopPropagation();
+      }
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, []);
+  return ref;
+}
+function ColorControl({ label, color, onChange }: {
+  label: string; color: string; onChange: (color: string) => void;
+}) {
+  const ref = useColorDropdown();
+  return <details className="du-dropdown du-dropdown-end color-control" ref={ref}>
+    <summary className="du-btn du-btn-ghost du-btn-sm color-value" aria-label={label + "选择器"}>
+      <i className="color-swatch" style={{ background: color }} aria-hidden="true" />
+      <span>{color.toUpperCase()}</span>
+    </summary>
+    <div className="du-dropdown-content du-card color-popover" aria-label={label + "面板"}>
+      <HexColorPicker color={color} onChange={onChange} aria-label={label + "色板"} />
+      <HexColorInput className="du-input du-input-sm" aria-label={label} color={color}
+        onChange={onChange} prefixed />
+    </div>
+  </details>;
+}
 
 export type Appearance = {
   densityVersion: number;
@@ -118,6 +160,7 @@ export function AppearanceSettings({
   value: Appearance;
   onChange: (a: Appearance) => void;
 }) {
+  const accentRef = useColorDropdown();
   const variant =
     a.theme === "system"
       ? matchMedia("(prefers-color-scheme: dark)").matches
@@ -171,7 +214,7 @@ export function AppearanceSettings({
         </div>
         <div className="appearance-row">
           <span>强调色</span>
-          <details className="du-dropdown du-dropdown-end accent-picker">
+          <details className="du-dropdown du-dropdown-end accent-picker" ref={accentRef}>
             <summary className="du-btn du-btn-sm du-btn-ghost">
               <i className="color-swatch" style={{ background: a.accent }} />
               {preset?.[0] ?? "自定义"}
@@ -193,16 +236,9 @@ export function AppearanceSettings({
                 </li>
               ))}
               <li>
-                <label className="custom-color">
-                  自定义
-                  <input
-                    className="du-input color-input"
-                    type="color"
-                    aria-label="自定义强调色"
-                    value={a.accent}
-                    onChange={(e) => update({ ...a, accent: e.target.value })}
-                  />
-                </label>
+                <span className="custom-color">自定义</span>
+                <ColorControl label="自定义强调色" color={a.accent}
+                  onChange={(accent) => update({ ...a, accent })} />
               </li>
             </ul>
           </details>
@@ -215,25 +251,16 @@ export function AppearanceSettings({
         ).map(([key, label]) => (
           <div className="appearance-row" key={key}>
             <span>{label}</span>
-            <label className="color-value">
-              <input
-                aria-label={label + "颜色"}
-                className="du-input color-input"
-                type="color"
-                value={a[key]?.[variant] ?? themeDefaults[variant][key]}
-                onChange={(e) =>
+            <ColorControl
+                label={label + "颜色"}
+                color={a[key]?.[variant] ?? themeDefaults[variant][key]}
+                onChange={(color) =>
                   update({
                     ...a,
-                    [key]: { ...a[key], [variant]: e.target.value },
+                    [key]: { ...a[key], [variant]: color },
                   })
                 }
               />
-              <span>
-                {(
-                  a[key]?.[variant] ?? themeDefaults[variant][key]
-                ).toUpperCase()}
-              </span>
-            </label>
           </div>
         ))}
       </section>

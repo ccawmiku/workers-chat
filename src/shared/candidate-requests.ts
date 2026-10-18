@@ -1,18 +1,8 @@
 import type { APIMessage } from "./plugins";
 import type { Message } from "./chat";
 
-export const CANDIDATE_REPLY_CHAR_LIMIT = 200;
-
-/** Temporary reply excerpt until per-reply summaries are available. */
-export function candidateReplyExcerpt(content: string): string {
-  let end = 0,
-    count = 0;
-  for (const char of content) {
-    if (count++ === CANDIDATE_REPLY_CHAR_LIMIT) break;
-    end += char.length;
-  }
-  return content.slice(0, end);
-}
+import { replyFallback } from "./reply-context";
+import type { SummaryRun } from "./summaries";
 
 export function candidateTask(
   kind: "suggest" | "rewrite",
@@ -29,6 +19,7 @@ export function swappedHistory(
   path: Message[],
   initialUser: string,
   system: string,
+  summaries: ReadonlyMap<string, SummaryRun> = new Map(),
 ): APIMessage[] {
   if (!initialUser.trim()) throw Error("开头 user 消息不能为空");
   const messages: APIMessage[] = [];
@@ -39,7 +30,7 @@ export function swappedHistory(
     const role = message.role === "user" ? "assistant" : "user";
     const content =
       role === "user"
-        ? candidateReplyExcerpt(message.content ?? "")
+        ? (summaries.get(message.id)?.summary ?? replyFallback(message.content ?? ""))
         : message.content;
     const last = messages.at(-1)!;
     if (last.role === role)

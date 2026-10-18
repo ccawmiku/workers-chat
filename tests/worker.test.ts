@@ -145,6 +145,11 @@ beforeAll(async () => {
               type: "text",
               value: randomBytes(32).toString("hex"),
             },
+            CF_ANALYTICS_TOKEN: {
+              type: "text",
+              value: "synthetic-analytics-token",
+            },
+            CF_ANALYTICS_ACCOUNT_ID: { type: "text", value: "1".repeat(32) },
           },
           exports: {
             TitleGeneration: { type: "workflow", name: "test-titles" },
@@ -157,6 +162,38 @@ beforeAll(async () => {
             type: "fetcher",
             handler: async (req) => {
               const url = new URL(req.url);
+              if (
+                url.hostname === "api.cloudflare.com" &&
+                url.pathname === "/client/v4/graphql"
+              )
+                return MFResponse.json({
+                  data: {
+                    viewer: {
+                      accounts: [
+                        {
+                          workers: [
+                            { sum: { requests: 1000, cpuTimeUs: 5000 } },
+                          ],
+                          doRequests: [{ sum: { requests: 500 } }],
+                          doUsage: [
+                            {
+                              sum: {
+                                duration: 14620.54,
+                                rowsRead: 1000,
+                                rowsWritten: 200,
+                              },
+                            },
+                          ],
+                          d1: [{ sum: { rowsRead: 10000, rowsWritten: 100 } }],
+                          workflows: [{ sum: { stepCount: 20, cpuTime: 10 } }],
+                          workflowStarts: [{ count: 10 }],
+                          d1Storage: [{ max: { databaseSizeBytes: 1000 } }],
+                          doStorage: [{ max: { storedBytes: 2000 } }],
+                        },
+                      ],
+                    },
+                  },
+                });
               if (url.pathname.endsWith("/models"))
                 return MFResponse.json({
                   data: [{ id: "Gemini3.8flash-low" }, { id: "other" }],
@@ -192,7 +229,7 @@ beforeAll(async () => {
               }
               if (
                 messages.some((m) =>
-                  m.content?.includes("本轮回复提炼为 50–100 字"),
+                  m.content?.includes("本轮回复提炼为 100–150 字"),
                 )
               ) {
                 summaryCalls.push(payload);
@@ -236,6 +273,44 @@ beforeAll(async () => {
                 );
               }
               upstreamCalls.push(payload);
+              let partialTask: any;
+              try {
+                partialTask = JSON.parse(messages.at(-1)?.content ?? "");
+              } catch {}
+              if (partialTask?.output_contract) {
+                const content =
+                  controls.mode === "plugin-invalid"
+                    ? "invalid JSON"
+                    : JSON.stringify({
+                        type: partialTask.target?.type ?? "服装状态",
+                        content:
+                          partialTask.user_requirement || "重新生成的客观记录",
+                        instruction: "仅记录已有服装状态，无资料用 none",
+                      });
+                const usage = {
+                  input_tokens: 1500,
+                  output_tokens: 100,
+                  cache_hit_rate: "81.2%",
+                };
+                return payload.stream
+                  ? new MFResponse(
+                      "data: " +
+                        JSON.stringify({
+                          choices: [
+                            { delta: { content }, finish_reason: "stop" },
+                          ],
+                          usage,
+                        }) +
+                        "\n\ndata: [DONE]\n\n",
+                      { headers: { "Content-Type": "text/event-stream" } },
+                    )
+                  : MFResponse.json({
+                      choices: [
+                        { message: { content }, finish_reason: "stop" },
+                      ],
+                      usage,
+                    });
+              }
               const pluginMarker =
                 messages.find((m) => m.content?.startsWith("[PLUGIN_TEST_"))
                   ?.content ?? "";
@@ -249,12 +324,44 @@ beforeAll(async () => {
                   controls.mode === "plugin-invalid"
                     ? "invalid JSON"
                     : pluginMarker.startsWith("[PLUGIN_TEST_analysis]")
-                      ? '{"ABC":"analysis-result"}'
+                      ? !messages
+                          .at(-1)
+                          ?.content?.split("JSON Schema：")[1]
+                          ?.includes('"ABC"')
+                        ? JSON.stringify({
+                            character_thoughts: [
+                              {
+                                character: "甲",
+                                thought: "我还不知道门外是谁。",
+                              },
+                            ],
+                            scene_state: "茶室内，门关闭。",
+                            action_state: "甲已经放下茶杯。",
+                            knowledge_boundaries: "甲不知道门外人的身份。",
+                          })
+                        : '{"ABC":"analysis-result"}'
                       : pluginMarker.startsWith("[PLUGIN_TEST_suggest]")
                         ? '{"suggestions":["用户下一句一","用户下一句二","用户下一句三"]}'
                         : pluginMarker.startsWith("[PLUGIN_TEST_rewrite]")
                           ? '{"prompt1":"重生后的用户要求","prompt2":"换个说法的要求","prompt3":"另一条用户要求"}'
-                          : "1. 请问你希望采用什么风格？";
+                          : JSON.stringify({
+                              questions:
+                                controls.mode === "clarify-loop" &&
+                                messages.some((m) => m.role === "tool")
+                                  ? []
+                                  : [
+                                      {
+                                        id: "q1",
+                                        question: "请问你希望采用什么风格？",
+                                        multiple: false,
+                                        options: [
+                                          { id: "A", text: "轻松" },
+                                          { id: "B", text: "正式" },
+                                          { id: "C", text: "其他" },
+                                        ],
+                                      },
+                                    ],
+                            });
                 if (!payload.stream)
                   return MFResponse.json({
                     choices: [{ message: { content }, finish_reason: "stop" }],
@@ -1225,6 +1332,97 @@ describe("workerd HTTP + D1 + Workflows", () => {
       .first<{ value: string }>();
     expect(JSON.parse(current!.value).draft).toBe("");
   });
+  it("authenticates quota access, shares bootstrap/navigation data and rejects user-supplied query mutations", async () => {
+    expect(
+      (await request("/account-usage", "GET", undefined, false)).status,
+    ).toBe(401);
+    expect(
+      (await request("/account-usage", "POST", { query: "arbitrary mutation" }))
+        .status,
+    ).toBe(405);
+    const direct = await value<{
+      scope: string;
+      metrics: { id: string; value: number | null; limit: number | null }[];
+    }>("/account-usage?refresh=1");
+    expect(direct.scope).toBe("account");
+    expect(direct.metrics.find((m) => m.id === "do-duration")).toMatchObject({
+      value: 14620.54,
+      limit: 13000,
+    });
+    expect(
+      direct.metrics.find((m) => m.id === "workflow-storage")?.value,
+    ).toBeNull();
+    const bootstrap = await value<{ accountUsage: typeof direct }>(
+      "/bootstrap",
+    );
+    const navigation = await value<{ accountUsage: typeof direct }>(
+      "/navigation",
+    );
+    expect(bootstrap.accountUsage).toEqual(direct);
+    expect(navigation.accountUsage).toEqual(direct);
+    expect(JSON.stringify(direct)).not.toContain("synthetic-analytics-token");
+  });
+  it("does not rewrite multipart chat snapshots for repeated seen or unchanged validated configuration", async () => {
+    const imported = await value<{ ids: string[] }>("/import", "POST", {
+      data: {
+        title: "snapshot fixture",
+        messages: [
+          { id: "u", role: "user", content: "question" },
+          {
+            id: "a",
+            role: "assistant",
+            content: "original reply ".repeat(50000),
+          },
+        ],
+      },
+    });
+    const id = imported.ids[0]!,
+      db = await mf.getD1Database("DB");
+    const state = async () => {
+      const head = await db
+        .prepare("SELECT revision FROM documents WHERE id=?")
+        .bind(id)
+        .first<{ revision: number }>();
+      const parts = await db
+        .prepare(
+          "SELECT count(*) AS count,sum(length(value)) AS bytes FROM document_parts WHERE id=?",
+        )
+        .bind(id)
+        .first<{ count: number; bytes: number }>();
+      return { ...head, ...parts };
+    };
+    const chat = (await value<{ chat: Chat }>("/chats/" + id)).chat;
+    const before = await state();
+    expect(before.count).toBeGreaterThan(1);
+    for (let i = 0; i < 3; i++) {
+      await value("/chats/" + id + "/seen", "POST", {});
+      const unchanged = await value<Chat>("/chats/" + id, "PATCH", {
+        parameters: chat.parameters,
+        model: chat.model,
+        effort: chat.effort,
+        stream: chat.stream,
+        system: chat.system,
+        rounds: chat.rounds ?? null,
+      });
+      expect(unchanged.updatedAt).toBe(chat.updatedAt);
+    }
+    expect(await state()).toEqual(before);
+    await value("/chats/" + id, "PATCH", { parameters: { temperature: 0.4 } });
+    const changed = await state();
+    expect(changed.revision).toBe(before.revision! + 1);
+    await value("/chats/" + id, "PATCH", { parameters: { temperature: 0.4 } });
+    expect(await state()).toEqual(changed);
+    const invalid = await request("/chats/" + id, "PATCH", { rounds: 0 });
+    expect(invalid.status).toBe(400);
+    expect(await state()).toEqual(changed);
+    // Same-text explicit renaming still invalidates a pending model title.
+    const renamed = await value<Chat>("/chats/" + id, "PATCH", {
+      title: chat.title,
+    });
+    expect(renamed.titleManual).toBe(true);
+    expect(renamed.titleRevision).not.toBe(chat.titleRevision);
+    expect((await state()).revision).toBe(changed.revision! + 1);
+  });
   it("generates an automatic title once and bounds the explicit fallback without overriding a manual rename", async () => {
     const before = titleCalls.length,
       chat = await value<Chat>("/chats", "POST", {});
@@ -1598,6 +1796,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(nav).toEqual({
       chats: await value("/chats"),
       groups: await value("/groups"),
+      accountUsage: await value("/account-usage"),
     });
     expect(await value("/config")).toEqual({
       providers: await value("/providers"),
@@ -1679,6 +1878,257 @@ describe("workerd HTTP + D1 + Workflows", () => {
       ).status,
     ).toBe(403);
     controls.delay = 0;
+  });
+  it("freezes partial analysis requests, preserves untouched blocks, guards stale candidates and saves optional templates", async () => {
+    controls.mode = "normal";
+    const p = {
+      ...pluginDefaults("analysis"),
+      prompt: "[PLUGIN_TEST_analysis]\n" + pluginDefaults("analysis").prompt,
+    };
+    await value("/settings", "PUT", { ...settings, plugins: [p] });
+    const chat = await value<Chat>("/chats", "POST", {}),
+      endpoint = "/chats/" + chat.id + "/plugins";
+    await value("/chats/" + chat.id, "PATCH", { title: "section fixture" });
+    await value(endpoint, "POST", {
+      action: "configure",
+      plugins: [{ id: p.id, enabled: true }],
+    });
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "描述已有场景",
+      debugPlugins: true,
+    });
+    type S = { pluginState: PluginState; pluginJob: unknown; chat: Chat };
+    const wait = async (predicate: (s: S) => boolean) => {
+      for (let n = 0; n < 160; n++) {
+        const s = await value<S>("/chats/" + chat.id);
+        if (predicate(s)) return s;
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      throw Error("section timeout");
+    };
+    let s = await wait((s) =>
+      s.pluginState.runs.some((r) => r.status === "waiting"),
+    );
+    const original = s.pluginState.runs[0]!,
+      initial = JSON.parse(original.output);
+    const snapshot = await value<{ messages: unknown[] }>(endpoint, "POST", {
+      action: "request",
+      runId: original.id,
+    });
+    await value(endpoint, "POST", {
+      action: "section-generate",
+      runId: original.id,
+      targetId: "scene_state",
+      content: "只改场景",
+    });
+    s = await wait(
+      (s) =>
+        !s.pluginJob &&
+        s.pluginState.runs.some((r) => r.status === "candidate"),
+    );
+    let candidate = s.pluginState.runs.at(-1)!;
+    const partial = await value<{ messages: unknown[] }>(endpoint, "POST", {
+      action: "request",
+      runId: candidate.id,
+    });
+    expect(partial.messages.slice(0, -1)).toEqual(
+      snapshot.messages.slice(0, -1),
+    );
+    expect(s.pluginState.runs[0]!.output).toBe(original.output);
+    expect(candidate.usage?.cache_hit_rate).toBe("81.2%");
+    await value(endpoint, "POST", {
+      action: "section-apply",
+      runId: candidate.id,
+    });
+    s = await value<S>("/chats/" + chat.id);
+    expect(JSON.parse(s.pluginState.runs[0]!.output)).toEqual({
+      ...initial,
+      scene_state: "只改场景",
+    });
+    await value(endpoint, "POST", {
+      action: "section-generate",
+      runId: original.id,
+      targetId: "action_state",
+      content: "",
+    });
+    s = await wait(
+      (s) => !s.pluginJob && s.pluginState.runs.at(-1)?.status === "candidate",
+    );
+    candidate = s.pluginState.runs.at(-1)!;
+    await value(endpoint, "POST", {
+      action: "section-edit",
+      runId: original.id,
+      targetId: "scene_state",
+      content: "期间手改",
+    });
+    expect(
+      (
+        await request(endpoint, "POST", {
+          action: "section-apply",
+          runId: candidate.id,
+        })
+      ).status,
+    ).toBe(409);
+    await value(endpoint, "POST", {
+      action: "discard-sections",
+      runIds: [candidate.id],
+    });
+    expect(
+      (
+        await request(endpoint, "POST", {
+          action: "request",
+          runId: candidate.id,
+        })
+      ).status,
+    ).toBe(404);
+    await value(endpoint, "POST", {
+      action: "section-generate",
+      runId: original.id,
+      targetId: "action_state",
+      content: "并发确认检查",
+    });
+    s = await wait(
+      (s) => !s.pluginJob && s.pluginState.runs.at(-1)?.status === "candidate",
+    );
+    candidate = s.pluginState.runs.at(-1)!;
+    await Promise.all([
+      request(endpoint, "POST", {
+        action: "section-apply",
+        runId: candidate.id,
+      }),
+      request(endpoint, "POST", {
+        action: "discard-sections",
+        runIds: [candidate.id],
+      }),
+    ]);
+    s = await value<S>("/chats/" + chat.id);
+    if (
+      s.pluginState.runs.find((r) => r.id === candidate.id)?.status ===
+      "complete"
+    )
+      expect(
+        await value(endpoint, "POST", {
+          action: "request",
+          runId: candidate.id,
+        }),
+      ).not.toBeNull();
+    await value(endpoint, "POST", {
+      action: "section-generate",
+      runId: original.id,
+      targetId: null,
+      content: "增加服装状态，本轮关注外套",
+    });
+    s = await wait(
+      (s) => !s.pluginJob && s.pluginState.runs.at(-1)?.status === "candidate",
+    );
+    candidate = s.pluginState.runs.at(-1)!;
+    await value(endpoint, "POST", {
+      action: "section-apply",
+      runId: candidate.id,
+      saveType: true,
+      type: "服装状态",
+      instruction: "仅记录既有服装",
+      scope: "chat",
+    });
+    s = await value<S>("/chats/" + chat.id);
+    expect(s.chat.plugins![0]!.overrides?.analysisTypes?.[0]).toMatchObject({
+      type: "服装状态",
+      instruction: "仅记录既有服装",
+    });
+    expect(
+      JSON.parse(s.pluginState.runs[0]!.output).additional_sections,
+    ).toHaveLength(1);
+    await value(endpoint, "POST", {
+      action: "regenerate-analysis",
+      runId: original.id,
+    });
+    s = await wait(
+      (s) => !s.pluginJob && s.pluginState.runs.at(-1)?.status === "candidate",
+    );
+    candidate = s.pluginState.runs.at(-1)!;
+    expect(JSON.parse(candidate.output).additional_sections).toBeUndefined();
+    await value(endpoint, "POST", { action: "replace", runId: candidate.id });
+    await value(endpoint, "POST", {
+      action: "approve-analysis",
+      runId: candidate.id,
+    });
+    expect(
+      (
+        await request(endpoint, "POST", {
+          action: "section-edit",
+          runId: candidate.id,
+          targetId: "scene_state",
+          content: "不能改历史",
+        })
+      ).status,
+    ).toBe(409);
+    await value(endpoint, "POST", { action: "cancel" });
+  });
+  it("repeats clarification with full submitted answers and skipped questions, waits on an empty batch and retains the main draft", async () => {
+    controls.mode = "clarify-loop";
+    const p = {
+      ...pluginDefaults("clarify"),
+      clarifyLoop: true,
+      prompt: "[PLUGIN_TEST_clarify]\n" + pluginDefaults("clarify").prompt,
+    };
+    await value("/settings", "PUT", { ...settings, plugins: [p] });
+    const chat = await value<Chat>("/chats", "POST", {}),
+      endpoint = "/chats/" + chat.id + "/plugins";
+    await value("/chats/" + chat.id, "PATCH", { title: "repeat fixture" });
+    await value(endpoint, "POST", {
+      action: "configure",
+      plugins: [{ id: p.id, enabled: true }],
+    });
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "继续当前情节",
+      debugPlugins: true,
+    });
+    type S = { pluginState: PluginState; pluginJob: unknown; chat: Chat };
+    const wait = async () => {
+      for (let n = 0; n < 160; n++) {
+        const s = await value<S>("/chats/" + chat.id);
+        if (!s.pluginJob && s.pluginState.runs.at(-1)?.status === "waiting")
+          return s;
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      throw Error("repeat timeout");
+    };
+    let s = await wait(),
+      first = s.pluginState.runs.at(-1)!;
+    await value("/chats/" + chat.id + "/draft", "PUT", { draft: "主草稿保留" });
+    controls.mode = "normal"; // The model repeats the same question; the server must suppress it without another model call.
+    await value(endpoint, "POST", {
+      action: "answer",
+      runId: first.id,
+      selections: {},
+      content: "我的自由回答",
+    });
+    s = await wait();
+    const last = s.pluginState.runs.at(-1)!;
+    expect(last.id).not.toBe(first.id);
+    expect(JSON.parse(last.output).questions).toEqual([]);
+    expect(s.pluginState.flows[0]!.status).toBe("waiting");
+    expect(s.chat.draft).toBe("主草稿保留");
+    const snapshot = await value<{
+      messages: { role: string; content: string }[];
+    }>(endpoint, "POST", { action: "request", runId: last.id });
+    expect(
+      snapshot.messages.some(
+        (m) =>
+          m.role === "tool" &&
+          m.content.includes("本题跳过，不再追问") &&
+          m.content.includes("我的自由回答"),
+      ),
+    ).toBe(true);
+    await value(endpoint, "POST", {
+      action: "finish-clarify",
+      runId: last.id,
+      content: "最后补充",
+    });
+    s = await value<S>("/chats/" + chat.id);
+    expect(s.pluginState.flows[0]!.status).toBe("debug");
+    await value(endpoint, "POST", { action: "cancel" });
+    controls.mode = "normal";
   });
   it("runs ordered independent plugins, awaits clarification once, injects tool results and generates suggestions", async () => {
     controls.mode = "normal";
@@ -1769,6 +2219,15 @@ describe("workerd HTTP + D1 + Workflows", () => {
           (r) => r.plugin.kind === "analysis" && r.status === "waiting",
         ),
     );
+    const replacement = s.pluginState.runs.findLast(
+      (r) => r.plugin.kind === "analysis" && r.status === "candidate",
+    )!;
+    expect(replacement).toBeTruthy();
+    await value("/chats/" + chat.id + "/plugins", "POST", {
+      action: "replace",
+      runId: replacement.id,
+    });
+    s = await value<Snapshot>("/chats/" + chat.id);
     expect(upstreamCalls.length - before).toBe(3);
     expect(
       s.pluginState.runs.filter((r) => r.plugin.kind === "clarify"),
@@ -1807,9 +2266,13 @@ describe("workerd HTTP + D1 + Workflows", () => {
     }[];
     expect(analysis.filter((m) => m.role === "tool")).toHaveLength(1);
     expect(JSON.stringify(analysis)).toContain("轻松幽默");
-    expect(JSON.stringify(analysis)).toContain(
-      question.output.replaceAll("\n", "\\n"),
-    );
+    expect(
+      analysis.some(
+        (m) =>
+          m.role === "tool" &&
+          m.content.includes(JSON.stringify(question.output)),
+      ),
+    ).toBe(true);
     const main = upstreamCalls[before + 3]!.messages as {
       role: string;
       content: string;
@@ -2295,9 +2758,13 @@ describe("workerd HTTP + D1 + Workflows", () => {
     });
     expect(analysisRequest.messages.some((m) => m.role === "tool")).toBe(true);
     expect(JSON.stringify(analysisRequest.messages)).toContain("旧偏好");
-    expect(JSON.stringify(analysisRequest.messages)).toContain(
-      originalRun.output.replaceAll("\n", "\\n"),
-    );
+    expect(
+      analysisRequest.messages.some(
+        (m) =>
+          m.role === "tool" &&
+          m.content.includes(JSON.stringify(originalRun.output)),
+      ),
+    ).toBe(true);
     expect(JSON.stringify(upstreamCalls.at(-1)?.messages)).toContain("旧偏好");
     expect(
       (upstreamCalls.at(-1)?.messages as { role: string }[]).some(
@@ -2362,7 +2829,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     );
     expect(
       s.pluginState.runs.find((r) => r.id === originalRun.id)?.answer,
-    ).toBe("旧偏好");
+    ).toContain("旧偏好");
     expect(
       s.pluginState.runs.findLast((r) => r.status === "answered")?.answer,
     ).toBe("新的偏好");

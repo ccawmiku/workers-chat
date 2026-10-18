@@ -279,7 +279,7 @@ for (const mobile of [false, true])
       .getByRole("button", { name: "从这里 Fork", exact: true })
       .click();
     await expect(page.locator(".header-title")).toHaveText(
-      /^定位和编辑验证 · 分支[A-Z]+$/,
+      /^定位和编辑验证 · 分支\d{2,}$/,
     );
     await expect.poll(() => atBottom(page)).toBeLessThan(2);
     if (mobile)

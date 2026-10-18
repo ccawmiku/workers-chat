@@ -1,3 +1,9 @@
+import {
+  AnalysisSections,
+  QuestionSections,
+  type PluginInputRequest,
+} from "./plugin-sections-ui";
+import { questionView, type AnalysisType } from "../shared/plugin-sections";
 import { UsageBar } from "./usage-bar";
 import {
   GlobalSummarySettings,
@@ -16,7 +22,6 @@ import {
   Copy,
   Trash2,
   X,
-  Play,
   RotateCcw,
   Check,
   SkipForward,
@@ -168,6 +173,7 @@ export function PluginEditor({
       wide
     >
       <form
+        className="sticky-settings-form"
         onSubmit={(e) => {
           e.preventDefault();
           setSaving(true);
@@ -178,264 +184,354 @@ export function PluginEditor({
             .finally(() => setSaving(false));
         }}
       >
-        <p className="muted">
-          {local
-            ? "只覆盖当前聊天。已经运行的结果保留当时配置。"
-            : "新聊天默认关闭插件；在发送框左下角启用。"}
-        </p>
-        <fieldset className="du-fieldset plugin-editor-section">
-          <legend className="du-fieldset-legend">基本设置</legend>
-          <div className="plugin-fields">
-            <label>
-              名称
-              <input
-                className="du-input"
-                aria-label="插件名称"
-                value={p.name}
-                onChange={(e) => update({ name: e.target.value })}
-              />
-            </label>
-            <label>
-              卡片标题
-              <input
-                className="du-input"
-                aria-label="插件卡片标题"
-                value={p.cardTitle}
-                onChange={(e) => update({ cardTitle: e.target.value })}
-              />
-            </label>
-            <label>
-              模型
-              <select
-                className="du-select"
-                aria-label="插件模型"
-                value={p.model ? JSON.stringify(p.model) : ""}
-                onChange={(e) =>
-                  update({
-                    model: e.target.value ? JSON.parse(e.target.value) : null,
-                  })
-                }
-              >
-                <option value="">跟随主聊天模型</option>
-                {providers.flatMap((provider) =>
-                  provider.models.map((model) => (
-                    <option
-                      key={provider.id + model.id}
-                      value={JSON.stringify({
-                        providerId: provider.id,
-                        modelId: model.id,
-                      })}
-                    >
-                      {provider.prefix + model.id} · {provider.name}
-                    </option>
-                  )),
-                )}
-              </select>
-            </label>
-            <label>
-              思考强度
-              <select
-                className="du-select"
-                aria-label="插件思考强度"
-                value={p.effort}
-                onChange={(e) =>
-                  update({
-                    effort: e.target.value as PluginDefinition["effort"],
-                  })
-                }
-              >
-                {[
-                  ["inherit", "跟随接口"],
-                  ["none", "无"],
-                  ["low", "低"],
-                  ["medium", "中"],
-                  ["high", "高"],
-                  ["max", "最高"],
-                ].map(([v, label]) => (
-                  <option value={v} key={v}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </fieldset>
-        <fieldset className="du-fieldset plugin-editor-section">
-          <legend className="du-fieldset-legend">任务指令</legend>
-          <label>
-            {p.kind === "suggest" || p.kind === "rewrite"
-              ? "独立 system 提示词（可选）"
-              : "任务提示词"}
-            <textarea
-              className="du-textarea"
-              aria-label="插件任务提示词"
-              rows={7}
-              value={p.prompt}
-              onChange={(e) => update({ prompt: e.target.value })}
-            />
-          </label>
-          <small>
-            {
-              "支持 {{USER_INPUT}} 和 {{COUNT}}。当前请求、示例与参考由上下文组装器分别追加。"
-            }
-          </small>
-          {(p.kind === "rewrite" || p.kind === "suggest") && (
-            <>
-              <div className="du-alert" role="note">
-                历史 UA 对调，保留当前分支全部文字，不继承主聊天
-                system。此处留空则不发送 system；末尾自动附加简短任务与 JSON
-                格式要求。
-              </div>
-              <label>
-                开头 user（U0）
-                <textarea
-                  className="du-textarea"
-                  aria-label="开头 user（U0）"
-                  rows={2}
-                  value={p.initialUser ?? "好的"}
-                  required
-                  onChange={(e) => update({ initialUser: e.target.value })}
-                />
-              </label>
-              <small>
-                始终保留，默认“好的”，不能为空；只改变插件请求，不写入聊天。
-              </small>
-            </>
-          )}
-        </fieldset>
-        <fieldset className="du-fieldset plugin-editor-section">
-          <legend className="du-fieldset-legend">上下文与输出</legend>
+        <div className="settings-form-scroll">
           <p className="muted">
-            前置插件使用摘要历史与近期原文；追问和重写保留各自的 UA 对调规则。
+            {local
+              ? "只覆盖当前聊天。已经运行的结果保留当时配置。"
+              : "新聊天默认关闭插件；在发送框左下角启用。"}
           </p>
-          {(p.kind === "analysis" || p.kind === "clarify") && (
-            <>
-              <label className="plugin-stream-toggle">
-                <span>流式输出</span>
-                <input
-                  className="du-toggle du-toggle-primary du-toggle-sm"
-                  type="checkbox"
-                  aria-label="插件流式输出"
-                  checked={p.stream !== false}
-                  onChange={(e) => update({ stream: e.target.checked })}
-                />
-              </label>
-              <label>
-                独立 system（可选）
-                <textarea
-                  className="du-textarea"
-                  aria-label="插件独立 system"
-                  value={p.system}
-                  rows={3}
-                  onChange={(e) => update({ system: e.target.value })}
-                />
-              </label>
-              <label>
-                最近原始 UA 轮数
-                <input
-                  className="du-input du-input-sm"
-                  type="number"
-                  min={0}
-                  step={1}
-                  aria-label="最近原始 UA 轮数"
-                  value={p.rawRounds}
-                  onChange={(e) =>
-                    update({ rawRounds: Number(e.target.value) })
-                  }
-                />
-              </label>
-              <small>
-                所有 U 与 A 摘要固定保留；尾部补充最近 N
-                轮原话。缺摘要回退全文。仅使用 Tool Call 注入。
-              </small>
-              <label>
-                注入模板
-                <textarea
-                  className="du-textarea"
-                  aria-label="插件注入模板"
-                  rows={3}
-                  value={p.injectionTemplate}
-                  onChange={(e) =>
-                    update({ injectionTemplate: e.target.value })
-                  }
-                />
-              </label>
-              <small>
-                {p.kind === "clarify" &&
-                  "提问和回答用于后续 JSON 分析与主回复；通过 Tool Call 传递。"}
-                {
-                  "支持 {{RESULT}}、{{PLUGIN_NAME}}、{{USER_INPUT}}。不改变保存的正文。"
-                }
-              </small>
-              <label>
-                固定示例（可选）
-                <textarea
-                  className="du-textarea"
-                  aria-label="插件固定示例"
-                  rows={4}
-                  value={p.example}
-                  onChange={(e) => update({ example: e.target.value })}
-                />
-              </label>
-            </>
-          )}
           {p.kind === "analysis" && (
             <>
               <label>
-                JSON Schema
-                <textarea
-                  className="du-textarea code-input"
-                  aria-label="插件 JSON Schema"
-                  rows={8}
-                  value={p.schema}
-                  onChange={(e) => update({ schema: e.target.value })}
+                主角 / 排除角色（可选）
+                <input
+                  className="du-input"
+                  aria-label="主角或排除角色"
+                  value={p.excludedCharacters ?? ""}
+                  onChange={(e) =>
+                    update({ excludedCharacters: e.target.value })
+                  }
                 />
+                <small>
+                  不生成主角或“你”的第一人称想法；填写名称可明确排除角色。
+                </small>
               </label>
+              {!!p.analysisTypes?.length && (
+                <details>
+                  <summary>已保存类型（手动添加，不自动生成）</summary>
+                  {p.analysisTypes.map((t) => (
+                    <div key={t.id} className="saved-analysis-type">
+                      <label>
+                        类型名称
+                        <input
+                          className="du-input du-input-sm"
+                          value={t.type}
+                          onChange={(e) =>
+                            update({
+                              analysisTypes: p.analysisTypes!.map((v) =>
+                                v.id === t.id
+                                  ? { ...v, type: e.target.value }
+                                  : v,
+                              ),
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        通用规则
+                        <textarea
+                          className="du-textarea"
+                          value={t.instruction}
+                          onChange={(e) =>
+                            update({
+                              analysisTypes: p.analysisTypes!.map((v) =>
+                                v.id === t.id
+                                  ? { ...v, instruction: e.target.value }
+                                  : v,
+                              ),
+                            })
+                          }
+                        />
+                      </label>
+                      <button
+                        className="du-btn du-btn-xs"
+                        type="button"
+                        onClick={() =>
+                          update({
+                            analysisTypes: p.analysisTypes!.filter(
+                              (v) => v.id !== t.id,
+                            ),
+                          })
+                        }
+                      >
+                        移除保存的定义（保留本轮结果）
+                      </button>
+                    </div>
+                  ))}
+                </details>
+              )}
             </>
           )}
-          {p.kind === "suggest" && (
-            <div className="plugin-fields">
-              {number("suggestions", "候选条数", 1)}
-            </div>
-          )}
-          {p.kind === "rewrite" && (
-            <small>
-              固定生成 prompt1、prompt2、prompt3
-              三个独立候选；单选一个后确认替换。
-            </small>
-          )}
-        </fieldset>
-        <details className="du-collapse du-collapse-arrow">
-          <summary className="du-collapse-title">生成参数</summary>
-          <div className="du-collapse-content">
-            {(["temperature", "top_p", "top_k"] as const).map((key) => (
-              <ParameterControl
-                key={key}
-                name={
-                  key === "temperature"
-                    ? "温度"
-                    : key === "top_p"
-                      ? "Top P"
-                      : "Top K"
-                }
-                value={p.parameters[key]}
-                max={key === "temperature" ? 2 : key === "top_p" ? 1 : 100000}
-                step={key === "top_k" ? 1 : 0.05}
-                onChange={(value) => {
-                  const next = { ...p.parameters };
-                  if (value === undefined) delete next[key];
-                  else next[key] = value;
-                  update({ parameters: next });
-                }}
+          {p.kind === "clarify" && (
+            <label className="plugin-stream-toggle">
+              反复问
+              <input
+                className="du-toggle du-toggle-sm"
+                type="checkbox"
+                aria-label="反复问"
+                checked={p.clarifyLoop === true}
+                onChange={(e) => update({ clarifyLoop: e.target.checked })}
               />
-            ))}
-          </div>
-        </details>
-        {error && (
-          <p className="du-alert du-alert-error" role="alert">
-            {error}
-          </p>
-        )}
+              <small>
+                提交回答后再检查是否还有必要的问题，没有新问题时等待确认继续。
+              </small>
+            </label>
+          )}
+          <fieldset className="du-fieldset plugin-editor-section">
+            <legend className="du-fieldset-legend">基本设置</legend>
+            <div className="plugin-fields">
+              <label>
+                名称
+                <input
+                  className="du-input"
+                  aria-label="插件名称"
+                  value={p.name}
+                  onChange={(e) => update({ name: e.target.value })}
+                />
+              </label>
+              <label>
+                卡片标题
+                <input
+                  className="du-input"
+                  aria-label="插件卡片标题"
+                  value={p.cardTitle}
+                  onChange={(e) => update({ cardTitle: e.target.value })}
+                />
+              </label>
+              <label>
+                模型
+                <select
+                  className="du-select"
+                  aria-label="插件模型"
+                  value={p.model ? JSON.stringify(p.model) : ""}
+                  onChange={(e) =>
+                    update({
+                      model: e.target.value ? JSON.parse(e.target.value) : null,
+                    })
+                  }
+                >
+                  <option value="">跟随主聊天模型</option>
+                  {providers.flatMap((provider) =>
+                    provider.models.map((model) => (
+                      <option
+                        key={provider.id + model.id}
+                        value={JSON.stringify({
+                          providerId: provider.id,
+                          modelId: model.id,
+                        })}
+                      >
+                        {provider.prefix + model.id} · {provider.name}
+                      </option>
+                    )),
+                  )}
+                </select>
+              </label>
+              <label>
+                思考强度
+                <select
+                  className="du-select"
+                  aria-label="插件思考强度"
+                  value={p.effort}
+                  onChange={(e) =>
+                    update({
+                      effort: e.target.value as PluginDefinition["effort"],
+                    })
+                  }
+                >
+                  {[
+                    ["inherit", "跟随接口"],
+                    ["none", "无"],
+                    ["low", "低"],
+                    ["medium", "中"],
+                    ["high", "高"],
+                    ["max", "最高"],
+                  ].map(([v, label]) => (
+                    <option value={v} key={v}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </fieldset>
+          <fieldset className="du-fieldset plugin-editor-section">
+            <legend className="du-fieldset-legend">任务指令</legend>
+            <label>
+              {p.kind === "suggest" || p.kind === "rewrite"
+                ? "独立 system 提示词（可选）"
+                : "任务提示词"}
+              <textarea
+                className="du-textarea"
+                aria-label="插件任务提示词"
+                rows={7}
+                value={p.prompt}
+                onChange={(e) => update({ prompt: e.target.value })}
+              />
+            </label>
+            <small>
+              {
+                "支持 {{USER_INPUT}} 和 {{COUNT}}。当前请求、示例与参考由上下文组装器分别追加。"
+              }
+            </small>
+            {(p.kind === "rewrite" || p.kind === "suggest") && (
+              <>
+                <div className="du-alert" role="note">
+                  历史 UA 对调，保留当前分支全部文字，不继承主聊天
+                  system。原回复优先使用摘要，缺失时取前 300
+                  字。此处留空则不发送 system；末尾自动附加简短任务与 JSON
+                  格式要求。
+                </div>
+                <label>
+                  开头 user（U0）
+                  <textarea
+                    className="du-textarea"
+                    aria-label="开头 user（U0）"
+                    rows={2}
+                    value={p.initialUser ?? "好的"}
+                    required
+                    onChange={(e) => update({ initialUser: e.target.value })}
+                  />
+                </label>
+                <small>
+                  始终保留，默认“好的”，不能为空；只改变插件请求，不写入聊天。
+                </small>
+              </>
+            )}
+          </fieldset>
+          <fieldset className="du-fieldset plugin-editor-section">
+            <legend className="du-fieldset-legend">上下文与输出</legend>
+            <p className="muted">
+              前置插件使用摘要历史与近期原文；追问和重写保留各自的 UA 对调规则。
+            </p>
+            {(p.kind === "analysis" || p.kind === "clarify") && (
+              <>
+                <label className="plugin-stream-toggle">
+                  <span>流式输出</span>
+                  <input
+                    className="du-toggle du-toggle-primary du-toggle-sm"
+                    type="checkbox"
+                    aria-label="插件流式输出"
+                    checked={p.stream !== false}
+                    onChange={(e) => update({ stream: e.target.checked })}
+                  />
+                </label>
+                <label>
+                  独立 system（可选）
+                  <textarea
+                    className="du-textarea"
+                    aria-label="插件独立 system"
+                    value={p.system}
+                    rows={3}
+                    onChange={(e) => update({ system: e.target.value })}
+                  />
+                </label>
+                <label>
+                  最近原始 UA 轮数
+                  <input
+                    className="du-input du-input-sm"
+                    type="number"
+                    min={0}
+                    step={1}
+                    aria-label="最近原始 UA 轮数"
+                    value={p.rawRounds}
+                    onChange={(e) =>
+                      update({ rawRounds: Number(e.target.value) })
+                    }
+                  />
+                </label>
+                <small>
+                  所有 U 与 A 摘要固定保留；尾部补充最近 N 轮原话。缺摘要回退前
+                  300 字。仅使用 Tool Call 注入。
+                </small>
+                <label>
+                  注入模板
+                  <textarea
+                    className="du-textarea"
+                    aria-label="插件注入模板"
+                    rows={3}
+                    value={p.injectionTemplate}
+                    onChange={(e) =>
+                      update({ injectionTemplate: e.target.value })
+                    }
+                  />
+                </label>
+                <small>
+                  {p.kind === "clarify" &&
+                    "提问和回答用于后续 写前分析与主回复；通过 Tool Call 传递。"}
+                  {
+                    "支持 {{RESULT}}、{{PLUGIN_NAME}}、{{USER_INPUT}}。不改变保存的正文。"
+                  }
+                </small>
+                <label>
+                  固定示例（可选）
+                  <textarea
+                    className="du-textarea"
+                    aria-label="插件固定示例"
+                    rows={4}
+                    value={p.example}
+                    onChange={(e) => update({ example: e.target.value })}
+                  />
+                </label>
+              </>
+            )}
+            {p.kind === "analysis" && (
+              <>
+                <label>
+                  JSON Schema
+                  <textarea
+                    className="du-textarea code-input"
+                    aria-label="插件 JSON Schema"
+                    rows={8}
+                    value={p.schema}
+                    onChange={(e) => update({ schema: e.target.value })}
+                  />
+                </label>
+              </>
+            )}
+            {p.kind === "suggest" && (
+              <div className="plugin-fields">
+                {number("suggestions", "候选条数", 1)}
+              </div>
+            )}
+            {p.kind === "rewrite" && (
+              <small>
+                固定生成 prompt1、prompt2、prompt3
+                三个独立候选；单选一个后确认替换。
+              </small>
+            )}
+          </fieldset>
+          <details className="du-collapse du-collapse-arrow">
+            <summary className="du-collapse-title">生成参数</summary>
+            <div className="du-collapse-content">
+              {(["temperature", "top_p", "top_k"] as const).map((key) => (
+                <ParameterControl
+                  key={key}
+                  name={
+                    key === "temperature"
+                      ? "温度"
+                      : key === "top_p"
+                        ? "Top P"
+                        : "Top K"
+                  }
+                  value={p.parameters[key]}
+                  max={key === "temperature" ? 2 : key === "top_p" ? 1 : 100000}
+                  step={key === "top_k" ? 1 : 0.05}
+                  onChange={(value) => {
+                    const next = { ...p.parameters };
+                    if (value === undefined) delete next[key];
+                    else next[key] = value;
+                    update({ parameters: next });
+                  }}
+                />
+              ))}
+            </div>
+          </details>
+          {error && (
+            <p className="du-alert du-alert-error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
         <footer>
           {local && onReset && (
             <button
@@ -1065,13 +1161,8 @@ export function PluginBar({
                   }
                 />
                 {cacheHitRate(usageRun?.usage?.cache_hit_rate) && (
-                  <small>
+                  <small className="plugin-chip-cache">
                     缓存 {cacheHitRate(usageRun?.usage?.cache_hit_rate)}
-                  </small>
-                )}
-                {metrics && metrics.shortened > 0 && (
-                  <small>
-                    {metrics.shortened ? `截 ${metrics.shortened} 条` : ""}
                   </small>
                 )}
               </button>
@@ -1118,7 +1209,7 @@ export function PluginBar({
                   </IconButton>
                 </div>
                 <p className="muted">
-                  提问澄清 → JSON 分析 → 主回答。追问和 user 重写独立触发。
+                  提问澄清 → 写前分析 → 主回答。追问和 user 重写独立触发。
                 </p>
                 {list.map((p) => {
                   const binding = bindings.find((b) => b.id === p.id),
@@ -1132,21 +1223,6 @@ export function PluginBar({
                         {merged.name}
                         <small>{pluginName(p.kind)}</small>
                       </span>
-                      {p.kind === "suggest" && binding?.enabled && (
-                        <IconButton
-                          label={"运行 " + p.name}
-                          disabled={busy}
-                          onClick={() => {
-                            setOpen(false);
-                            void command("suggest", {
-                              pluginId: p.id,
-                              content: draft,
-                            }).catch((e) => setError(e.message));
-                          }}
-                        >
-                          <Play size={14} />
-                        </IconButton>
-                      )}
                       <IconButton
                         label={"配置 " + p.name}
                         onClick={() => {
@@ -1243,18 +1319,35 @@ function ResultCard({
   active,
   command,
   busy,
+  state,
+  selections,
+  select,
+  input,
+  answer,
+  templates,
 }: {
   chatId: string;
   run: PluginRun;
   active: boolean;
   command: Command;
   busy: boolean;
+  state: PluginState;
+  selections: Record<string, Record<string, string[]>>;
+  select: (runId: string, id: string, values: string[]) => void;
+  input: (v: PluginInputRequest) => void;
+  answer: (run: PluginRun, finish: boolean) => void;
+  templates: (id: string) => AnalysisType[];
 }) {
   const [editing, setEditing] = useState(false),
     [value, setValue] = useState(""),
     [error, setError] = useState(""),
     [saving, setSaving] = useState(false);
   const [context, setContext] = useState(false);
+  const [loop, setLoop] = useState(run.plugin.clarifyLoop === true);
+  useEffect(
+    () => setLoop(run.plugin.clarifyLoop === true),
+    [run.plugin.clarifyLoop],
+  );
   const act = async (action: string, body: Record<string, unknown> = {}) => {
     setError("");
     setSaving(true);
@@ -1317,9 +1410,66 @@ function ResultCard({
       </summary>
       <div className="plugin-result-body du-collapse-content">
         {question ? (
-          <PluginMarkdown>{run.output || "正在生成…"}</PluginMarkdown>
+          <QuestionSections
+            run={run}
+            selections={selections[run.id] ?? {}}
+            select={(id, values) => select(run.id, id, values)}
+            enabled={active && run.status === "waiting" && !busy}
+          />
         ) : (
-          <pre className="plugin-output">{run.output || "正在生成…"}</pre>
+          <AnalysisSections
+            run={run}
+            state={state}
+            command={command}
+            busy={busy || saving}
+            enabled={active && run.status === "waiting"}
+            input={input}
+            templates={templates(run.plugin.id)}
+          />
+        )}
+        {question && active && run.status === "waiting" && (
+          <div className="plugin-card-actions">
+            <label className="section-save-choice">
+              <input
+                className="du-toggle du-toggle-sm"
+                aria-label="反复问"
+                type="checkbox"
+                checked={loop}
+                disabled={busy || saving}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  setLoop(enabled);
+                  setSaving(true);
+                  void command("clarify-loop", { runId: run.id, enabled })
+                    .catch((e) => {
+                      setLoop(!enabled);
+                      setError(e.message);
+                    })
+                    .finally(() => setSaving(false));
+                }}
+              />
+              反复问
+            </label>
+            <button
+              className="du-btn du-btn-primary du-btn-sm"
+              disabled={busy || saving}
+              onClick={() => answer(run, false)}
+            >
+              {questionView(run.output)?.length === 0
+                ? "继续写前分析"
+                : "提交回答"}
+            </button>
+            {run.plugin.clarifyLoop &&
+              questionView(run.output)?.length !== 0 && (
+                <button
+                  className="du-btn du-btn-sm"
+                  disabled={busy || saving}
+                  onClick={() => answer(run, true)}
+                >
+                  结束追问并继续
+                </button>
+              )}
+          </div>
         )}
         {run.answer !== undefined && (
           <div className="plugin-answer">
@@ -1350,7 +1500,7 @@ function ResultCard({
                 }
               >
                 <RotateCcw size={14} />
-                {question ? "重新生成问题" : "重新生成 JSON"}
+                {question ? "重新生成问题" : "全部重新生成"}
               </button>
               <button
                 className="du-btn du-btn-sm"
@@ -1370,7 +1520,7 @@ function ResultCard({
                 onClick={() => void act("replace").catch(() => {})}
               >
                 <Check size={14} />
-                替换原问题
+                确认替换结果
               </button>
               <button
                 className="du-btn du-btn-sm"
@@ -1402,20 +1552,22 @@ function ResultCard({
               </button>
             </>
           )}
-          {run.plugin.kind === "analysis" && run.status !== "running" && (
-            <button
-              className="du-btn du-btn-sm"
-              disabled={busy}
-              onClick={() => {
-                setValue(run.output);
-                setError("");
-                setEditing(true);
-              }}
-            >
-              <Pencil size={14} />
-              编辑 JSON
-            </button>
-          )}
+          {run.plugin.kind === "analysis" &&
+            run.status === "waiting" &&
+            active && (
+              <button
+                className="du-btn du-btn-sm"
+                disabled={busy}
+                onClick={() => {
+                  setValue(run.output);
+                  setError("");
+                  setEditing(true);
+                }}
+              >
+                <Pencil size={14} />
+                编辑 JSON
+              </button>
+            )}
           {run.plugin.kind === "analysis" &&
             run.status === "waiting" &&
             active && (
@@ -1428,7 +1580,7 @@ function ResultCard({
                 确认并继续
               </button>
             )}
-          {run.status === "answered" && (
+          {false && run.status === "answered" && (
             <button
               className="du-btn du-btn-sm"
               disabled={busy}
@@ -1522,6 +1674,11 @@ export function PluginTurnCards({
   activeUserId,
   command,
   busy,
+  selections,
+  select,
+  input,
+  answer,
+  templates,
 }: {
   chatId: string;
   userId: string;
@@ -1529,11 +1686,17 @@ export function PluginTurnCards({
   activeUserId?: string;
   command: Command;
   busy: boolean;
+  selections: Record<string, Record<string, string[]>>;
+  select: (runId: string, id: string, values: string[]) => void;
+  input: (v: PluginInputRequest) => void;
+  answer: (run: PluginRun, finish: boolean) => void;
+  templates: (id: string) => AnalysisType[];
 }) {
   const runs = state.runs.filter(
     (r) =>
       r.anchorId === userId &&
       !r.dismissed &&
+      !r.sectionEdit &&
       ["analysis", "clarify"].includes(r.plugin.kind) &&
       r.status !== "superseded",
   );
@@ -1547,6 +1710,12 @@ export function PluginTurnCards({
           active={userId === activeUserId}
           command={command}
           busy={busy}
+          state={state}
+          selections={selections}
+          select={select}
+          input={input}
+          answer={answer}
+          templates={templates}
         />
       ))}
     </div>

@@ -30,3 +30,6 @@ __pycache__/
 *.pyc
 
 .cloudflare/
+
+# Generated visual test artifacts
+docs/screenshots/

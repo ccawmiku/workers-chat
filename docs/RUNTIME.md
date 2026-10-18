@@ -41,3 +41,34 @@
 ## 设备直连（2026-10-16）
 
 设备模式不启动生成 Workflow；Worker 只建立任务和无密钥请求描述，浏览器临时解锁 Key 后直接通过 HTTPS/CORS 调用上游。每约 2 秒更新 DO 检查点，最终正文与任务状态仍原子保存至 D1。生成 90 秒无心跳在状态读取时转为中断，不重放上游请求。关闭页面不保证继续生成，原服务端模式继续承担该能力。标题也使用原子 claim 和 attempted 防止刷新重复调用。模型列表和连通性测试在直连开关开启时同样由浏览器发出。CSP 允许 HTTPS 连接，fetch 仍拒绝 HTTP、URL 凭证、重定向，并不携带站点 Cookie。
+
+
+## 2026-10-18 DO 驻留优化
+
+重新使用官方 Workers、Durable Objects（含 rules/testing）与 cf-cli skills，核对 [DO 生命周期](https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/)：未清理的计时器会阻止休眠，并可能让对象闲置驻留至 15 分钟。已完成任务不能仅丢弃 AbortSignal.timeout 的引用来假定超时已取消。
+
+原主回复/插件/摘要使用 AbortSignal.any + 30 分钟 AbortSignal.timeout；改为共用 generationDeadline：显式计时器驱动原取消控制器，成功/失败/停止的 finally 均 clearTimeout、移除监听器并中止遗留上游 I/O。标题同样清理 120 秒超时。保留任务运行中的超时、2 秒流式检查点、独立 Workflow/DO 后台执行及 attempted 防重放；不增加轮询、自动重试或模型请求。单测检查三条退出路径、超时边界和已取消控制器不残留计时器，workerd 集成继续验证 >30 秒后台保存和停止。
+
+历史分析：北京时间 10 月 17 日 08:00 至 18 日 08:00，DO 总时长约 14,620.54 GB·s，CPU 仅约 7.80 秒；112 个对象集中驻留 900–910 秒。超过 15 分钟的对象占约 89.8% 时长，优先排查计时器而非请求量或数据库写入。统计是问题窗口实测；未来节省量仍需用发布后的同负载时长验证，不能把历史占比直接当作已实现节省率。
+
+
+生产修复验证（2026-10-18，CF a79998a6-8cc9-45d4-9f6a-0ee9b2a885fb）：真实服务端完整流程调用 Gemini 3.1 Flash Lite 8 次，包含两个历史补齐、澄清、分析、主回复、并行追问/摘要、手动重生成。模型结果与确认、网页 5 张卡片/圆形色块/色板通过 27 项断言；测试聊天及会话清理，整体设置与提供商未变。Analytics 在本批窗口记录 10 个相关对象（含两个后置调度器），合计约 3.7157 GB·s；按已记录 job 名匹配的 7 个模型任务合计 3.1886 GB·s，activeTime 分别约 1.97–4.73 秒。没有此前 900 秒驻留模式。不能用这组短任务推断长生成的持续成本或全天总降幅；历史请求仍受平台重启及免费额度限制。
+
+同日补充 D1 写入优化：重复 seen、未变化且验证通过的聊天配置 PATCH、重复相同前置插件状态不创建新的 document_versions/document_parts，不更新聊天排序时间。配置比较仅处理传入字段，避免为判等再次序列化整棵消息树；显式重命名即使文字相同仍更新 titleRevision，继续保护人工名称不被运行中自动标题覆盖。真正改文/换设置仍采用原完整不可变快照，这里没有引入新的消息存储架构。
+
+
+最终生产生命周期补验：关闭浏览器 35 秒后真实任务仍在运行，44.32 秒后 4,761 字符和末尾标记完整保存，并自动生成已采用摘要。这验证了可清理超时仍允许服务端任务独立于页面存活；该证据来自真实上游，不是本地延迟 mock。首个快速模型样本不足 30 秒，没有计作此项通过。
+
+## 全账号额度面板（2026-10-18）
+
+设置“账号额度”和聊天侧栏底部共用同一份账号级数据，固定查询 Workers、SQLite DO、D1、Workflows；不按本站脚本、命名空间或数据库筛选。来源为 Cloudflare 官方 GraphQL Analytics，因为这些消费量跨多个资源，不能用单个数据库的 REST 元数据当作全账号账单。服务端固定查询，不接收客户端任意 GraphQL。
+
+- 数据随已有 bootstrap/navigation 返回，没有新增自动轮询。Cache API 保存 5 分钟软缓存，不写 D1/DO；手动刷新最快每分钟一次，页面也拦截重复点击。失败保留上次成功值，首次失败显示未知，UTC 跨日使用新缓存键。
+- 日用量与长期容量分开。CPU 显示累计时间，不与每次调用的 CPU 上限作比例。Workflows 调用共享 Workers 请求额度，单独展示启动次数，不凭未经验证的关系重复相加；step.do 参考额度为 3k/天。
+- 存储是近 24 小时各 D1 数据库 / DO 命名空间的最大样本之和，明确标为峰值，可能高于当前存储；空样本不当成零。Workflows storageRate 不是总存储，状态存储无可靠账号总量时显示“暂无数据”。没有付费升级或购买功能。
+- API 凭证仅使用 `CF_ANALYTICS_TOKEN`、`CF_ANALYTICS_ACCOUNT_ID` Worker secrets，登录后的数据不含账号 ID、Token、资源 ID 或原始 API 错误；不进入设置备份。推荐单账号 Account Analytics Read 令牌。开发初始化仅补 disabled 占位，未配置时仍可正常聊天。
+- Workers fetch 使用 `redirect: manual` 并拒绝非 2xx，8 秒超时显式清理，响应限制 1 MiB；不把凭证随重定向发到其他主机。
+
+参考：[Analytics Token 权限](https://developers.cloudflare.com/analytics/graphql-api/getting-started/authentication/api-token-auth/)、[Workers 价格](https://developers.cloudflare.com/workers/platform/pricing/)、[DO 价格](https://developers.cloudflare.com/durable-objects/platform/pricing/)、[D1 价格](https://developers.cloudflare.com/d1/platform/pricing/)、[Workflows 价格](https://developers.cloudflare.com/workflows/reference/pricing/)。界面参考免费套餐上限，不宣称统计是实时计费明细；Analytics 延迟、采样和按数据集的可用性仍适用。
+
+索引回归的构造数据证据（历史测试，非线上账单）：最新标题任务读取 2004→1 行，某聊天摘要任务读取 2003→8 行，无关联子任务文档删除的外键检查读取 8001→1 行。0006 首次建索引仍扫描现有数据并增加索引维护成本；生产已应用，后续环境先检查 migrations list。当前完整聊天仍以版本化快照保存，真实改文的长聊天写放大尚未改成增量存储。

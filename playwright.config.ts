@@ -29,6 +29,8 @@ export default defineConfig({
         "plugin-settings.spec.ts",
         "summaries.spec.ts",
         "appearance.spec.ts",
+        "account-usage.spec.ts",
+        "stream-follow.spec.ts",
         "auth-security.spec.ts",
       ],
       use: { browserName: "webkit" },

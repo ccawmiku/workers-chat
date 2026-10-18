@@ -24,6 +24,7 @@ import {
   type SummaryState,
   type SummaryRun,
   defaultSummaryConfig,
+  upgradeSummaryConfig,
   summaryConfig,
   summarySourceKey,
   prepareSummary,
@@ -56,6 +57,7 @@ export function SummaryEditor({
       wide
     >
       <form
+        className="sticky-settings-form"
         onSubmit={(e) => {
           e.preventDefault();
           setBusy(true);
@@ -65,119 +67,121 @@ export function SummaryEditor({
             .finally(() => setBusy(false));
         }}
       >
-        <p className="muted">
-          每条完整回复结束后与追问同时生成。只影响新请求；旧摘要保留，可手动重新生成。
-        </p>
-        <fieldset className="du-fieldset plugin-editor-section">
-          <legend className="du-fieldset-legend">摘要模型</legend>
-          <label>
-            模型
-            <select
-              className="du-select"
-              aria-label="摘要模型"
-              value={p.model ? JSON.stringify(p.model) : ""}
-              onChange={(e) =>
-                setP({
-                  ...p,
-                  model: e.target.value ? JSON.parse(e.target.value) : null,
-                })
-              }
-            >
-              <option value="">
-                自动：优先 Gemini 3.1 Flash Lite，否则当前模型
-              </option>
-              {providers.flatMap((v) =>
-                v.models
-                  .filter((m) => m.enabled)
-                  .map((m) => (
-                    <option
-                      key={v.id + m.id}
-                      value={JSON.stringify({
-                        providerId: v.id,
-                        modelId: m.id,
-                      })}
-                    >
-                      {v.prefix + m.id} · {v.name}
-                    </option>
-                  )),
-              )}
-            </select>
-          </label>
-          <label>
-            思考强度
-            <select
-              className="du-select"
-              aria-label="摘要思考强度"
-              value={p.effort}
-              onChange={(e) =>
-                setP({
-                  ...p,
-                  effort: e.target.value as SummaryConfig["effort"],
-                })
-              }
-            >
-              {[
-                ["inherit", "跟随接口"],
-                ["none", "无"],
-                ["low", "低"],
-                ["medium", "中"],
-                ["high", "高"],
-                ["max", "最高"],
-              ].map(([v, n]) => (
-                <option key={v} value={v}>
-                  {n}
+        <div className="settings-form-scroll">
+          <p className="muted">
+            每条完整回复结束后与追问同时生成。只影响新请求；旧摘要保留，可手动重新生成。
+          </p>
+          <fieldset className="du-fieldset plugin-editor-section">
+            <legend className="du-fieldset-legend">摘要模型</legend>
+            <label>
+              模型
+              <select
+                className="du-select"
+                aria-label="摘要模型"
+                value={p.model ? JSON.stringify(p.model) : ""}
+                onChange={(e) =>
+                  setP({
+                    ...p,
+                    model: e.target.value ? JSON.parse(e.target.value) : null,
+                  })
+                }
+              >
+                <option value="">
+                  自动：优先 Gemini 3.1 Flash Lite，否则当前模型
                 </option>
-              ))}
-            </select>
-          </label>
-          <ParameterControl
-            name="温度"
-            value={p.parameters.temperature}
-            max={2}
-            step={0.05}
-            onChange={(v) => {
-              setP((current) => {
-                const parameters = { ...current.parameters };
-                if (v === undefined) delete parameters.temperature;
-                else parameters.temperature = v;
-                return { ...current, parameters };
-              });
-            }}
-          />
-          <label className="plugin-stream-toggle">
-            流式输出
-            <input
-              className="du-toggle du-toggle-primary du-toggle-sm"
-              type="checkbox"
-              aria-label="摘要流式输出"
-              checked={p.stream}
-              onChange={(e) => {
-                const stream = e.target.checked;
-                setP((current) => ({ ...current, stream }));
+                {providers.flatMap((v) =>
+                  v.models
+                    .filter((m) => m.enabled)
+                    .map((m) => (
+                      <option
+                        key={v.id + m.id}
+                        value={JSON.stringify({
+                          providerId: v.id,
+                          modelId: m.id,
+                        })}
+                      >
+                        {v.prefix + m.id} · {v.name}
+                      </option>
+                    )),
+                )}
+              </select>
+            </label>
+            <label>
+              思考强度
+              <select
+                className="du-select"
+                aria-label="摘要思考强度"
+                value={p.effort}
+                onChange={(e) =>
+                  setP({
+                    ...p,
+                    effort: e.target.value as SummaryConfig["effort"],
+                  })
+                }
+              >
+                {[
+                  ["inherit", "跟随接口"],
+                  ["none", "无"],
+                  ["low", "低"],
+                  ["medium", "中"],
+                  ["high", "高"],
+                  ["max", "最高"],
+                ].map(([v, n]) => (
+                  <option key={v} value={v}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <ParameterControl
+              name="温度"
+              value={p.parameters.temperature}
+              max={2}
+              step={0.05}
+              onChange={(v) => {
+                setP((current) => {
+                  const parameters = { ...current.parameters };
+                  if (v === undefined) delete parameters.temperature;
+                  else parameters.temperature = v;
+                  return { ...current, parameters };
+                });
               }}
             />
+            <label className="plugin-stream-toggle">
+              流式输出
+              <input
+                className="du-toggle du-toggle-primary du-toggle-sm"
+                type="checkbox"
+                aria-label="摘要流式输出"
+                checked={p.stream}
+                onChange={(e) => {
+                  const stream = e.target.checked;
+                  setP((current) => ({ ...current, stream }));
+                }}
+              />
+            </label>
+          </fieldset>
+          <label>
+            摘要 system
+            <textarea
+              className="du-textarea"
+              rows={9}
+              aria-label="摘要 system"
+              value={p.system}
+              onChange={(e) => setP({ ...p, system: e.target.value })}
+            />
           </label>
-        </fieldset>
-        <label>
-          摘要 system
-          <textarea
-            className="du-textarea"
-            rows={9}
-            aria-label="摘要 system"
-            value={p.system}
-            onChange={(e) => setP({ ...p, system: e.target.value })}
-          />
-        </label>
-        <div className="du-alert" role="note">
-          输出格式固定为 {`{"summary":"摘要文字"}`}；50–100
-          字是目标，超出仅提示，不截断或自动重试。历史 user 最多 500
-          字符，上一轮范例正文最多 2500 字符，均取首尾；本轮 U/A 完整。
+          <div className="du-alert" role="note">
+            输出格式固定为 {`{"summary":"摘要文字"}`}；100–150
+            字是目标，超出仅提示，不截断或自动重试。历史 user 最多 500
+            字符，上一轮范例正文最多 2500 字符，均取首尾；本轮 U/A 完整。
+          </div>
+          {error && (
+            <p className="du-alert du-alert-error" role="alert">
+              {error}
+            </p>
+          )}
         </div>
-        {error && (
-          <p className="du-alert du-alert-error" role="alert">
-            {error}
-          </p>
-        )}
         <footer>
           {reset && (
             <button
@@ -227,7 +231,10 @@ export function GlobalSummarySettings({
       </div>
       {open && (
         <SummaryEditor
-          value={{ ...defaultSummaryConfig(), ...settings.replySummary }}
+          value={{
+            ...defaultSummaryConfig(),
+            ...upgradeSummaryConfig(settings.replySummary ?? {}),
+          }}
           providers={providers}
           close={() => setOpen(false)}
           save={async (replySummary) => save({ ...settings, replySummary })}
@@ -240,7 +247,6 @@ function Usage({ run }: { run: SummaryRun }) {
   return (
     <div className="plugin-usage">
       <MessageUsage
-        showBar
         message={{
           id: run.id,
           parentId: null,
@@ -612,7 +618,9 @@ export function SummaryContextChip({
           }
         />
         {cacheHitRate(run?.usage?.cache_hit_rate) && (
-          <small>缓存 {cacheHitRate(run?.usage?.cache_hit_rate)}</small>
+          <small className="plugin-chip-cache">
+            缓存 {cacheHitRate(run?.usage?.cache_hit_rate)}
+          </small>
         )}
       </button>
       {open && (
@@ -679,7 +687,8 @@ export function ConfirmPostSend({
   return (
     <Dialog title="仍有摘要或追问正在生成" close={cancel}>
       <p>
-        继续发送下一条消息？原任务会继续，结果仍显示在原回复下；缺摘要时本次请求使用原回复全文。
+        继续发送下一条消息？原任务会继续，结果仍显示在原回复下；缺摘要时本次请求使用原回复前
+        300 字。
       </p>
       <footer>
         <button className="du-btn du-btn-ghost" onClick={cancel}>

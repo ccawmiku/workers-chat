@@ -52,7 +52,7 @@ for (const mobile of [false, true])
       ink: "#0d0d0d",
       accent: "#f077af",
     });
-    await page.locator(".accent-picker summary").click();
+    await page.locator(".accent-picker > summary").click();
     await page.getByRole("button", { name: "蓝色", exact: true }).click();
     expect(await colors()).toMatchObject({
       accent: "#4169e1",
@@ -64,11 +64,24 @@ for (const mobile of [false, true])
       ink: "#ededed",
       accent: "#4169e1",
     });
-    await page.locator(".accent-picker summary").click();
+    await page.locator(".accent-picker > summary").click();
+    await page.getByLabel("自定义强调色选择器", { exact: true }).click();
     await page.getByLabel("自定义强调色", { exact: true }).fill("#22aa66");
     await page.locator(".appearance-settings h2").click();
     expect(await colors()).toMatchObject({ accent: "#22aa66" });
+    const swatches = page.locator(".appearance-row > .color-control .color-swatch");
+    for (const box of await swatches.evaluateAll(nodes => nodes.map(n => {
+      const r = n.getBoundingClientRect(); return {width:r.width,height:r.height,radius:getComputedStyle(n).borderRadius};
+    }))) {
+      expect(box.width).toBe(box.height); expect(box.radius).toBe("50%");
+    }
+    await page.getByLabel("背景颜色选择器", { exact: true }).click();
+    await expect(page.locator(".color-control[open] .react-colorful__saturation")).toBeVisible();
+    await expect(page.locator(".color-control[open] .react-colorful__hue")).toBeVisible();
     await page.getByLabel("背景颜色", { exact: true }).fill("#101010");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    await expect(page.locator(".color-control[open]")).toHaveCount(0);
     expect(await colors()).toMatchObject({ bg: "#101010" });
     if (!mobile) {
       await page.getByLabel("搜索设置").fill("模型");

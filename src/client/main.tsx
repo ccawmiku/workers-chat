@@ -1,3 +1,5 @@
+import type { PluginInputRequest } from "./plugin-sections-ui";
+import type { PluginRun } from "../shared/plugins";
 import { AccountUsageSidebar, AccountUsageSettings } from "./account-usage";
 import type { AccountUsage } from "../shared/account-usage";
 import {
@@ -269,11 +271,78 @@ function App() {
     } | null>(null),
     [groupMenu, setGroupMenu] = useState<string | null>(null),
     [scrollBottom, setScrollBottom] = useState(false);
+  const [pluginInput, setPluginInput] = useState<PluginInputRequest | null>(
+    null,
+  );
+  const inputDrafts = useRef(new Map<string, string>());
+  const [clarifyDrafts, setClarifyDrafts] = useState<Record<string, string>>(
+    {},
+  );
+  const [clarifySelections, setClarifySelections] = useState<
+    Record<string, Record<string, string[]>>
+  >({});
+  const ownedSectionCandidates = useRef(new Set<string>()),
+    discardedSectionCandidates = useRef(new Set<string>());
+  function cleanPluginState(incoming: PluginState, id: string): PluginState {
+    const abandoned = incoming.runs.filter(
+      (r) =>
+        r.sectionEdit &&
+        !ownedSectionCandidates.current.has(r.id) &&
+        ["candidate", "error", "cancelled"].includes(r.status),
+    );
+    const ids = abandoned
+      .map((r) => r.id)
+      .filter((id) => !discardedSectionCandidates.current.has(id));
+    if (ids.length) {
+      ids.forEach((id) => discardedSectionCandidates.current.add(id));
+      void api("/chats/" + id + "/plugins", "POST", {
+        action: "discard-sections",
+        runIds: ids,
+      }).catch(() => {});
+    }
+    return {
+      ...incoming,
+      runs: incoming.runs.filter(
+        (r) =>
+          !r.sectionEdit ||
+          r.status === "complete" ||
+          ownedSectionCandidates.current.has(r.id),
+      ),
+    };
+  }
+  useEffect(() => {
+    setPluginInput(null);
+    setClarifyDrafts({});
+    setClarifySelections({});
+    inputDrafts.current.clear();
+  }, [chat?.id]);
+  function requestPluginInput(value: PluginInputRequest) {
+    if (pluginInput)
+      inputDrafts.current.set(
+        pluginInput.runId + ":" + (pluginInput.body.targetId ?? "add"),
+        pluginInput.draft,
+      );
+    setPluginInput({
+      ...value,
+      draft:
+        inputDrafts.current.get(
+          value.runId + ":" + (value.body.targetId ?? "add"),
+        ) ?? value.draft,
+    });
+    textarea.current?.focus({ preventScroll: true });
+  }
   const [settingsTab, setSettingsTab] = useState("providers");
   const [quota, updateQuota] = useState<AccountUsage | null>(null);
-  const setQuota = (value: AccountUsage | null) => updateQuota(previous =>
-    previous && value && (previous.day > value.day ||
-      (previous.day === value.day && (previous.fetchedAt ?? 0) > (value.fetchedAt ?? 0))) ? previous : value);
+  const setQuota = (value: AccountUsage | null) =>
+    updateQuota((previous) =>
+      previous &&
+      value &&
+      (previous.day > value.day ||
+        (previous.day === value.day &&
+          (previous.fetchedAt ?? 0) > (value.fetchedAt ?? 0)))
+        ? previous
+        : value,
+    );
   const refreshQuota = async () => {
     if (quota && Date.now() < quota.nextRefreshAt) return;
     setQuota(await api<AccountUsage>("/account-usage?refresh=1"));
@@ -326,7 +395,13 @@ function App() {
     draftRef = useRef(""),
     scrollRef = useRef<HTMLDivElement>(null),
     stick = useRef(true),
-    scrollGesture = useRef({ upward: 0, time: 0, downward: false, touchY: 0, lastTop: 0 }),
+    scrollGesture = useRef({
+      upward: 0,
+      time: 0,
+      downward: false,
+      touchY: 0,
+      lastTop: 0,
+    }),
     textarea = useRef<HTMLTextAreaElement>(null),
     fileRef = useRef<HTMLInputElement>(null),
     [pendingImport, setPendingImport] = useState<{
@@ -409,9 +484,17 @@ function App() {
     setJob(result.job);
     setTitleJob(result.titleJob ?? null);
     setPluginState(
-      connection.pluginOverlay(result.pluginState ?? emptyPluginState()),
+      connection.pluginOverlay(
+        cleanPluginState(
+          result.pluginState ?? emptyPluginState(),
+          result.chat.id,
+        ),
+      ),
     );
-    pluginPreviewState.current = result.pluginState ?? emptyPluginState();
+    pluginPreviewState.current = cleanPluginState(
+      result.pluginState ?? emptyPluginState(),
+      result.chat.id,
+    );
     setPluginJob(result.pluginJob ?? null);
     adoptSummaries(id, result.summaryState ?? { runs: [] });
     setPostJobs(result.postJobs ?? []);
@@ -477,9 +560,17 @@ function App() {
       setJob(result.job);
       setTitleJob(result.titleJob ?? null);
       setPluginState(
-        connection.pluginOverlay(result.pluginState ?? emptyPluginState()),
+        connection.pluginOverlay(
+          cleanPluginState(
+            result.pluginState ?? emptyPluginState(),
+            result.chat.id,
+          ),
+        ),
       );
-      pluginPreviewState.current = result.pluginState ?? emptyPluginState();
+      pluginPreviewState.current = cleanPluginState(
+        result.pluginState ?? emptyPluginState(),
+        result.chat.id,
+      );
       setPluginJob(result.pluginJob ?? null);
       adoptSummaries(id, result.summaryState ?? { runs: [] });
       setPostJobs(result.postJobs ?? []);
@@ -894,11 +985,15 @@ function App() {
   }, [auth]);
   const scrollIntent = useRef<{ id?: string; offset?: number } | null>(null);
   function noteScrollGesture(delta: number) {
-    const gesture = scrollGesture.current, now = Date.now();
+    const gesture = scrollGesture.current,
+      now = Date.now();
     if (now - gesture.time > 700) gesture.upward = 0;
     gesture.time = now;
     gesture.downward = delta > 0;
-    if (delta >= 0) { gesture.upward = 0; return; }
+    if (delta >= 0) {
+      gesture.upward = 0;
+      return;
+    }
     gesture.upward += -delta;
     if (gesture.upward >= 48) {
       stick.current = false;
@@ -1046,6 +1141,37 @@ function App() {
     }
   }
   async function send(confirmedPost = false) {
+    if (pluginInput) {
+      if (
+        submitting.current ||
+        busy ||
+        job ||
+        pluginJob ||
+        !pluginInput.draft.trim()
+      )
+        return;
+      submitting.current = true;
+      setBusy(true);
+      try {
+        await pluginCommand("section-generate", {
+          runId: pluginInput.runId,
+          ...pluginInput.body,
+          content: pluginInput.draft,
+        });
+        inputDrafts.current.delete(
+          pluginInput.runId + ":" + (pluginInput.body.targetId ?? "add"),
+        );
+        setPluginInput(null);
+      } finally {
+        submitting.current = false;
+        setBusy(false);
+      }
+      return;
+    }
+    if (waitingPlugin) {
+      await answerClarification(waitingPlugin, false);
+      return;
+    }
     if (
       !selectedModel ||
       submitting.current ||
@@ -1072,11 +1198,9 @@ function App() {
       // Autosaves pause while submitting, then persist any newer input.
       await draftQueue.current.catch(() => {});
       const result = await api<GenerationStart>(
-        "/chats/" + id + (waitingPlugin ? "/plugins" : "/send"),
+        "/chats/" + id + "/send",
         "POST",
-        waitingPlugin
-          ? { action: "answer", runId: waitingPlugin.id, content: sent }
-          : { content: sent, debugPlugins, confirmPost: confirmedPost },
+        { content: sent, debugPlugins, confirmPost: confirmedPost },
       );
       acceptGeneration(result);
       if (draftVersion.current === version && idRef.current === id) {
@@ -1165,6 +1289,14 @@ function App() {
         Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
     );
   function updateDraft(value: string) {
+    if (pluginInput) {
+      setPluginInput({ ...pluginInput, draft: value });
+      return;
+    }
+    if (waitingPlugin) {
+      setClarifyDrafts((v) => ({ ...v, [waitingPlugin.id]: value }));
+      return;
+    }
     draftVersion.current++;
     setDraft(value);
     draftRef.current = value;
@@ -1178,10 +1310,50 @@ function App() {
   const waitingPlugin = pluginState.runs.findLast(
     (r) =>
       r.flowId === pluginFlow?.id &&
+      r.id === pluginFlow?.results.at(-1) &&
       r.plugin.kind === "clarify" &&
       r.status === "waiting" &&
       !r.dismissed,
   );
+  const composerValue =
+    pluginInput?.draft ??
+    (waitingPlugin ? (clarifyDrafts[waitingPlugin.id] ?? "") : draft);
+  const hasClarifySelection =
+    !!waitingPlugin &&
+    Object.values(clarifySelections[waitingPlugin.id] ?? {}).some(
+      (values) => values.length > 0,
+    );
+  function pluginDisplayName(id: string, fallback: string) {
+    return chat
+      ? (enabledPlugins(chat, settings).find((p) => p.id === id)?.name ??
+          fallback)
+      : fallback;
+  }
+  async function answerClarification(value: PluginRun, finish: boolean) {
+    if (submitting.current || busy || job || pluginJob) return;
+    submitting.current = true;
+    setBusy(true);
+    try {
+      await pluginCommand(finish ? "finish-clarify" : "answer", {
+        runId: value.id,
+        content: clarifyDrafts[value.id] ?? "",
+        selections: clarifySelections[value.id] ?? {},
+      });
+      setClarifyDrafts((d) => {
+        const next = { ...d };
+        delete next[value.id];
+        return next;
+      });
+      setClarifySelections((d) => {
+        const next = { ...d };
+        delete next[value.id];
+        return next;
+      });
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  }
   const rewriteResult = pluginState.runs.findLast(
     (r) =>
       r.plugin.kind === "rewrite" &&
@@ -1208,7 +1380,13 @@ function App() {
     if (!id) return;
     try {
       setError("");
-      await api("/chats/" + id + "/plugins", "POST", { action, ...body });
+      const response = await api<{ jobId?: string }>(
+        "/chats/" + id + "/plugins",
+        "POST",
+        { action, ...body },
+      );
+      if (response.jobId && ["section-generate", "retry"].includes(action))
+        ownedSectionCandidates.current.add(response.jobId);
       await refresh(id);
       await loadNavigation();
     } catch (error) {
@@ -1614,7 +1792,10 @@ function App() {
           )}
         </div>
         <div className="nav-footer">
-          <AccountUsageSidebar usage={quota} open={() => showSettings("usage")} />
+          <AccountUsageSidebar
+            usage={quota}
+            open={() => showSettings("usage")}
+          />
           <AccountMenu
             items={[
               {
@@ -1724,7 +1905,9 @@ function App() {
           className="message-scroll"
           ref={scrollRef}
           onWheel={(e) => noteScrollGesture(e.deltaY)}
-          onTouchStart={(e) => { scrollGesture.current.touchY = e.touches[0]?.clientY ?? 0; }}
+          onTouchStart={(e) => {
+            scrollGesture.current.touchY = e.touches[0]?.clientY ?? 0;
+          }}
           onTouchMove={(e) => {
             const y = e.touches[0]?.clientY;
             if (y === undefined) return;
@@ -1732,10 +1915,15 @@ function App() {
             scrollGesture.current.touchY = y;
           }}
           onKeyDown={(e) => {
-            if (["ArrowUp", "PageUp", "Home"].includes(e.key)) noteScrollGesture(-60);
-            if (["ArrowDown", "PageDown", "End"].includes(e.key)) noteScrollGesture(60);
+            if (["ArrowUp", "PageUp", "Home"].includes(e.key))
+              noteScrollGesture(-60);
+            if (["ArrowDown", "PageDown", "End"].includes(e.key))
+              noteScrollGesture(60);
           }}
-          onPointerDown={(e) => { if (e.target === e.currentTarget) scrollGesture.current.downward = true; }}
+          onPointerDown={(e) => {
+            if (e.target === e.currentTarget)
+              scrollGesture.current.downward = true;
+          }}
           onScroll={() => {
             const el = scrollRef.current!;
             const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -2079,6 +2267,35 @@ function App() {
                             userId={m.id}
                             state={pluginState}
                             activeUserId={pluginFlow?.userId}
+                            selections={clarifySelections}
+                            select={(runId, id, values) =>
+                              setClarifySelections((current) => ({
+                                ...current,
+                                [runId]: { ...current[runId], [id]: values },
+                              }))
+                            }
+                            input={requestPluginInput}
+                            answer={(value, finish) =>
+                              void run(() => answerClarification(value, finish))
+                            }
+                            templates={(id) =>
+                              chat
+                                ? (
+                                    enabledPlugins(chat, settings).find(
+                                      (p) => p.id === id,
+                                    )?.analysisTypes ?? []
+                                  ).map((t) => ({
+                                    ...t,
+                                    scope: chat.plugins
+                                      ?.find((b) => b.id === id)
+                                      ?.overrides?.analysisTypes?.some(
+                                        (v) => v.id === t.id,
+                                      )
+                                      ? ("chat" as const)
+                                      : ("global" as const),
+                                  }))
+                                : []
+                            }
                             command={pluginCommand}
                             busy={busy || !!job || !!pluginJob}
                           />
@@ -2124,7 +2341,7 @@ function App() {
                   : pluginFlow.status === "debug"
                     ? "调试完成，尚未生成正文"
                     : pluginFlow.status === "waiting"
-                      ? "请确认 JSON 分析结果"
+                      ? "请确认写前分析结果"
                       : pluginFlow.status === "error"
                         ? "插件流程已暂停"
                         : "插件正在运行"}
@@ -2194,9 +2411,28 @@ function App() {
             className={
               "composer " +
               (expanded ? "expanded " : "") +
-              (waitingPlugin ? "plugin-reply" : "")
+              (waitingPlugin || pluginInput ? "plugin-reply" : "")
             }
           >
+            {pluginInput && (
+              <div className="composer-operation">
+                <span>{pluginInput.label}</span>
+                <button
+                  className="du-btn du-btn-ghost du-btn-xs"
+                  onClick={() => {
+                    inputDrafts.current.set(
+                      pluginInput.runId +
+                        ":" +
+                        (pluginInput.body.targetId ?? "add"),
+                      pluginInput.draft,
+                    );
+                    setPluginInput(null);
+                  }}
+                >
+                  取消操作
+                </button>
+              </div>
+            )}
             {!selectedModel && (
               <p className="muted" role="status">
                 没有可用的当前模型或默认模型，请在设置中添加服务商并选择有效的默认模型。
@@ -2209,11 +2445,13 @@ function App() {
                 disabled={opening || initializing}
                 aria-label="消息"
                 placeholder={
-                  waitingPlugin
-                    ? `回答 ${waitingPlugin.plugin.name} 的问题…`
-                    : "发送消息…"
+                  pluginInput
+                    ? `请输入${pluginInput.label}…`
+                    : waitingPlugin
+                      ? `你现在正在回复「${pluginDisplayName(waitingPlugin.plugin.id, waitingPlugin.plugin.name)}」插件…`
+                      : "发送消息…"
                 }
-                value={draft}
+                value={composerValue}
                 rows={expanded ? 14 : 2}
                 onChange={(e) => updateDraft(e.target.value)}
                 onKeyDown={(e) => {
@@ -2353,11 +2591,11 @@ function App() {
                   label="发送"
                   className="send-button"
                   disabled={
-                    !draft.trim() ||
+                    (!composerValue.trim() && !hasClarifySelection) ||
                     busy ||
                     !!chat?.deleted ||
-                    !selectedModel ||
-                    (!!pluginFlow && !waitingPlugin)
+                    (!selectedModel && !waitingPlugin && !pluginInput) ||
+                    (!!pluginFlow && !waitingPlugin && !pluginInput)
                   }
                   onClick={() => void run(send)}
                 >
@@ -3169,7 +3407,9 @@ function SettingsPanel({
           ))}
       </nav>
       <div className="settings-content">
-        {tab === "usage" && <AccountUsageSettings usage={usage} refresh={refreshUsage} />}
+        {tab === "usage" && (
+          <AccountUsageSettings usage={usage} refresh={refreshUsage} />
+        )}
         {tab === "plugins" && (
           <GlobalPlugins
             settings={settings}

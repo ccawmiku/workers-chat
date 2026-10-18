@@ -8,6 +8,7 @@ import {
   route,
   defaultSettings,
   sanitizeUsage,
+  estimateTokens,
 } from "../shared/chat";
 import {
   type PluginState,
@@ -29,6 +30,15 @@ import { readCompletion, type CompletionOutput } from "../shared/completion";
 import { decrypt, redactError, digest } from "./security";
 import { str } from "./validation";
 import { validatedBindings } from "./plugin-validation";
+import {
+  analysisSections,
+  sectionResult,
+  mergeSection,
+  questionView,
+  clarifyAnswer,
+  type AnalysisType,
+} from "../shared/plugin-sections";
+import { ANALYSIS_SCHEMA } from "../shared/analysis-defaults";
 
 export type PluginTask = {
   kind: "plugin";
@@ -40,6 +50,19 @@ export type PluginTask = {
 };
 const stateId = (id: string) => "plugin-state:" + id;
 const taskId = (id: string) => "plugin-task:" + id;
+async function frozenPreparation(env: Env, source: PluginRun) {
+  const saved = await new Store(env.DB).get<PluginTask>(taskId(source.id));
+  if (!saved) throw new HttpError(409, "本轮请求快照不可用，请重新运行插件");
+  const { providers } = await config(env),
+    provider = providers.find((p) => p.id === saved.value.provider.id);
+  if (!provider) throw new HttpError(409, "原服务商已移除");
+  return {
+    request: structuredClone(saved.value.request),
+    metrics: structuredClone(source.metrics),
+    provider,
+    modelRef: source.model ?? source.plugin.model!,
+  };
+}
 const baselines = new WeakMap<Document<PluginState>, PluginState>();
 export async function pluginState(env: Env, id: string) {
   const doc = (await new Store(env.DB).get<PluginState>(stateId(id))) ?? {
@@ -94,7 +117,8 @@ async function saveState(
         }[];
         for (const row of wanted[key]) {
           const before = base[key].find((r) => r.id === row.id) as
-            Record<string, unknown> | undefined;
+            | Record<string, unknown>
+            | undefined;
           const target = rows.find((r) => r.id === row.id);
           if (!before) {
             if (!target) rows.push(structuredClone(row));
@@ -139,9 +163,11 @@ async function signature(chat: Chat, settings: Settings) {
       chat.effort,
       chat.stream,
       chat.rounds,
-      enabledPlugins(chat, settings).filter(
-        (p) => p.kind === "analysis" || p.kind === "clarify",
-      ),
+      enabledPlugins(chat, settings)
+        .filter((p) => p.kind === "analysis" || p.kind === "clarify")
+        .map(
+          ({ analysisTypes, clarifyLoop, ...requestConfig }) => requestConfig,
+        ),
     ]),
   );
 }
@@ -233,6 +259,14 @@ export async function clonePlugins(
         ? messages.get(r.rewriteMessageId)
         : undefined,
       replaces: r.replaces ? runIds.get(r.replaces) : undefined,
+      sectionEdit: r.sectionEdit
+        ? {
+            ...r.sectionEdit,
+            sourceId:
+              runIds.get(r.sectionEdit.sourceId) ?? r.sectionEdit.sourceId,
+          }
+        : undefined,
+      sectionHistory: r.sectionHistory?.flatMap((id) => runIds.get(id) ?? []),
       status: r.status === "running" ? "cancelled" : r.status,
     })),
     flows: flows.map((f) => ({
@@ -255,10 +289,42 @@ export async function clonePlugins(
     cloned.activeFlowId = current.id;
     copy.pluginPending = current.status as Chat["pluginPending"];
   }
-  await new Store(env.DB).save(stateId(copy.id), "plugin-state", cloned, 0, {
-    id: stateId(copy.id),
-    chatId: copy.id,
-  });
+  const cloneStore = new Store(env.DB),
+    statements = cloneStore.planSave(
+      stateId(copy.id),
+      "plugin-state",
+      cloned,
+      0,
+      { id: stateId(copy.id), chatId: copy.id },
+    );
+  // A fork waiting for analysis confirmation needs the same frozen request too.
+  const waiting = cloned.runs.find(
+    (r) =>
+      r.id === current?.results.at(-1) &&
+      r.plugin.kind === "analysis" &&
+      r.status === "waiting",
+  );
+  if (waiting) {
+    const originalId = runs.find((r) => runIds.get(r.id) === waiting.id)?.id;
+    const task = originalId
+      ? await cloneStore.get<PluginTask>(taskId(originalId))
+      : null;
+    if (task) {
+      task.value.runId = waiting.id;
+      task.value.flowId = waiting.flowId;
+      delete task.value.provider.encryptedKey;
+      statements.push(
+        ...cloneStore.planSave(
+          taskId(waiting.id),
+          "plugin-task",
+          task.value,
+          0,
+          { id: taskId(waiting.id), chatId: copy.id },
+        ),
+      );
+    }
+  }
+  await cloneStore.commit(statements);
 }
 export async function planPruneMessagePlugins(
   env: Env,
@@ -337,21 +403,24 @@ async function enqueue(
   replaces?: string,
   rewriteMessageId?: string,
   queuedId?: string,
+  override?: ReturnType<typeof preparePlugin> & {
+    sectionEdit?: PluginRun["sectionEdit"];
+  },
 ) {
   const { settings, providers } = await config(env),
-    prepared = preparePlugin(
-      chat,
-      p,
-      settings,
-      providers,
-      stateDoc.value,
-      input,
-      anchorId,
-      p.kind === "analysis" && flow
-        ? flowClarifications(stateDoc.value, flow)
-        : [],
-      (await summaryState(env, chat.id)).value,
-    );
+    prepared =
+      override ??
+      preparePlugin(
+        chat,
+        p,
+        settings,
+        providers,
+        stateDoc.value,
+        input,
+        anchorId,
+        flow ? flowClarifications(stateDoc.value, flow) : [],
+        (await summaryState(env, chat.id)).value,
+      );
   const id = queuedId ?? crypto.randomUUID(),
     run: PluginRun = {
       id,
@@ -367,6 +436,7 @@ async function enqueue(
       metrics: prepared.metrics,
       model: prepared.modelRef,
       ...(replaces ? { replaces } : {}),
+      ...(override?.sectionEdit ? { sectionEdit: override.sectionEdit } : {}),
     };
   const request = prepared.request;
   const task: PluginTask = {
@@ -532,7 +602,10 @@ async function advance(env: Env, chatId: string, flowId: string) {
     const p = flow.definitions[flow.index]!;
     const reused = state.value.runs.findLast(
       (r) =>
-        r.flowId === flow.id && r.plugin.id === p.id && r.status === "answered",
+        r.flowId === flow.id &&
+        r.plugin.id === p.id &&
+        r.status === "answered" &&
+        !flow.results.includes(r.id),
     );
     if (reused) {
       if (!flow.results.includes(reused.id)) flow.results.push(reused.id);
@@ -616,7 +689,37 @@ async function finishPluginOnce(
   let text = output.content;
   if (status === "complete")
     try {
-      text = normalizePluginOutput(run.plugin, text);
+      text = run.sectionEdit
+        ? JSON.stringify(sectionResult(text))
+        : normalizePluginOutput(run.plugin, text);
+      if (
+        run.plugin.kind === "clarify" &&
+        run.plugin.clarifyFormat === "questions" &&
+        run.flowId
+      ) {
+        const key = (s: string) => s.replace(/\s/g, "").trim();
+        const asked = new Set(
+          state.value.runs
+            .filter(
+              (r) =>
+                r.id !== run.id &&
+                r.flowId === run.flowId &&
+                r.status === "answered",
+            )
+            .flatMap((r) =>
+              (questionView(r.output) ?? []).map((q) => key(q.question)),
+            ),
+        );
+        text = JSON.stringify(
+          {
+            questions: (questionView(text) ?? []).filter(
+              (q) => !asked.has(key(q.question)),
+            ),
+          },
+          null,
+          2,
+        );
+      }
     } catch (e) {
       status = "error";
       failure = e instanceof Error ? e.message : "插件结果格式错误";
@@ -845,9 +948,46 @@ export async function pluginEndpoint(
     const snapshot = await store.get<PluginTask>(taskId(run.id));
     return snapshot?.value.request ?? null;
   }
+  if (action === "discard-sections") {
+    if (
+      !Array.isArray(body.runIds) ||
+      body.runIds.length > 256 ||
+      body.runIds.some((id) => typeof id !== "string")
+    )
+      throw new HttpError(400, "候选列表无效");
+    const ids = new Set(body.runIds),
+      remove = state.value.runs
+        .filter(
+          (r) =>
+            r.sectionEdit &&
+            ids.has(r.id) &&
+            ["candidate", "error", "cancelled"].includes(r.status),
+        )
+        .map((r) => r.id);
+    if (remove.length) {
+      state.value.runs = state.value.runs.filter((r) => !remove.includes(r.id));
+      // Do not rebase this deletion: a concurrent adoption must roll back both
+      // the state removal and snapshot deletion together on the revision guard.
+      await store.commit([
+        ...store.planSave(
+          stateId(chat.id),
+          "plugin-state",
+          state.value,
+          state.revision,
+          { id: stateId(chat.id), chatId: chat.id },
+        ),
+        env.DB.prepare(
+          "DELETE FROM documents WHERE id IN (SELECT value FROM json_each(?))",
+        ).bind(JSON.stringify(remove.map(taskId))),
+      ]);
+    }
+    return { ok: true };
+  }
   if (action === "checkpoint" || action === "finish")
     throw new HttpError(400, "请使用任务保存接口");
   if (action === "cancel") {
+    const replacing =
+      active && state.value.runs.find((r) => r.id === active.id)?.replaces;
     if (active?.kind === "plugin") {
       const output = await env.PROGRESS.getByName(active.id).cancel();
       await finishPlugin(env, active.id, output, "stopped");
@@ -856,6 +996,7 @@ export async function pluginEndpoint(
           await (await env.GENERATION.get(active.id)).terminate();
         } catch {}
     }
+    if (replacing) return { ok: true };
     const latest = await pluginState(env, chat.id),
       current = latest.value.flows.find(
         (f) => f.id === latest.value.activeFlowId,
@@ -868,6 +1009,296 @@ export async function pluginEndpoint(
   }
   if (active && action !== "dismiss")
     throw new HttpError(409, "请等待当前生成结束，或先停止");
+  const requireAnalysis = () => {
+    if (
+      !run ||
+      run.plugin.kind !== "analysis" ||
+      run.status !== "waiting" ||
+      !flow ||
+      flow.status !== "waiting" ||
+      flow.results.at(-1) !== run.id
+    )
+      throw new HttpError(409, "仅本轮待确认的写前分析可以修改");
+    return run;
+  };
+  if (action === "section-generate") {
+    const source = requireAnalysis(),
+      targetId = body.targetId === null ? null : str(body.targetId, 128),
+      instruction = str(body.content ?? "", 10000);
+    const sections = analysisSections(source.output),
+      target = sections.find((s) => s.id === targetId);
+    if (targetId && !target) throw new HttpError(400, "分块不存在");
+    if (!targetId && !instruction.trim())
+      throw new HttpError(400, "请描述新增类型和要求");
+    const prepared = await frozenPreparation(env, source);
+    // Replace the full-output task contract; leave the original history prefix untouched.
+    const originalTask = prepared.request.messages.pop();
+    prepared.request.messages.push({
+      role: "user",
+      content: JSON.stringify({
+        task: targetId
+          ? "只重新生成指定块；其他块只读，不要输出或改变它们。"
+          : "按用户描述添加一种新类型；不改动现有块。",
+        original_task: originalTask?.content?.split("\n\nJSON Schema：")[0],
+        current_sections: sections,
+        target: target ?? null,
+        user_requirement: instruction,
+        output_contract:
+          '原任务只作为资料和内容规则参考，原任务中的完整字段/全量输出要求在本次无效。只输出 JSON {"type":"类型名称","content":"该块内容","instruction":"仅新增类型时填写可复用通用规则，不包含本轮人物/剧情方向"}；不要输出 id、其他块或完整分析。类型名称和内容不能为空。指定块的 type 必须保持原样。不得生成主角或“你”的第一人称想法；不编造已有状态。',
+        excluded_characters: source.plugin.excludedCharacters ?? "",
+      }),
+    });
+    prepared.request.response_format = { type: "json_object" };
+    prepared.metrics.total = estimateTokens(
+      prepared.request.messages.map((m) => m.content ?? "").join("\n"),
+    );
+    prepared.metrics.sections.push({
+      name: "当前分块与局部任务",
+      tokens: estimateTokens(prepared.request.messages.at(-1)?.content ?? ""),
+    });
+    return {
+      jobId: await enqueue(
+        env,
+        chat,
+        state,
+        source.plugin,
+        source.input,
+        source.contextAnchorId ?? null,
+        transport,
+        flow,
+        source.id,
+        undefined,
+        undefined,
+        {
+          ...prepared,
+          sectionEdit: {
+            sourceId: source.id,
+            targetId,
+            instruction,
+            expectedOutput: await digest(source.output),
+          },
+        },
+      ),
+    };
+  }
+  if (action === "section-edit" || action === "section-remove") {
+    const source = requireAnalysis(),
+      targetId = str(body.targetId, 128),
+      section = analysisSections(source.output).find((s) => s.id === targetId);
+    if (!section) throw new HttpError(404, "分块不存在");
+    const changed = mergeSection(
+      source.output,
+      targetId,
+      {
+        ...section,
+        content: action === "section-remove" ? "none" : str(body.content),
+      },
+      action === "section-remove",
+    );
+    source.output = normalizePluginOutput(source.plugin, changed);
+    const extra: D1PreparedStatement[] = [];
+    if (action === "section-remove" && body.removeTemplate === true) {
+      const settingsDoc = await store.get<Settings>("settings"),
+        settings = settingsDoc?.value ?? defaultSettings(),
+        base = definitions(settings).find((p) => p.id === source.plugin.id)!;
+      if (body.scope === "global") {
+        settings.plugins = definitions(settings).map((p) =>
+          p.id === base.id
+            ? {
+                ...p,
+                analysisTypes: (p.analysisTypes ?? []).filter(
+                  (t) => t.id !== targetId,
+                ),
+              }
+            : p,
+        );
+        extra.push(
+          ...store.planSave(
+            "settings",
+            "settings",
+            settings,
+            settingsDoc?.revision ?? 0,
+          ),
+        );
+      } else {
+        chat.plugins = validatedBindings(
+          (chat.plugins ?? []).map((p) =>
+            p.id === base.id
+              ? {
+                  ...p,
+                  overrides: {
+                    ...p.overrides,
+                    analysisTypes: (
+                      p.overrides?.analysisTypes ??
+                      base.analysisTypes ??
+                      []
+                    ).filter((t) => t.id !== targetId),
+                  },
+                }
+              : p,
+          ),
+          definitions(settings),
+        );
+        extra.push(
+          ...store.planSave(
+            chat.id,
+            "chat",
+            chat,
+            chatDoc.revision,
+            summary(chat),
+          ),
+        );
+      }
+    }
+    await saveState(env, chat.id, state, extra);
+    return { ok: true };
+  }
+  if (action === "section-apply") {
+    if (
+      !run?.sectionEdit ||
+      run.status !== "candidate" ||
+      !flow ||
+      flow.status !== "waiting"
+    )
+      throw new HttpError(409, "没有可采用的分块候选");
+    const source = state.value.runs.find(
+      (r) => r.id === run.sectionEdit!.sourceId,
+    );
+    if (
+      !source ||
+      source.status !== "waiting" ||
+      flow.results.at(-1) !== source.id ||
+      (await digest(source.output)) !== run.sectionEdit.expectedOutput
+    )
+      throw new HttpError(409, "原结果已变化，请重新生成此块");
+    const section = {
+      ...JSON.parse(run.output),
+      id: run.sectionEdit.targetId ?? "extra:" + run.id,
+    };
+    if (!run.sectionEdit.targetId && source.plugin.schema.trim()) {
+      const schema = JSON.parse(source.plugin.schema);
+      if (schema && typeof schema === "object")
+        source.plugin = {
+          ...source.plugin,
+          schema: JSON.stringify({
+            ...schema,
+            properties: {
+              ...schema.properties,
+              additional_sections:
+                JSON.parse(ANALYSIS_SCHEMA).properties.additional_sections,
+            },
+          }),
+        };
+    }
+    source.output = normalizePluginOutput(
+      source.plugin,
+      mergeSection(source.output, run.sectionEdit.targetId, section),
+    );
+    source.sectionHistory = [...(source.sectionHistory ?? []), run.id];
+    run.status = "complete";
+    run.sectionResultId = section.id;
+    const extra: D1PreparedStatement[] = [];
+    if (body.saveType === true && !run.sectionEdit.targetId) {
+      const template: AnalysisType = {
+        id: section.id,
+        type: str(body.type ?? section.type, 100),
+        instruction: str(body.instruction ?? section.instruction ?? "", 10000),
+      };
+      if (!template.type.trim()) throw new HttpError(400, "模板名称不能为空");
+      const settingsDoc = await store.get<Settings>("settings"),
+        settings = settingsDoc?.value ?? defaultSettings(),
+        base = definitions(settings).find((p) => p.id === source.plugin.id)!;
+      if (body.scope === "global") {
+        settings.plugins = definitions(settings).map((p) =>
+          p.id === base.id
+            ? {
+                ...p,
+                analysisTypes: [
+                  ...(p.analysisTypes ?? []).filter(
+                    (t) => t.id !== template.id,
+                  ),
+                  template,
+                ],
+              }
+            : p,
+        );
+        if (
+          (settings.plugins.find((p) => p.id === base.id)?.analysisTypes
+            ?.length ?? 0) > 64
+        )
+          throw new HttpError(400, "保存类型最多64个");
+        extra.push(
+          ...store.planSave(
+            "settings",
+            "settings",
+            settings,
+            settingsDoc?.revision ?? 0,
+          ),
+        );
+      } else {
+        const bindings = chat.plugins ?? [],
+          binding = bindings.find((p) => p.id === base.id)!;
+        const templates =
+          binding.overrides?.analysisTypes ?? base.analysisTypes ?? [];
+        chat.plugins = validatedBindings(
+          bindings.map((p) =>
+            p.id === base.id
+              ? {
+                  ...p,
+                  overrides: {
+                    ...p.overrides,
+                    analysisTypes: [
+                      ...templates.filter((t) => t.id !== template.id),
+                      template,
+                    ],
+                  },
+                }
+              : p,
+          ),
+          definitions(settings),
+        );
+        extra.push(
+          ...store.planSave(
+            chat.id,
+            "chat",
+            chat,
+            chatDoc.revision,
+            summary(chat),
+          ),
+        );
+      }
+    }
+    await saveState(env, chat.id, state, extra);
+    return { ok: true };
+  }
+  if (action === "clarify-loop") {
+    if (
+      !run ||
+      run.plugin.kind !== "clarify" ||
+      run.status !== "waiting" ||
+      !flow ||
+      flow.status !== "waiting" ||
+      flow.results.at(-1) !== run.id
+    )
+      throw new HttpError(409, "当前没有待处理提问");
+    const enabled = body.enabled === true;
+    run.plugin.clarifyLoop = enabled;
+    flow.definitions = flow.definitions.map((p) =>
+      p.id === run.plugin.id ? { ...p, clarifyLoop: enabled } : p,
+    );
+    chat.plugins = (chat.plugins ?? []).map((p) =>
+      p.id === run.plugin.id
+        ? { ...p, overrides: { ...p.overrides, clarifyLoop: enabled } }
+        : p,
+    );
+    await saveState(
+      env,
+      chat.id,
+      state,
+      store.planSave(chat.id, "chat", chat, chatDoc.revision, summary(chat)),
+    );
+    return { ok: true };
+  }
   if (action === "rewrite" || action === "suggest") {
     const { settings } = await config(env),
       p = enabledPlugins(chat, settings).find(
@@ -928,6 +1359,15 @@ export async function pluginEndpoint(
   }
   if (action === "edit") {
     if (!run) throw new HttpError(404, "插件记录不存在");
+    if (
+      run.sectionEdit ||
+      (run.plugin.kind === "analysis" &&
+        (!flow ||
+          !["waiting", "error"].includes(flow.status) ||
+          !["waiting", "error"].includes(run.status) ||
+          flow.results.at(-1) !== run.id))
+    )
+      throw new HttpError(409, "历史分析仅供查看，请修改本轮待确认的结果");
     const output = normalizePluginOutput(run.plugin, str(body.content));
     run.originalOutput ??= run.output;
     run.output = output;
@@ -944,6 +1384,7 @@ export async function pluginEndpoint(
     return { ok: true };
   }
   if (action === "replace") {
+    if (run?.sectionEdit) throw new HttpError(400, "请使用分块确认操作");
     if (!run || run.status !== "candidate" || !run.replaces || !flow)
       throw new HttpError(400, "没有可替换的问题");
     const old = state.value.runs.find((r) => r.id === run.replaces);
@@ -1002,11 +1443,6 @@ export async function pluginEndpoint(
       await advanceFlow(env, chat.id, flow.id);
       return { ok: true };
     }
-    run.status = "superseded";
-    flow.results = flow.results.filter((id) => id !== run.id);
-    flow.status = "running";
-    await saveState(env, chat.id, state);
-    await markChat(env, chat.id, "running");
     return {
       jobId: await enqueue(
         env,
@@ -1017,10 +1453,14 @@ export async function pluginEndpoint(
         run.contextAnchorId ?? null,
         transport,
         flow,
+        run.id,
+        undefined,
+        undefined,
+        await frozenPreparation(env, run),
       ),
     };
   }
-  if (action === "answer") {
+  if (action === "answer" || action === "finish-clarify") {
     if (
       !run ||
       run.plugin.kind !== "clarify" ||
@@ -1029,8 +1469,13 @@ export async function pluginEndpoint(
       flow.status !== "waiting"
     )
       throw new HttpError(400, "当前没有等待回答的问题");
-    const answer = str(body.content);
-    if (!answer.trim()) throw new HttpError(400, "请填写回答");
+    const freeText = str(body.content ?? "");
+    const structured = questionView(run.output);
+    const answer = structured
+      ? clarifyAnswer(run.output, body.selections, freeText)
+      : freeText;
+    if (!answer.trim() && action !== "finish-clarify" && structured === null)
+      throw new HttpError(400, "请填写回答");
     run.answer = answer;
     run.status = "answered";
     for (const other of state.value.runs)
@@ -1040,10 +1485,26 @@ export async function pluginEndpoint(
         ["candidate", "error"].includes(other.status)
       )
         other.status = "superseded";
-    flow.index++;
+    const repeat =
+      action !== "finish-clarify" &&
+      run.plugin.clarifyLoop &&
+      structured?.length !== 0;
+    if (!repeat) flow.index++;
     flow.status = "running";
     await saveState(env, chat.id, state);
-    await store.setDraft(chat.id, "");
+    if (repeat)
+      return {
+        jobId: await enqueue(
+          env,
+          chat,
+          state,
+          run.plugin,
+          run.input,
+          run.contextAnchorId ?? null,
+          transport,
+          flow,
+        ),
+      };
     await advanceFlow(env, chat.id, flow.id);
     return { ok: true };
   }
@@ -1081,6 +1542,12 @@ export async function pluginEndpoint(
           transport,
           flow,
           run.replaces,
+          undefined,
+          undefined,
+          {
+            ...(await frozenPreparation(env, run)),
+            sectionEdit: run.sectionEdit,
+          },
         ),
       };
     }

@@ -68,4 +68,4 @@ npx cf deploy --secrets-file /absolute/path/to/deployment-secrets.json
 
 ## 维护索引迁移（0006，尚未生产执行）
 
-后续由维护者部署时，先用 `cf d1 migrations apply` 应用 `0006.sql`。新增标题历史复合索引、完整 jobs 外键索引和任务所属聊天的表达式索引，减少历史标题查找、任务清理及删除任意文档时的外键全表扫描。索引增加少量存储与写入维护成本；应用不删除历史数据、不改变文档格式。索引创建本身会读取现有数据，额度恢复后再安排迁移，本次任务没有访问生产数据库或部署。量化本地证据和验证限制见 [MAINTENANCE-2026-10-18.md](MAINTENANCE-2026-10-18.md)。
+部署其他环境前先运行 migrations list，再应用待执行迁移。生产已在 2026-10-18 00:00 UTC 额度恢复后应用 `0006.sql`，三个索引验证见 [PRODUCTION.md](PRODUCTION.md)，构造数据读行对比见 [RUNTIME.md](RUNTIME.md)。新索引首次创建会扫描现有数据并增加维护写入成本；本轮插件分块无需新增迁移。

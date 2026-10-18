@@ -3493,36 +3493,139 @@ main {
   border: 1px solid var(--line-color);
   border-radius: 12px;
 }
-.quota-sidebar-title { display: flex; align-items: center; gap: 6px; }
-.quota-sidebar-title small { margin-left: auto; color: var(--muted); font-size: 10px; }
-.quota-sidebar-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
-.quota-mini { display: grid; grid-template-columns: 1fr auto; text-align: left; gap: 3px 5px; min-width: 0; }
-.quota-mini b { font-weight: 400; font-variant-numeric: tabular-nums; }
-.quota-mini .du-progress { grid-column: 1 / -1; height: 3px; }
-.quota-product-0 { --quota-color: #60a5fa; }
-.quota-product-1 { --quota-color: #b18af8; }
-.quota-product-2 { --quota-color: #39bb97; }
-.quota-product-3 { --quota-color: #d7ac43; }
-.quota-progress.du-progress { color: var(--quota-color, var(--accent)); width: 100%; }
-.quota-progress.quota-high { color: var(--danger); }
-.quota-high-text, .quota-stale { color: var(--danger); }
-.account-quota-settings { max-width: 1080px; }
-.account-quota-settings > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 20px; }
-.account-quota-settings h2 { margin: 0 0 8px; }
-.account-quota-settings header p { margin: 0; }
-.quota-update, .quota-source { line-height: 1.7; font-size: 12px; }
-.quota-products { display: grid; grid-template-columns: 1fr 1fr; align-items: start; gap: 16px; margin-top: 24px; }
-.quota-product.du-card { display: block; border: 1px solid var(--line-color); padding: 18px; border-radius: 16px; }
-.quota-product h3 { margin: 0 0 8px; color: var(--text); font-size: 16px; }
-.quota-metric { padding: 12px 0; }
-.quota-metric + .quota-metric { border-top: 1px solid var(--line-color); }
-.quota-metric-title { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
-.quota-metric-title b { font-weight: 500; font-variant-numeric: tabular-nums; }
-.quota-amount { margin: 7px 0; font-size: 12px; color: var(--muted); }
-.quota-amount strong { font-size: 16px; font-weight: 500; color: var(--text); }
-.quota-metric .du-progress { display: block; height: 5px; margin-bottom: 7px; }
-.quota-metric small { display: block; line-height: 1.6; font-size: 11px; }
-@media (max-width: 760px) { .quota-products { grid-template-columns: 1fr; } }
+.quota-sidebar-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.quota-sidebar-title small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+.quota-sidebar-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+}
+.quota-mini {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  text-align: left;
+  gap: 3px 5px;
+  min-width: 0;
+}
+.quota-mini b {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.quota-mini .du-progress {
+  grid-column: 1 / -1;
+  height: 3px;
+}
+.quota-product-0 {
+  --quota-color: #60a5fa;
+}
+.quota-product-1 {
+  --quota-color: #b18af8;
+}
+.quota-product-2 {
+  --quota-color: #39bb97;
+}
+.quota-product-3 {
+  --quota-color: #d7ac43;
+}
+.quota-progress.du-progress {
+  color: var(--quota-color, var(--accent));
+  width: 100%;
+}
+.quota-progress.quota-high {
+  color: var(--danger);
+}
+.quota-high-text,
+.quota-stale {
+  color: var(--danger);
+}
+.account-quota-settings {
+  max-width: 1080px;
+}
+.account-quota-settings > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.account-quota-settings h2 {
+  margin: 0 0 8px;
+}
+.account-quota-settings header p {
+  margin: 0;
+}
+.quota-update,
+.quota-source {
+  line-height: 1.7;
+  font-size: 12px;
+}
+.quota-products {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+  gap: 16px;
+  margin-top: 24px;
+}
+.quota-product.du-card {
+  display: block;
+  border: 1px solid var(--line-color);
+  padding: 18px;
+  border-radius: 16px;
+}
+.quota-product h3 {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 16px;
+}
+.quota-metric {
+  padding: 12px 0;
+}
+.quota-metric + .quota-metric {
+  border-top: 1px solid var(--line-color);
+}
+.quota-metric-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.quota-metric-title b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.quota-amount {
+  margin: 7px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.quota-amount strong {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text);
+}
+.quota-metric .du-progress {
+  display: block;
+  height: 5px;
+  margin-bottom: 7px;
+}
+.quota-metric small {
+  display: block;
+  line-height: 1.6;
+  font-size: 11px;
+}
+@media (max-width: 760px) {
+  .quota-products {
+    grid-template-columns: 1fr;
+  }
+}
 .settings-search input {
   min-width: 0;
   width: 100%;
@@ -3584,9 +3687,19 @@ main {
   margin: 0;
   cursor: pointer;
 }
-.color-control { position: relative; }
-.color-control > .color-value { min-height: 30px; height: 30px; }
-.color-control .color-swatch { width: 16px; height: 16px; aspect-ratio: 1; flex: 0 0 16px; }
+.color-control {
+  position: relative;
+}
+.color-control > .color-value {
+  min-height: 30px;
+  height: 30px;
+}
+.color-control .color-swatch {
+  width: 16px;
+  height: 16px;
+  aspect-ratio: 1;
+  flex: 0 0 16px;
+}
 .color-popover {
   z-index: 30;
   width: 250px;
@@ -3600,13 +3713,31 @@ main {
   flex-direction: column;
   gap: 10px;
 }
-.color-popover .react-colorful { width: 228px; height: 220px; flex: none; }
-.color-popover .react-colorful__hue { height: 20px; }
-.color-popover > .du-input { width: 100%; }
-.accent-options li:has(.color-control) { display: block; }
-.accent-options .color-control { margin: 0 8px 8px; }
-.du-alert-warning, .du-alert-warning :is(p, small, .muted) { color: var(--color-warning-content); }
-.du-alert-error, .du-alert-error :is(p, small, .muted) { color: var(--color-error-content); }
+.color-popover .react-colorful {
+  width: 228px;
+  height: 220px;
+  flex: none;
+}
+.color-popover .react-colorful__hue {
+  height: 20px;
+}
+.color-popover > .du-input {
+  width: 100%;
+}
+.accent-options li:has(.color-control) {
+  display: block;
+}
+.accent-options .color-control {
+  margin: 0 8px 8px;
+}
+.du-alert-warning,
+.du-alert-warning :is(p, small, .muted) {
+  color: var(--color-warning-content);
+}
+.du-alert-error,
+.du-alert-error :is(p, small, .muted) {
+  color: var(--color-error-content);
+}
 .color-value input::-webkit-color-swatch-wrapper,
 .custom-color input::-webkit-color-swatch-wrapper {
   padding: 0;
@@ -3855,4 +3986,208 @@ main {
   .settings-body > nav > .settings-search {
     display: none;
   }
+}
+/* Settings forms keep controls outside the scrolling content. */
+.nav-footer {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.nav-footer > * {
+  width: 100%;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.plugin-dialog:has(.sticky-settings-form) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sticky-settings-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.settings-form-scroll {
+  overflow: auto;
+  min-height: 0;
+  padding: 0 4px 12px;
+  overscroll-behavior: contain;
+}
+.sticky-settings-form > footer {
+  flex-shrink: 0;
+  margin-top: 0;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--line-color);
+  background: var(--panel);
+}
+.plugin-chip {
+  height: 42px;
+  min-height: 42px;
+  grid-template-rows: 18px 4px 4px;
+  gap: 2px;
+  padding: 4px 9px;
+}
+.plugin-chip:has(> small:not(:empty)) {
+  height: 42px;
+}
+.plugin-chip > small:empty {
+  display: none;
+}
+.analysis-sections,
+.question-sections {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.question-sections {
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+}
+.analysis-section.du-card,
+.question-section.du-card,
+.section-candidate.du-card {
+  display: block;
+  min-width: 0;
+  padding: 12px;
+  background: var(--input);
+  border: 1px solid var(--line-color);
+  border-radius: 12px;
+}
+.analysis-section h4,
+.question-section h4,
+.section-candidate h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.question-options {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+.question-options .du-btn {
+  height: auto;
+  min-height: 32px;
+  padding: 7px 9px;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: normal;
+  line-height: 1.5;
+}
+.question-options span {
+  min-width: 0;
+}
+.analysis-section .markdown p {
+  margin: 6px 0;
+}
+.analysis-section textarea {
+  width: 100%;
+  min-height: 120px;
+}
+.section-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+.section-compare > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.section-save-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+.type-template-fields {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.type-template-fields label {
+  display: grid;
+  gap: 4px;
+}
+.composer-operation {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.plugin-question,
+.composer.plugin-reply {
+  background: var(--input);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line-color));
+}
+.plugin-result-body .plugin-card-actions .du-select {
+  width: auto;
+  max-width: 100%;
+}
+@media (max-width: 760px) {
+  .question-sections,
+  .section-compare {
+    grid-template-columns: 1fr;
+  }
+  .plugin-chip {
+    height: 40px;
+    min-height: 40px;
+    padding-block: 3px;
+  }
+}
+.message.user:has(.plugin-turn-cards) > .message-body {
+  width: 100%;
+  max-width: 100%;
+}
+.message .plugin-turn-cards .markdown {
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  max-width: none;
+}
+.section-save-choice {
+  flex-direction: row;
+}
+.question-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.question-title .markdown p,
+.question-title .markdown ol {
+  margin: 0;
+}
+.question-options .du-btn:not(.du-btn-ghost) {
+  border: 1px solid var(--line-color);
+  background: var(--panel);
+}
+.question-options .du-btn.du-btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+.plugin-chips:has(.plugin-chip-cache) .plugin-chip {
+  height: 54px;
+  min-height: 54px;
+  grid-template-rows: 18px 4px 4px 10px;
+}
+.plugin-chip .plugin-chip-cache {
+  line-height: 10px;
+  font-size: 10px;
+}
+.plugin-card-actions {
+  align-items: center;
+}
+.plugin-card-actions > .section-save-choice {
+  margin: 0;
+}
+.plugin-card-actions .du-btn-primary,
+.section-candidate .du-btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
 }

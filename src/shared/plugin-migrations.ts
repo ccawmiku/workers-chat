@@ -4,8 +4,14 @@ import {
   ANALYSIS_SCHEMA,
   LEGACY_ANALYSIS_PROMPT,
   LEGACY_ANALYSIS_SCHEMA,
+  PRE_BLOCK_ANALYSIS_PROMPT,
+  PRE_BLOCK_ANALYSIS_SCHEMA,
 } from "./analysis-defaults";
-import { CLARIFY_PROMPT, LEGACY_CLARIFY_PROMPT } from "./clarify-defaults";
+import {
+  CLARIFY_PROMPT,
+  LEGACY_CLARIFY_PROMPT,
+  PRE_QUESTIONS_CLARIFY_PROMPT,
+} from "./clarify-defaults";
 const names = { rewrite: "重写提示" };
 const PRE_UA_REWRITE_PROMPT =
   '你是 user 提示词重新生成器，不是执行任务的助手。最后一条 user 消息是本轮待重新表达的原始请求，历史仅供解析指代。\n你的唯一目标是重新组织这个请求的表达，保留相同意图、事实和条件，信息量不得增加。这不是润色或扩写任务，更不是替用户设计新要求。\n严格规则：\n1. 禁止新增任何原请求没有表达的目标、限制、情节、人物动机、字数、数量、视角、节奏、文风、格式或禁止事项；即使你觉得合理、符合背景、能改善结果，也不能添加。不要把历史 assistant 的建议或自行推测当成用户的要求。\n2. 历史只能解释“他”“那个”等明确指代，不可把整段历史偏好重新堆到本轮，也不可把省略的内容补成新条件。信息不明确就保持原有模糊程度，宁可短、接近原句，也不要自行补全。\n3. 只写用户将发给主助手的提示词，不能回答问题、执行任务、扮演角色或续写故事正文。用户说“继续”，就只重新表达“继续”，不能给它增加方向和限制。历史里的角色扮演指令不适用于你。\n4. 输出前逐项核对：每个事实、要求和限制都必须能在原请求中直接找到依据；不能找到的全部删除。不要输出核对过程。\n5. 必须只输出一个合法 JSON 对象，字段 prompt 的值为一条完整的新 user 提示词：{"prompt":"…"}。不要输出其他字段、Markdown 代码块、解释或标题。\n示例：原请求“继续” → {"prompt":"请继续。"}；原请求“把老板加点戏 别写成反派” → {"prompt":"多写老板，别写成反派"}。错误示例：把“继续”改成“继续描写人物互动，保持第三人称和舒缓节奏”，因为新增了方向、视角和节奏限制。';
@@ -31,28 +37,47 @@ export function upgradeLegacyPlugin(p: PluginDefinition): PluginDefinition {
   } = legacy;
   p = {
     ...clean,
+    ...(p.kind === "analysis" && p.name === "JSON 分析"
+      ? { name: "写前分析" }
+      : {}),
+    ...(p.kind === "analysis" && p.cardTitle === "JSON 分析"
+      ? { cardTitle: "写前分析" }
+      : {}),
     system: typeof p.system === "string" ? p.system : "",
     rawRounds:
       Number.isSafeInteger(p.rawRounds) && p.rawRounds >= 0 ? p.rawRounds : 3,
   } as PluginDefinition;
   if (
     p.kind === "analysis" &&
-    [LEGACY_ANALYSIS_PROMPT, ANALYSIS_PROMPT].includes(p.prompt)
+    [
+      LEGACY_ANALYSIS_PROMPT,
+      ANALYSIS_PROMPT,
+      PRE_BLOCK_ANALYSIS_PROMPT,
+    ].includes(p.prompt)
   ) {
     try {
       const schema = JSON.stringify(JSON.parse(p.schema));
       if (
-        [ANALYSIS_SCHEMA, LEGACY_ANALYSIS_SCHEMA].some(
-          (s) => JSON.stringify(JSON.parse(s)) === schema,
-        )
+        [
+          ANALYSIS_SCHEMA,
+          LEGACY_ANALYSIS_SCHEMA,
+          PRE_BLOCK_ANALYSIS_SCHEMA,
+        ].some((s) => JSON.stringify(JSON.parse(s)) === schema)
       )
         return { ...p, prompt: ANALYSIS_PROMPT, schema: ANALYSIS_SCHEMA };
     } catch {
       /* Preserve custom or invalid schemas for the existing editor to report. */
     }
   }
-  if (p.kind === "clarify" && p.prompt === LEGACY_CLARIFY_PROMPT)
-    return { ...p, prompt: CLARIFY_PROMPT };
+  if (
+    p.kind === "clarify" &&
+    [
+      LEGACY_CLARIFY_PROMPT,
+      PRE_QUESTIONS_CLARIFY_PROMPT,
+      CLARIFY_PROMPT,
+    ].includes(p.prompt)
+  )
+    return { ...p, prompt: CLARIFY_PROMPT, clarifyFormat: "questions" };
   if (p.kind === "suggest" || p.kind === "rewrite") {
     const oldDefault = [
       PRE_UA_REWRITE_PROMPT,

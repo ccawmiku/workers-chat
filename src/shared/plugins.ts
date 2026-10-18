@@ -1,9 +1,12 @@
 import { replyFallback, REPLY_FALLBACK_CHAR_LIMIT } from "./reply-context";
 import { CLARIFY_PROMPT } from "./clarify-defaults";
 import {
-  candidateTask,
-  swappedHistory,
-} from "./candidate-requests";
+  readQuestions,
+  questionView,
+  QUESTION_SCHEMA,
+  type AnalysisType,
+} from "./plugin-sections";
+import { candidateTask, swappedHistory } from "./candidate-requests";
 import { readPluginJSON } from "./plugin-json";
 import { upgradeLegacyPlugin } from "./plugin-migrations";
 export { upgradeLegacyPlugin } from "./plugin-migrations";
@@ -50,6 +53,10 @@ export type PluginDefinition = {
   suggestions: number;
   initialUser?: string;
   rewriteFormat?: "fields";
+  clarifyFormat?: "questions";
+  clarifyLoop?: boolean;
+  excludedCharacters?: string;
+  analysisTypes?: AnalysisType[];
 };
 export type PluginBinding = {
   id: string;
@@ -114,6 +121,14 @@ export type PluginRun = {
   replaces?: string;
   dismissed?: boolean;
   referenceReset?: true;
+  sectionEdit?: {
+    sourceId: string;
+    targetId: string | null;
+    instruction: string;
+    expectedOutput: string;
+  };
+  sectionHistory?: string[];
+  sectionResultId?: string;
 };
 export type PluginFlow = {
   id: string;
@@ -142,7 +157,7 @@ export type PluginState = {
 };
 export const emptyPluginState = (): PluginState => ({ runs: [], flows: [] });
 const names: Record<PluginKind, string> = {
-  analysis: "JSON 分析",
+  analysis: "写前分析",
   clarify: "提问澄清",
   suggest: "追问建议",
   rewrite: "重写提示",
@@ -171,6 +186,12 @@ export function pluginDefaults(
     rawRounds: 3,
     suggestions: 3,
     ...(kind === "rewrite" ? { rewriteFormat: "fields" as const } : {}),
+    ...(kind === "clarify"
+      ? { clarifyFormat: "questions" as const, clarifyLoop: false }
+      : {}),
+    ...(kind === "analysis"
+      ? { excludedCharacters: "", analysisTypes: [] }
+      : {}),
     ...(["suggest", "rewrite"].includes(kind) ? { initialUser: "好的" } : {}),
     example: "",
     schema: kind === "analysis" ? ANALYSIS_SCHEMA : "",
@@ -230,6 +251,8 @@ export function enabledPlugins(chat: Chat, settings: Settings) {
 export { readPluginJSON } from "./plugin-json";
 export function normalizePluginOutput(p: PluginDefinition, text: string) {
   if (!text.trim()) throw Error("插件返回内容为空");
+  if (p.kind === "clarify" && p.clarifyFormat === "questions")
+    return JSON.stringify({ questions: readQuestions(text) }, null, 2);
   if (p.kind === "analysis")
     return JSON.stringify(readPluginJSON(text, p.schema), null, 2);
   if (p.kind === "rewrite" && p.rewriteFormat === "fields")
@@ -367,6 +390,7 @@ export function preparePlugin(
   const previous = state.runs.filter(
     (r) =>
       r.plugin.id === p.id &&
+      !r.sectionEdit &&
       r.anchorId &&
       ids.has(r.anchorId) &&
       ["complete", "answered"].includes(r.status),
@@ -452,7 +476,7 @@ export function preparePlugin(
       messages.push(rawSupplement);
       section("最近原始 UA 补充", [rawSupplement]);
     }
-    if (p.kind === "analysis" && clarifications.length) {
+    if (clarifications.length) {
       const start = messages.length;
       messages = injectPlugins(
         [...messages, { role: "user", content: input }],
@@ -471,6 +495,11 @@ export function preparePlugin(
       suffix += "\n\n最新用户要求：\n" + input;
     if (p.kind === "analysis" && p.schema.trim())
       suffix += "\n\nJSON Schema：\n" + p.schema;
+    if (p.kind === "analysis" && p.excludedCharacters?.trim())
+      suffix +=
+        "\n禁止生成以下主角/角色的第一人称内心：" + p.excludedCharacters;
+    if (p.kind === "clarify" && p.clarifyFormat === "questions")
+      suffix += "\n输出必须符合 JSON Schema：\n" + QUESTION_SCHEMA;
     if (p.example.trim()) suffix += "\n\n固定示例：\n" + p.example;
     messages.push({ role: "user", content: suffix });
     section("插件任务与参考", messages.slice(-1));
@@ -511,7 +540,8 @@ export function preparePlugin(
     ...settings.parameters,
     ...model.parameters,
     ...p.parameters,
-    ...(["suggest", "rewrite"].includes(p.kind)
+    ...(["suggest", "rewrite"].includes(p.kind) ||
+    (p.kind === "clarify" && p.clarifyFormat === "questions")
       ? { response_format: { type: "json_object" as const } }
       : {}),
     ...(p.effort !== "inherit" ? { reasoning_effort: p.effort } : {}),
@@ -566,6 +596,12 @@ export function flowInjections(
   return flow.results.flatMap((id) => {
     const run = state.runs.find((r) => r.id === id);
     if (!run || !["complete", "answered"].includes(run.status)) return [];
+    if (
+      run.plugin.kind === "clarify" &&
+      questionView(run.output)?.length === 0 &&
+      !run.answer?.trim()
+    )
+      return [];
     const configuration =
       flow.definitions.find((p) => p.id === run.plugin.id) ?? run.plugin;
     return [

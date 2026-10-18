@@ -94,6 +94,20 @@ for (const mobile of [false, true])
       name: "全局 · 提问澄清",
       exact: true,
     });
+    const sticky = await editor.evaluate((el) => {
+      const scroller = el.querySelector(".settings-form-scroll")!;
+      const footer = el.querySelector("footer")!;
+      const before = footer.getBoundingClientRect();
+      const viewport = el.getBoundingClientRect();
+      scroller.scrollTop = scroller.scrollHeight;
+      const after = footer.getBoundingClientRect();
+      return {
+        visible: before.top >= viewport.top && before.bottom <= viewport.bottom,
+        stable: Math.abs(before.top - after.top) < 1,
+        scrolls: scroller.scrollHeight > scroller.clientHeight,
+      };
+    });
+    expect(sticky).toEqual({ visible: true, stable: true, scrolls: true });
     await expect(
       editor.getByLabel("高水位（k Token）", { exact: true }),
     ).toHaveCount(0);
@@ -134,10 +148,10 @@ for (const mobile of [false, true])
     ).not.toBeChecked();
     await editor.getByRole("button", { name: "取消", exact: true }).click();
     await list
-      .getByRole("button", { name: "编辑插件 JSON 分析", exact: true })
+      .getByRole("button", { name: "编辑插件 写前分析", exact: true })
       .click();
     editor = page.getByRole("dialog", {
-      name: "全局 · JSON 分析",
+      name: "全局 · 写前分析",
       exact: true,
     });
     await expect(
@@ -182,16 +196,16 @@ for (const mobile of [false, true])
     ).toHaveValue("开始吧");
     await editor.getByRole("button", { name: "取消", exact: true }).click();
     await list
-      .getByRole("button", { name: "复制插件 JSON 分析", exact: true })
+      .getByRole("button", { name: "复制插件 写前分析", exact: true })
       .click();
     editor = page.getByRole("dialog", {
-      name: "全局 · JSON 分析 副本",
+      name: "全局 · 写前分析 副本",
       exact: true,
     });
     await editor.getByRole("button", { name: "保存", exact: true }).click();
     await expect(list.locator("li")).toHaveCount(5);
     await list
-      .getByRole("button", { name: "删除插件 JSON 分析 副本", exact: true })
+      .getByRole("button", { name: "删除插件 写前分析 副本", exact: true })
       .click();
     await expect(list.locator("li")).toHaveCount(4);
     expect(errors).toEqual([]);

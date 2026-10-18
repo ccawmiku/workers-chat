@@ -7,7 +7,7 @@ for (const mobile of [false, true])
   test(`four plugin flows, draft safety, live preview and grouping (${mobile ? "phone" : "desktop"})`, async ({
     page,
   }) => {
-    test.setTimeout(90000);
+    test.setTimeout(150000);
     await page.setViewportSize(
       mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 },
     );
@@ -88,7 +88,21 @@ for (const mobile of [false, true])
           all = messages.map((m) => m.content ?? "").join("\n");
         let kind = "main",
           content = "主回答已结合目标、约束和澄清结果完成。";
-        if (last.includes("JSON Schema：")) {
+        let part: any;
+        try {
+          part = JSON.parse(last);
+        } catch {}
+        if (part?.output_contract) {
+          kind = "section";
+          content = JSON.stringify({
+            type: part.target?.type ?? "服装状态",
+            content: part.user_requirement || "这是一条重新整理的已有状态。",
+            instruction: "只记录历史已经明确的服装状态",
+          });
+        } else if (
+          last.includes("JSON Schema：") &&
+          !last.includes('"questions"')
+        ) {
           kind = "analysis";
           content = JSON.stringify({
             character_thoughts: "none",
@@ -96,9 +110,36 @@ for (const mobile of [false, true])
             action_state: "none",
             knowledge_boundaries: "none",
           });
-        } else if (last.includes("提出一批具体、必要的澄清问题")) {
+        } else if (last.includes("只提出必要、未回答且未明确跳过的澄清问题")) {
           kind = "clarify";
-          content = "1. **请问**希望采用哪种风格？\n\n- 轻松\n- 正式";
+          content = JSON.stringify({
+            questions:
+              ledger.some((l) => l.kind === "clarify") ||
+              messages.some((m) => (m as any).role === "tool")
+                ? []
+                : [
+                    {
+                      id: "q1",
+                      question: "希望采用哪种风格？",
+                      multiple: false,
+                      options: [
+                        { id: "A", text: "轻松" },
+                        { id: "B", text: "正式" },
+                        { id: "C", text: "其他" },
+                      ],
+                    },
+                    {
+                      id: "q2",
+                      question: "需要哪些已有角色？",
+                      multiple: true,
+                      options: [
+                        { id: "A", text: "甲" },
+                        { id: "B", text: "乙" },
+                        { id: "C", text: "都不指定" },
+                      ],
+                    },
+                  ],
+          });
         } else if (all.includes('"suggestions"')) {
           kind = "suggest";
           content = JSON.stringify({
@@ -186,12 +227,7 @@ for (const mobile of [false, true])
         .getByRole("button", { name: "插件", exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "插件", exact: true }).click();
-    for (const name of [
-      "JSON 分析",
-      "提问澄清",
-      "追问建议",
-      "重写提示",
-    ]) {
+    for (const name of ["写前分析", "提问澄清", "追问建议", "重写提示"]) {
       await page.getByLabel("启用 " + name, { exact: true }).check();
       await expect(
         page.getByRole("button", { name: name + "上下文", exact: true }),
@@ -242,10 +278,10 @@ for (const mobile of [false, true])
     page.on("request", counter);
     await page.getByLabel("消息", { exact: true }).fill("写一个短故事");
     await page
-      .getByRole("button", { name: "JSON 分析上下文", exact: true })
+      .getByRole("button", { name: "写前分析上下文", exact: true })
       .click();
     await expect(
-      page.getByRole("dialog", { name: "JSON 分析 · 上下文", exact: true }),
+      page.getByRole("dialog", { name: "写前分析 · 上下文", exact: true }),
     ).toBeVisible();
     await expect(
       page.getByText("总输入／模型容量", { exact: true }),
@@ -283,13 +319,13 @@ for (const mobile of [false, true])
     expect(previewAPIs).toBe(0);
     page.off("request", counter);
     await page.getByRole("button", { name: "发送", exact: true }).click();
-    await expect(page.locator(".plugin-reply")).toBeVisible();
+    await expect(page.locator(".plugin-reply")).toBeVisible({ timeout: 15000 });
     await expect(page.locator(".plugin-question[open]")).toContainText(
       "哪种风格",
     );
     await expect(
-      page.locator(".plugin-question[open] .markdown strong"),
-    ).toHaveText("请问");
+      page.locator(".plugin-question[open] .question-options button"),
+    ).toHaveCount(8);
     await expect(
       page.locator(".plugin-question[open] .plugin-usage"),
     ).toContainText("缓存率 80.0%");
@@ -308,8 +344,53 @@ for (const mobile of [false, true])
         [],
       );
     }
+    const questionBoxes = await page
+      .locator(".question-section")
+      .evaluateAll((nodes) =>
+        nodes.map((n) => {
+          const r = n.getBoundingClientRect();
+          return { x: r.x, y: r.y };
+        }),
+      );
+    if (mobile)
+      expect(questionBoxes[1]!.y).toBeGreaterThan(questionBoxes[0]!.y);
+    else
+      expect(Math.abs(questionBoxes[0]!.y - questionBoxes[1]!.y)).toBeLessThan(
+        2,
+      );
+    await page
+      .locator(".plugin-question[open]")
+      .getByLabel("反复问", { exact: true })
+      .check();
+    await page
+      .locator(".question-section")
+      .first()
+      .getByRole("button", { name: "A 轻松", exact: true })
+      .click();
+    await expect
+      .poll(() =>
+        page
+          .locator(".question-section")
+          .first()
+          .evaluate((node) => {
+            const selected = node.querySelector('[aria-pressed="true"]')!;
+            const plain = node.querySelector('[aria-pressed="false"]')!;
+            return (
+              getComputedStyle(selected).backgroundColor !==
+              getComputedStyle(plain).backgroundColor
+            );
+          }),
+      )
+      .toBe(true);
     await page.getByLabel("消息", { exact: true }).fill("**轻松幽默**");
     await page.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(
+      page.getByText("没有需要继续澄清的问题，确认后继续。", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator(".plugin-question[open]")).toHaveCount(1);
+    await page
+      .getByRole("button", { name: "继续写前分析", exact: true })
+      .click();
     await expect(
       page.getByRole("button", { name: "确认并继续", exact: true }),
     ).toBeVisible();
@@ -323,17 +404,97 @@ for (const mobile of [false, true])
     await expect(
       page.locator(".plugin-result:not(.plugin-question)[open] .plugin-usage"),
     ).toContainText("缓存率 80.0%");
+    const sceneCard = page.locator('.analysis-section[aria-label="场景记录"]');
+    await expect(sceneCard).toBeVisible();
+    await sceneCard
+      .getByRole("button", { name: "重新生成此块", exact: true })
+      .click();
+    let candidate = page.getByLabel("分块结果对比", { exact: true });
+    await expect(candidate).toContainText("缓存率 80.0%");
+    await expect(candidate).toContainText("这是一条重新整理的已有状态。");
+    await candidate
+      .getByRole("button", { name: "确认替换此块", exact: true })
+      .click();
+    await expect(sceneCard).toContainText("这是一条重新整理的已有状态。");
+    await page
+      .locator('.analysis-section[aria-label="动作记录"]')
+      .getByRole("button", { name: "重新生成此块", exact: true })
+      .click();
+    await expect(candidate).toContainText("这是一条重新整理的已有状态。");
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: "新增类型", exact: true }),
+    ).toBeVisible();
+    await expect(candidate).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).pluginLedger)).toEqual([]);
+    await page.getByLabel("消息", { exact: true }).fill("保留主聊天草稿");
+    await sceneCard
+      .getByRole("button", { name: "附要求修改", exact: true })
+      .click();
+    await expect(page.getByLabel("消息", { exact: true })).toHaveAttribute(
+      "placeholder",
+      /修改「场景记录」/,
+    );
+    await page.getByLabel("消息", { exact: true }).fill("只强调已经存在的门");
+    await page.getByRole("button", { name: "取消操作", exact: true }).click();
+    await expect(page.getByLabel("消息", { exact: true })).toHaveValue(
+      "保留主聊天草稿",
+    );
+    await page.getByRole("button", { name: "新增类型", exact: true }).click();
+    await page
+      .getByLabel("消息", { exact: true })
+      .fill("增加服装状态，关注角色甲的外套");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(candidate).toContainText("增加服装状态，关注角色甲的外套");
+    await candidate.getByRole("checkbox").check();
+    await expect(
+      candidate.getByLabel("保存类型通用规则", { exact: true }),
+    ).toHaveValue("只记录历史已经明确的服装状态");
+    await candidate
+      .getByRole("button", { name: "确认替换并添加", exact: true })
+      .click();
+    await expect(
+      page.locator('.analysis-section[aria-label="服装状态"]'),
+    ).toBeVisible();
+    await expect(page.getByLabel("消息", { exact: true })).toHaveValue(
+      "保留主聊天草稿",
+    );
+    await expect(
+      page.getByLabel("添加已保存类型", { exact: true }),
+    ).toBeVisible();
+    await page
+      .getByLabel("添加已保存类型", { exact: true })
+      .selectOption({ label: "服装状态" });
+    await expect(page.getByLabel("消息", { exact: true })).toHaveValue(
+      /通用规则：只记录历史已经明确的服装状态/,
+    );
+    await page.getByRole("button", { name: "取消操作", exact: true }).click();
+    await sceneCard.getByRole("button", { name: "编辑", exact: true }).click();
+    await sceneCard
+      .getByLabel("编辑分块正文", { exact: true })
+      .fill("手动编辑的场景记录");
+    await sceneCard
+      .getByRole("button", { name: "保存此块", exact: true })
+      .click();
+    await expect(sceneCard).toContainText("手动编辑的场景记录");
     await page.reload();
     await expect(
       page.getByRole("button", { name: "确认并继续", exact: true }),
     ).toBeVisible();
     expect(await page.evaluate(() => (window as any).pluginLedger)).toEqual([]);
     await page
-      .getByRole("button", { name: "重新生成 JSON", exact: true })
+      .getByRole("button", { name: "全部重新生成", exact: true })
       .click();
     await expect(
       page.getByRole("button", { name: "确认并继续", exact: true }),
     ).toBeVisible();
+    await page
+      .getByRole("button", { name: "确认替换结果", exact: true })
+      .click();
+    await expect(
+      page.locator('.analysis-section[aria-label="服装状态"]'),
+    ).toHaveCount(0);
+    await expect(sceneCard).not.toContainText("手动编辑的场景记录");
     await expect(page.locator(".message.assistant")).toHaveCount(0);
     await page.getByRole("button", { name: "确认并继续", exact: true }).click();
     await expect(page.locator(".message.assistant .markdown")).toContainText(
@@ -350,7 +511,7 @@ for (const mobile of [false, true])
     ).toContainText("输出 424");
     await expect(
       page.getByRole("button", { name: "再给我一个例子", exact: false }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 15000 });
     await expect(
       page.locator(".plugin-suggestions .plugin-usage"),
     ).toContainText("缓存率 22%");
@@ -425,7 +586,7 @@ for (const mobile of [false, true])
         name: "重写提示 · 对比",
         exact: true,
       }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 15000 });
     let comparison = page.getByRole("dialog", {
       name: "重写提示 · 对比",
       exact: true,
@@ -523,7 +684,9 @@ for (const mobile of [false, true])
     }, id);
     expect(Object.values(result.chat.messages)).toHaveLength(2);
     expect(
-      result.pluginState.runs.filter((r: any) => r.status === "answered"),
+      result.pluginState.runs.filter(
+        (r: any) => r.status === "answered" && r.answer?.trim(),
+      ),
     ).toHaveLength(1);
     expect(JSON.stringify(result.chat.messages)).not.toContain("轻松幽默");
     const originalUser = page.locator(".message.user").first();

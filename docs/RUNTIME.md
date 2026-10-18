@@ -70,3 +70,5 @@
 - Workers fetch 使用 `redirect: manual` 并拒绝非 2xx，8 秒超时显式清理，响应限制 1 MiB；不把凭证随重定向发到其他主机。
 
 参考：[Analytics Token 权限](https://developers.cloudflare.com/analytics/graphql-api/getting-started/authentication/api-token-auth/)、[Workers 价格](https://developers.cloudflare.com/workers/platform/pricing/)、[DO 价格](https://developers.cloudflare.com/durable-objects/platform/pricing/)、[D1 价格](https://developers.cloudflare.com/d1/platform/pricing/)、[Workflows 价格](https://developers.cloudflare.com/workflows/reference/pricing/)。界面参考免费套餐上限，不宣称统计是实时计费明细；Analytics 延迟、采样和按数据集的可用性仍适用。
+
+索引回归的构造数据证据（历史测试，非线上账单）：最新标题任务读取 2004→1 行，某聊天摘要任务读取 2003→8 行，无关联子任务文档删除的外键检查读取 8001→1 行。0006 首次建索引仍扫描现有数据并增加索引维护成本；生产已应用，后续环境先检查 migrations list。当前完整聊天仍以版本化快照保存，真实改文的长聊天写放大尚未改成增量存储。

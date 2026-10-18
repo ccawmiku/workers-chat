@@ -290,14 +290,26 @@ for (const mobile of [false, true])
         .locator(".plugin-chip")
         .first()
         .evaluate((el) => el.getBoundingClientRect().height),
-    ).toBeLessThanOrEqual(28);
+    ).toBeLessThanOrEqual(36);
     expect(
       await page.evaluate(() => localStorage.getItem("plugin-chips-collapsed")),
     ).toBe("1");
+    await expect(page.locator(".plugin-chips .context-arcs")).toHaveCount(5);
     await expect(
-      page.locator(".plugin-chips .plugin-context-ring"),
+      page.locator(".plugin-chips .plugin-combined-ring"),
     ).toHaveCount(5);
-    await expect(page.locator(".plugin-chips .usage-ring")).toHaveCount(5);
+    for (const name of await page
+      .locator(".plugin-chips .plugin-chip-name")
+      .all())
+      await expect(name).toBeVisible();
+    expect(
+      await page
+        .locator(".plugin-chips")
+        .evaluate((el) => parseFloat(getComputedStyle(el).gap)),
+    ).toBeGreaterThanOrEqual(12);
+    await expect(
+      page.locator(".plugin-chips .ring-cache-value").first(),
+    ).toHaveText("");
     for (const ring of await page.locator(".plugin-chips svg").all())
       await expect(ring).toBeVisible();
     expect(

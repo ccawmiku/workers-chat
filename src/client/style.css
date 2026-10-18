@@ -2726,29 +2726,6 @@ main {
   scrollbar-width: thin;
   padding: 2px;
 }
-.plugin-chip {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: auto auto;
-  grid-template-rows: 16px 20px;
-  align-items: center;
-  height: 46px;
-  min-height: 46px;
-  gap: 2px 6px;
-  min-width: 130px;
-  max-width: 200px;
-  padding: 4px 9px;
-  border: 1px solid var(--line-color);
-  border-radius: 9px;
-  text-align: left;
-  background: var(--panel);
-}
-.plugin-chip > span:first-child {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  white-space: nowrap;
-}
 .plugin-chip-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4167,9 +4144,8 @@ main {
   color: var(--accent-ink);
 }
 
-/* Context fill and usage composition share one SVG ring each. */
-.usage-ring,
-.plugin-context-ring {
+/* One combined SVG per plugin; reply meters follow the metadata text size. */
+.usage-ring {
   width: 20px;
   height: 20px;
   display: inline-block;
@@ -4178,29 +4154,33 @@ main {
   overflow: visible;
 }
 .usage-ring.compact {
-  width: 22px;
-  height: 22px;
-  margin-inline-start: 5px;
+  width: 1.2em;
+  height: 1.2em;
+  margin-inline-start: 0.15em;
 }
 .ring-track {
   stroke: var(--line-color);
 }
-.usage-ring .usage-input {
+.usage-arcs .usage-input {
   color: #2563eb;
 }
-.usage-ring .usage-cached {
+.usage-arcs .usage-cached {
   color: #93c5fd;
 }
-.usage-ring .usage-thinking {
+.usage-arcs .usage-thinking {
   color: #facc15;
 }
-.usage-ring .usage-output {
+.usage-arcs .usage-output {
   color: #f077af;
 }
-.plugin-context-ring {
-  color: var(--accent);
+.context-arcs {
+  color: #f077af;
 }
-.plugin-context-ring.over-budget {
+.context-arcs .ring-track {
+  stroke: #f077af;
+  opacity: 0.22;
+}
+.context-arcs.over-budget {
   color: var(--danger);
 }
 .message-model {
@@ -4209,49 +4189,96 @@ main {
   gap: 3px;
   white-space: nowrap;
 }
-.plugin-chip .plugin-chip-heading {
-  grid-column: 1/-1;
+.plugin-chips {
+  gap: 10px;
 }
-.plugin-chip .plugin-chip-meters {
+.plugin-chip {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 5px;
-  grid-row: 2;
-  grid-column: 1;
+  justify-content: space-between;
+  gap: 12px;
+  height: 60px;
+  min-height: 60px;
+  min-width: 132px;
+  max-width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-color);
+  border-radius: 9px;
+  text-align: left;
+  background: var(--panel);
+}
+.plugin-chip-info {
+  display: grid;
+  grid-template-rows: 15px 14px 12px;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.plugin-chip-name {
+  font-size: 12px;
+  line-height: 15px;
+}
+.plugin-chip b {
+  font-size: 11px;
+  line-height: 14px;
 }
 .plugin-chip .plugin-chip-cache {
-  grid-row: 2;
-  grid-column: 2;
-  justify-self: end;
+  font-size: 10px;
+  line-height: 12px;
+  min-height: 12px;
+}
+.plugin-combined-ring {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  overflow: visible;
+}
+.ring-cache-value {
+  fill: var(--text);
+  font-size: 18px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
 }
 .plugin-bar.chips-collapsed .plugin-chips {
   width: fit-content;
   max-width: 100%;
-  gap: 2px;
-  padding: 2px 5px;
+  gap: 16px;
+  padding: 3px 8px;
   border: 1px solid var(--line-color);
   border-radius: 999px;
   background: var(--panel);
 }
 .plugin-bar.chips-collapsed .plugin-chip {
-  display: flex;
-  justify-content: center;
-  flex: 0 0 44px;
-  min-width: 44px;
-  max-width: 44px;
-  height: 24px;
-  min-height: 24px;
-  padding: 2px;
+  justify-content: flex-start;
+  min-width: 0;
+  max-width: none;
+  height: 34px;
+  min-height: 34px;
+  gap: 6px;
+  padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
 }
-.plugin-bar.chips-collapsed .plugin-chip .plugin-chip-heading,
-.plugin-bar.chips-collapsed .plugin-chip > small {
+.plugin-bar.chips-collapsed .plugin-chip-info {
+  display: block;
+  max-width: 96px;
+}
+.plugin-bar.chips-collapsed .plugin-chip-name {
+  display: block;
+}
+.plugin-bar.chips-collapsed .plugin-chip b,
+.plugin-bar.chips-collapsed .plugin-chip small {
   display: none;
 }
+.plugin-bar.chips-collapsed .plugin-combined-ring {
+  width: 32px;
+  height: 32px;
+}
 .plugin-bar.chips-collapsed .chips-toggle {
-  top: 3px;
+  top: 7px;
   height: 24px;
   min-height: 24px;
 }

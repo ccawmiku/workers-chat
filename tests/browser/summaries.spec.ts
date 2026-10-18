@@ -204,7 +204,50 @@ for (const mobile of [false, true])
     await expect(latest).toContainText("输出 424");
     await expect(latest).toContainText("缓存率 85.8%");
     await expect(latest.locator(".plugin-usage .usage-ring")).toHaveCount(1);
-    const composition = page.locator(".summary-context-chip .usage-ring");
+    const composition = page.locator(
+      ".summary-context-chip .plugin-combined-ring",
+    );
+    await expect(composition.locator(".ring-cache-value")).toHaveText("86");
+    await expect(
+      page.locator(".summary-context-chip .plugin-chip-cache"),
+    ).toHaveText("85.8%");
+    expect(
+      await composition
+        .locator(".ring-cache-value")
+        .evaluate((el) => Number(getComputedStyle(el).fontWeight)),
+    ).toBeGreaterThanOrEqual(700);
+    expect(
+      await composition.evaluate((svg) => {
+        const outer = svg.querySelector(".usage-arcs > circle")!,
+          inner = svg.querySelector(".context-arcs > circle")!;
+        return (
+          Number(outer.getAttribute("r")) -
+          Number(outer.getAttribute("stroke-width")) / 2 -
+          Number(inner.getAttribute("r")) -
+          Number(inner.getAttribute("stroke-width")) / 2
+        );
+      }),
+    ).toBeGreaterThan(2);
+    const chipGeometry = await page
+      .locator(".summary-context-chip")
+      .evaluate((el) => {
+        const name = el
+            .querySelector(".plugin-chip-name")!
+            .getBoundingClientRect(),
+          tokens = el.querySelector("b")!.getBoundingClientRect(),
+          cache = el
+            .querySelector(".plugin-chip-cache")!
+            .getBoundingClientRect(),
+          ring = el
+            .querySelector(".plugin-combined-ring")!
+            .getBoundingClientRect();
+        return {
+          stack: name.bottom <= tokens.top && tokens.bottom <= cache.top,
+          right: cache.right <= ring.left,
+        };
+      });
+    expect(chipGeometry).toEqual({ stack: true, right: true });
+
     await expect(composition.locator(".usage-segment")).toHaveCount(4);
     expect(
       await composition
@@ -242,12 +285,13 @@ for (const mobile of [false, true])
     const dimensions = await chips.evaluateAll((nodes) =>
       nodes.map((node) => {
         const r = node.getBoundingClientRect(),
-          bars = node.querySelectorAll(".plugin-context-ring");
+          bars = node.querySelectorAll(".context-arcs");
         return {
           height: r.height,
           capacity: bars[0]!.getBoundingClientRect().y - r.y,
           composition:
-            node.querySelector(".usage-ring")!.getBoundingClientRect().y - r.y,
+            node.querySelector(".plugin-combined-ring")!.getBoundingClientRect()
+              .y - r.y,
         };
       }),
     );
@@ -317,6 +361,44 @@ for (const mobile of [false, true])
         ".message.assistant > .message-body > .message-meta .message-model > .usage-ring",
       ),
     ).toHaveCount(2);
+    const replyMeta = page
+      .locator(".message.assistant > .message-body > .message-meta")
+      .last();
+    expect(
+      await replyMeta
+        .locator(".usage-ring")
+        .evaluate(
+          (el) =>
+            el.getBoundingClientRect().width /
+            parseFloat(getComputedStyle(el).fontSize),
+        ),
+    ).toBeCloseTo(1.2, 1);
+    await replyMeta.evaluate((el) => (el.style.fontSize = "20px"));
+    expect(
+      await replyMeta
+        .locator(".usage-ring")
+        .evaluate((el) => el.getBoundingClientRect().width),
+    ).toBeCloseTo(24, 0);
+    await replyMeta.evaluate((el) => el.style.removeProperty("font-size"));
+    await page.screenshot({
+      path: `test-results/combined-ring-${mobile ? "phone" : "desktop"}-${test.info().project.name}.png`,
+    });
+    await page
+      .getByRole("button", { name: "折叠插件上下文", exact: true })
+      .click();
+    await expect(
+      page.locator(".summary-context-chip .ring-cache-value"),
+    ).toHaveText("86");
+    await expect(
+      page.locator(".summary-context-chip .plugin-chip-name"),
+    ).toBeVisible();
+    await page.screenshot({
+      path: `test-results/combined-collapsed-${mobile ? "phone" : "desktop"}-${test.info().project.name}.png`,
+    });
+    await page
+      .getByRole("button", { name: "展开插件上下文", exact: true })
+      .click();
+
     await page
       .getByRole("button", { name: "当前聊天设置", exact: true })
       .click();
@@ -413,4 +495,6 @@ for (const mobile of [false, true])
     await page.screenshot({
       path: `test-results/summaries-${mobile ? "phone" : "desktop"}-${test.info().project.name}.png`,
     });
+    await page.unrouteAll({ behavior: "wait" });
+    expect(errors).toEqual([]);
   });

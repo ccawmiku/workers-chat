@@ -4,10 +4,9 @@ import {
   type PluginInputRequest,
 } from "./plugin-sections-ui";
 import { questionView, type AnalysisType } from "../shared/plugin-sections";
-import { UsageRing, ContextRing } from "./usage-bar";
+import { UsageRing, PluginChipContents } from "./usage-bar";
 import { ActionIcons as I } from "./action-icons";
 import { FallbackSettings, FallbackButton } from "./fallback-ui";
-import { CacheIndicator } from "./cache-indicator";
 import {
   GlobalSummarySettings,
   SummaryTools,
@@ -1148,34 +1147,23 @@ export function PluginBar({
                 aria-label={p.name + "上下文"}
                 onClick={() => setContext(p.id)}
               >
-                <span className="plugin-chip-heading">
-                  <span className="plugin-chip-name">{p.name}</span>
-                  <b>{metrics ? k(metrics.total) : "未选模型"}</b>
-                </span>
-                <span className="plugin-chip-meters">
-                  <ContextRing
-                    used={metrics?.total ?? 0}
-                    capacity={metrics?.capacity ?? 1}
-                    label={p.name + "上下文"}
-                  />
-                  <UsageRing
-                    usage={(run ?? usageRun)?.usage}
-                    cacheId={run?.id ?? usageRun?.id}
-                    fallback={
-                      metrics
-                        ? {
-                            input: metrics.total,
-                            thinking: 0,
-                            output: 0,
-                            total: metrics.total,
-                          }
-                        : undefined
-                    }
-                  />
-                </span>
-                <CacheIndicator
+                <PluginChipContents
+                  name={p.name}
+                  inputLabel={metrics ? k(metrics.total) : "未选模型"}
+                  used={metrics?.total ?? 0}
+                  capacity={metrics?.capacity ?? 1}
                   usage={(run ?? usageRun)?.usage}
-                  id={run?.id ?? usageRun?.id}
+                  cacheId={run?.id ?? usageRun?.id}
+                  fallback={
+                    metrics
+                      ? {
+                          input: metrics.total,
+                          thinking: 0,
+                          output: 0,
+                          total: metrics.total,
+                        }
+                      : undefined
+                  }
                   preview={
                     run?.status === "running" &&
                     run.model?.providerId ===

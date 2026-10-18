@@ -1,7 +1,6 @@
-import { UsageRing, ContextRing } from "./usage-bar";
+import { UsageRing, PluginChipContents } from "./usage-bar";
 import { ActionIcons as I } from "./action-icons";
 import { FallbackButton } from "./fallback-ui";
-import { CacheIndicator } from "./cache-indicator";
 import { api } from "./api";
 import { useEffect, useState, useMemo } from "react";
 import type { PluginRequest } from "../shared/plugins";
@@ -619,29 +618,18 @@ export function SummaryContextChip({
         aria-label="回复摘要上下文"
         onClick={() => setOpen(true)}
       >
-        <span className="plugin-chip-heading">
-          <span className="plugin-chip-name">回复摘要</span>
-          <b>{message ? formatTokenCount(tokens) : "待回复"}</b>
-        </span>
-        <span className="plugin-chip-meters">
-          <ContextRing
-            used={tokens}
-            capacity={capacity}
-            label="回复摘要上下文"
-          />
-          <UsageRing
-            usage={run?.usage}
-            cacheId={run?.id}
-            fallback={
-              tokens
-                ? { input: tokens, thinking: 0, output: 0, total: tokens }
-                : undefined
-            }
-          />
-        </span>
-        <CacheIndicator
+        <PluginChipContents
+          name="回复摘要"
+          inputLabel={message ? formatTokenCount(tokens) : "待回复"}
+          used={tokens}
+          capacity={capacity}
           usage={run?.usage}
-          id={run?.id}
+          cacheId={run?.id}
+          fallback={
+            tokens
+              ? { input: tokens, thinking: 0, output: 0, total: tokens }
+              : undefined
+          }
           preview={
             run?.status === "running" &&
             prepared &&

@@ -1,5 +1,7 @@
 # 在线AI · Workers Chat
 
+v1.2.0：自适应缓存前缀编排、独立模型/温度双窗口对比及无工具纯净模式；[功能与维护说明](docs/CACHE_COMPARISON.md)。
+
 运行于 Cloudflare 免费套餐的单用户、纯文字 AI 聊天网站，调用自己的 OpenAI 兼容 Chat Completions API。当前生产地址：[chat.yaemiko.lol](https://chat.yaemiko.lol/)。
 
 支持消息树与分支、Markdown、流式与后台生成、服务商和模型管理、分组/归档、导入导出、设备直连、外观设置及全账号 Cloudflare 额度。插件包括提问澄清、写前分析、追问建议、重写提示，另有独立回复摘要。默认思考强度“跟随接口”，显式设置不支持的参数时直接显示错误。

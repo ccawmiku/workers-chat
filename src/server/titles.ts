@@ -1,6 +1,6 @@
 import { generationDeadline } from "./deadline";
 import type { DirectTitleTask } from "../shared/direct";
-import { renderTitlePrompt, extractTitle } from "../shared/title-template";
+import { titleMessages, extractTitle } from "../shared/title-template";
 import {
   type Chat,
   type Provider,
@@ -240,7 +240,7 @@ export async function runTitle(env: Env, id: string): Promise<string> {
       await finishTitleJob(env, id, "superseded");
       return "superseded";
     }
-    const prompt = renderTitlePrompt(config.prompt, doc.value, job.message_id);
+    const messages = titleMessages(config.prompt, doc.value, job.message_id);
     let title = "",
       error = "没有可用的标题模型或默认聊天模型";
     for (const candidate of config.candidates) {
@@ -268,7 +268,7 @@ export async function runTitle(env: Env, id: string): Promise<string> {
               ...(config.effort !== "inherit"
                 ? { reasoning_effort: config.effort }
                 : {}),
-              messages: [{ role: "user", content: prompt }],
+              messages,
             }),
             signal,
           },
@@ -362,7 +362,7 @@ export async function claimDeviceTitle(
   const config = JSON.parse(job.config) as TitleConfig;
   const doc = await new Store(env.DB).get<Chat>(job.chat_id);
   if (!doc) throw new HttpError(404, "聊天不存在");
-  const prompt = renderTitlePrompt(config.prompt, doc.value, job.message_id);
+  const messages = titleMessages(config.prompt, doc.value, job.message_id);
   return {
     jobId: id,
     chatId: job.chat_id,
@@ -377,7 +377,7 @@ export async function claimDeviceTitle(
         ...(config.effort !== "inherit"
           ? { reasoning_effort: config.effort }
           : {}),
-        messages: [{ role: "user", content: prompt }],
+        messages,
       },
     })),
   };

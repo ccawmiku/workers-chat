@@ -1481,7 +1481,7 @@ function ResultCard({
               提交并结束
             </button>
             <button
-              className="du-btn du-btn-sm"
+              className="du-btn du-btn-primary du-btn-sm"
               disabled={busy || saving}
               onClick={() => answer(run, false)}
             >

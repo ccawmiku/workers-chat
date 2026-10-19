@@ -1,3 +1,4 @@
+import { comparisonFork } from "../shared/comparison";
 import { LENGTH_PLUGIN_ID, lengthInjection } from "../shared/length-guidance";
 import { generationDeadline } from "./deadline";
 import { compatibleMessages } from "../shared/upstream-compat";
@@ -110,6 +111,35 @@ export async function startGeneration(
   );
   const { messages: _messages, ...options } = request;
   const seed = seedId ? chat.messages[seedId] : null;
+  const compareConfig = chat.comparison?.enabled
+    ? structuredClone(chat.comparison)
+    : undefined;
+  let fork: Chat | undefined;
+  let forkSeedId: string | undefined;
+  if (
+    compareConfig &&
+    chat.currentId &&
+    chat.messages[chat.currentId]?.role === "user"
+  ) {
+    const titles = (
+      await new Store(env.DB).list<{ title: string }>("chat")
+    ).map((c) => c.title);
+    fork = comparisonFork(chat, compareConfig, titles);
+    if (seed) {
+      forkSeedId = crypto.randomUUID();
+      const copy = {
+        ...structuredClone(seed),
+        id: forkSeedId,
+        parentId: fork.currentId,
+      };
+      if (copy.toolContext) copy.toolContext.parentId = fork.currentId!;
+      if (compareConfig.mode === "plain") {
+        delete copy.toolContext;
+        delete copy.lengthRequirement;
+      }
+      fork.messages[forkSeedId] = copy;
+    }
+  }
   const message = addMessage(chat, "assistant", seed?.content ?? "");
   const length = injections?.find((i) => i.pluginId === LENGTH_PLUGIN_ID);
   if (length) message.lengthRequirement = JSON.parse(length.content).本轮要求;
@@ -133,6 +163,7 @@ export async function startGeneration(
   if (injections?.length && parent?.role === "user")
     message.toolContext = {
       parentId: parent.id,
+      stable: true,
       messages: injectPlugins(
         [{ role: "user", content: parent.content }],
         injections,
@@ -140,6 +171,17 @@ export async function startGeneration(
     };
   else if (seed?.toolContext && parent?.id === seed.toolContext.parentId)
     message.toolContext = structuredClone(seed.toolContext);
+  if (fork && parent)
+    chat.comparisonRuns = [
+      ...(chat.comparisonRuns ?? []),
+      {
+        chatId: fork.id,
+        title: fork.title,
+        userId: parent.id,
+        mainMessageId: message.id,
+        createdAt: Date.now(),
+      },
+    ];
   chat.unread = false;
   const config: JobConfig = {
     ...(injections?.length ? { injections } : {}),
@@ -174,6 +216,56 @@ export async function startGeneration(
       JSON.stringify(config),
     ),
   ]);
+  if (fork && compareConfig) {
+    try {
+      await store.save(fork.id, "chat", fork, 0, summary(fork));
+      if (
+        compareConfig.model &&
+        !providers.some(
+          (p) =>
+            p.id === compareConfig.model!.providerId &&
+            p.models.some((m) => m.id === compareConfig.model!.modelId),
+        )
+      )
+        throw new HttpError(400, "选定的对比模型已不存在，请重新选择");
+      await startGeneration(
+        env,
+        fork,
+        1,
+        settings,
+        providers,
+        forkSeedId,
+        false,
+        transport,
+        compareConfig.mode === "same" ? injections : [],
+      );
+    } catch (error) {
+      // A failed secondary model never blocks or replays the main request.
+      try {
+        const fresh = await store.get<Chat>(fork.id);
+        if (
+          fresh &&
+          fresh.value.messages[fresh.value.currentId ?? ""]?.role !==
+            "assistant"
+        ) {
+          const failed = addMessage(fresh.value, "assistant", "");
+          failed.status = "error";
+          failed.error = redactError(
+            error instanceof Error ? error.message : "对比启动失败",
+          );
+          await store.save(
+            fork.id,
+            "chat",
+            fresh.value,
+            fresh.revision,
+            summary(fresh.value),
+          );
+        }
+      } catch {
+        console.error(JSON.stringify({ event: "comparison_start_failed" }));
+      }
+    }
+  }
   if (transport === "device") {
     await env.PROGRESS.getByName(id).deviceCheckpoint(
       0,

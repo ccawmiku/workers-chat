@@ -12,20 +12,32 @@ export function LengthSettings({
   const [text, setText] = useState(value?.requirement ?? ""),
     [enabled, setEnabled] = useState(!!value?.enabled),
     [error, setError] = useState("");
-  const pending = useRef(0);
+  const pending = useRef(0),
+    textRef = useRef(text),
+    dirty = useRef(false);
   useEffect(() => {
     if (!pending.current) {
-      setText(value?.requirement ?? "");
+      if (!dirty.current) {
+        textRef.current = value?.requirement ?? "";
+        setText(textRef.current);
+      }
       setEnabled(!!value?.enabled);
     }
   }, [value?.requirement, value?.enabled]);
-  const commit = async (nextEnabled: boolean) => {
-    if (nextEnabled === !!value?.enabled && text === (value?.requirement ?? ""))
+  const commit = async (
+    nextEnabled: boolean,
+    requirement = textRef.current,
+  ) => {
+    if (
+      nextEnabled === !!value?.enabled &&
+      requirement === (value?.requirement ?? "")
+    )
       return;
     setEnabled(nextEnabled);
     pending.current++;
     try {
-      await save({ enabled: nextEnabled, requirement: text });
+      await save({ enabled: nextEnabled, requirement });
+      if (textRef.current === requirement) dirty.current = false;
       if (pending.current === 1) setEnabled(nextEnabled);
       setError("");
     } catch (e) {
@@ -58,8 +70,12 @@ export function LengthSettings({
           placeholder="例如：3000字、多写点；留空则每轮在输入框询问"
           disabled={disabled}
           value={text}
-          onChange={(e) => setText(e.target.value)}
-          onBlur={() => void commit(enabled)}
+          onChange={(e) => {
+            dirty.current = true;
+            textRef.current = e.target.value;
+            setText(e.target.value);
+          }}
+          onBlur={(e) => void commit(enabled, e.currentTarget.value)}
         />
       </label>
       <small>

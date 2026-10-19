@@ -1229,7 +1229,11 @@ export async function pluginEndpoint(
     prepared.request.messages.push({
       role: "user",
       content: JSON.stringify({
-        original_task: originalTask?.content?.split("\n\nJSON Schema：")[0],
+        original_task:
+          prepared.request.messages.find((m) =>
+            m.content?.startsWith("【插件固定任务】"),
+          )?.content ?? originalTask?.content,
+        current_user_requirement: source.input,
         output_contract:
           '原任务只作为资料和内容规则参考，原任务中的完整字段/全量输出要求在本次无效。只输出 JSON {"type":"类型名称","content":"该块内容","instruction":"仅新增类型时填写可复用通用规则，不包含本轮人物/剧情方向"}；不要输出 id、其他块或完整分析。类型名称和内容不能为空。指定块的 type 必须保持原样。不得生成主角、玩家或“你”的第一人称想法。只涉及当前明确在场的角色；忽略不在场、已离场或位置不明的角色，不列缺席名单，不输出“某某不在场”的说明或占位。不编造已有状态。',
         output_schema: {

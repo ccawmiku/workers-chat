@@ -238,8 +238,11 @@ export function prepareSummary(
   const messages: APIMessage[] = [];
   if (config.system.trim())
     messages.push({ role: "system", content: config.system });
-  if (history.length)
-    messages.push({ role: "user", content: JSON.stringify({ history }) });
+  for (const record of history)
+    messages.push({
+      role: "user",
+      content: JSON.stringify({ history: [record] }),
+    });
   messages.push({
     role: "user",
     content: JSON.stringify({

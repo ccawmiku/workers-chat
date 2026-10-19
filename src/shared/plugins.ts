@@ -408,7 +408,36 @@ export function preparePlugin(
   let messages: APIMessage[] = [];
   if (p.kind === "analysis" || p.kind === "clarify") {
     let rawSupplement: APIMessage | undefined;
+    const sharedPeer = enabledPlugins(chat, settings).some(
+      (other) =>
+        other.id !== p.id &&
+        ["analysis", "clarify"].includes(other.kind) &&
+        other.system === p.system &&
+        (other.model ?? chat.model ?? settings.defaultModel)?.providerId ===
+          ref.providerId &&
+        (other.model ?? chat.model ?? settings.defaultModel)?.modelId ===
+          ref.modelId,
+    );
+
     if (p.system.trim()) messages.push({ role: "system", content: p.system });
+    let fixedTask = render(p.prompt, {
+      USER_INPUT: "（本轮用户原话见最后一条消息；历史只作参考）",
+      COUNT: String(p.suggestions),
+    });
+    if (p.kind === "analysis" && p.schema.trim())
+      fixedTask += "\n\nJSON Schema：\n" + p.schema;
+    if (p.kind === "analysis" && p.excludedCharacters?.trim())
+      fixedTask +=
+        "\n禁止生成以下主角/角色的第一人称内心：" + p.excludedCharacters;
+    if (p.kind === "clarify" && p.clarifyFormat === "questions")
+      fixedTask += "\n输出必须符合 JSON Schema：\n" + QUESTION_SCHEMA;
+    if (p.example.trim()) fixedTask += "\n\n固定示例：\n" + p.example;
+    const fixed: APIMessage = {
+      role: "user",
+      content: "【插件固定任务】\n" + fixedTask,
+    };
+    if (!sharedPeer) messages.push(fixed);
+    section("插件固定任务与格式", [fixed]);
     const cleanPath = path.filter(
       (m) => m.role === "user" || m.role === "assistant",
     );
@@ -428,7 +457,6 @@ export function preparePlugin(
           : replyFallback(m.content),
       };
     });
-    messages.push(...history);
     section("历史 U 与 A 摘要（缺失回退前 300 字）", history);
     if (p.rawRounds > 0) {
       const rounds: (typeof cleanPath)[] = [];
@@ -472,21 +500,37 @@ export function preparePlugin(
       (n, r) => n + estimateTokens(r.text),
       0,
     );
-    // Both front plugins share the expensive raw prefix before their own references diverge.
+    const referenceByPosition = new Map<number, APIMessage[]>();
+    for (const r of references) {
+      const data = JSON.parse(r.text);
+      const list = referenceByPosition.get(data.message) ?? [];
+      list.push({
+        role: "user",
+        content: JSON.stringify({ plugin_history: [data] }),
+      });
+      referenceByPosition.set(data.message, list);
+    }
+    for (let i = 0; i < history.length; i++) {
+      messages.push(history[i]!);
+      if (!sharedPeer) messages.push(...(referenceByPosition.get(i + 1) ?? []));
+    }
     if (rawSupplement) {
       messages.push(rawSupplement);
       section("最近原始 UA 补充", [rawSupplement]);
     }
-    if (references.length) {
-      const reference: APIMessage = {
-        role: "user",
-        content: JSON.stringify({
-          plugin_history: references.map((r) => JSON.parse(r.text)),
-        }),
-      };
-      messages.push(reference);
-      section("插件历史结果", [reference]);
+    if (sharedPeer) {
+      messages.push(fixed);
+      for (const r of references)
+        messages.push({
+          role: "user",
+          content: JSON.stringify({ plugin_history: [JSON.parse(r.text)] }),
+        });
     }
+    if (references.length)
+      metrics.sections.push({
+        name: "插件历史结果",
+        tokens: metrics.referenceTokens,
+      });
     if (clarifications.length) {
       const start = messages.length;
       messages = injectPlugins(
@@ -495,25 +539,8 @@ export function preparePlugin(
       );
       section("本轮澄清问答", messages.slice(start));
     }
-    let suffix = render(p.prompt, {
-      USER_INPUT: input,
-      COUNT: String(p.suggestions),
-    });
-    if (
-      !p.prompt.includes("{{USER_INPUT}}") &&
-      !p.prompt.includes("{user_input}")
-    )
-      suffix += "\n\n最新用户要求：\n" + input;
-    if (p.kind === "analysis" && p.schema.trim())
-      suffix += "\n\nJSON Schema：\n" + p.schema;
-    if (p.kind === "analysis" && p.excludedCharacters?.trim())
-      suffix +=
-        "\n禁止生成以下主角/角色的第一人称内心：" + p.excludedCharacters;
-    if (p.kind === "clarify" && p.clarifyFormat === "questions")
-      suffix += "\n输出必须符合 JSON Schema：\n" + QUESTION_SCHEMA;
-    if (p.example.trim()) suffix += "\n\n固定示例：\n" + p.example;
-    messages.push({ role: "user", content: suffix });
-    section("插件任务与参考", messages.slice(-1));
+    messages.push({ role: "user", content: "本轮用户要求：\n" + input });
+    section("本轮用户要求", messages.slice(-1));
   } else {
     const savedSummaries = summaryIndex(chat, summaries, path);
     for (const m of path) {
@@ -521,21 +548,52 @@ export function preparePlugin(
       metrics.missingSummaries++;
       if (replyFallback(m.content) !== m.content) metrics.shortened++;
     }
+    const sharedCandidatePeer = enabledPlugins(chat, settings).some(
+      (other) =>
+        other.id !== p.id &&
+        ["suggest", "rewrite"].includes(other.kind) &&
+        other.prompt === p.prompt &&
+        other.initialUser === p.initialUser &&
+        (other.model ?? chat.model ?? settings.defaultModel)?.providerId ===
+          ref.providerId &&
+        (other.model ?? chat.model ?? settings.defaultModel)?.modelId ===
+          ref.modelId,
+    );
     messages = swappedHistory(
       path,
       p.initialUser ?? "好的",
-      render(p.prompt, {
-        COUNT: String(p.suggestions),
-        USER_INPUT:
-          p.kind === "rewrite" ? "本轮输入见末尾任务中的原始用户指令" : input,
-      }),
+      (sharedCandidatePeer
+        ? [
+            render(p.prompt, {
+              COUNT: String(p.suggestions),
+              USER_INPUT: "本轮输入见末尾任务中的原始用户指令",
+            }),
+          ]
+        : [
+            render(p.prompt, {
+              COUNT: String(p.suggestions),
+              USER_INPUT: "本轮输入见末尾任务中的原始用户指令",
+            }),
+            candidateTask(
+              p.kind,
+              p.suggestions,
+              "本轮待改写内容见末尾用户指令",
+            ),
+          ]
+      )
+        .filter(Boolean)
+        .join("\n\n"),
       savedSummaries,
     );
     section(
       `UA 对调历史（有效摘要，缺失取回复前 ${REPLY_FALLBACK_CHAR_LIMIT} 字符，含 U0）`,
       messages,
     );
-    const task = candidateTask(p.kind, p.suggestions, input);
+    const task = sharedCandidatePeer
+      ? candidateTask(p.kind, p.suggestions, input)
+      : p.kind === "rewrite"
+        ? "【唯一待重写的用户指令】\n" + JSON.stringify(input)
+        : "根据以上当前情境，按开头约定输出下一步行动候选 JSON。";
     const last = messages.at(-1)!;
     if (last.role === "user")
       last.content = (last.content ?? "") + "\n\n" + task;

@@ -223,13 +223,14 @@ describe("plugin context assembly", () => {
         anchor,
       );
       expect(result.request.messages.map((m) => m.role)).toEqual([
+        "system",
         "user",
         "assistant",
         "user",
       ]);
-      expect(result.request.messages[0]?.content).toBe("好的");
-      expect(result.request.messages[1]?.content).toBe(long);
-      expect(result.request.messages[2]?.content).toContain("A1\n\n");
+      expect(result.request.messages[1]?.content).toBe("好的");
+      expect(result.request.messages[2]?.content).toBe(long);
+      expect(result.request.messages[3]?.content).toContain("A1\n\n");
       expect(JSON.stringify(result.request.messages)).not.toMatch(
         /Stable system|later branch content|中间删减/,
       );
@@ -259,7 +260,7 @@ describe("plugin context assembly", () => {
         state,
         "DRAFT".repeat(100),
       );
-      expect(request.request.messages[1]?.content).toBe(user);
+      expect(request.request.messages[2]?.content).toBe(user);
       const tail = request.request.messages.at(-1)?.content ?? "";
       expect(tail).toContain("🙂".repeat(300) + "\n\n" + "文".repeat(300));
       expect(tail).not.toMatch(/END_REPLY|SECOND_END/);
@@ -277,10 +278,13 @@ describe("plugin context assembly", () => {
   it("caps missing-summary replies at 300 Unicode characters without limiting U0, system or user instructions", () => {
     expect(candidateReplyExcerpt("中".repeat(300))).toBe("中".repeat(300));
     expect(candidateReplyExcerpt("中".repeat(301))).toBe("中".repeat(300));
-    expect(candidateReplyExcerpt("A".repeat(299) + "🙂B")).toBe("A".repeat(299) + "🙂");
+    expect(candidateReplyExcerpt("A".repeat(299) + "🙂B")).toBe(
+      "A".repeat(299) + "🙂",
+    );
     const { chat } = fixture();
     addMessage(chat, "assistant", "🙂".repeat(301));
-    const system = "S".repeat(500), u0 = "U".repeat(500);
+    const system = "S".repeat(500),
+      u0 = "U".repeat(500);
     expect(swappedHistory(Object.values(chat.messages), u0, system)).toEqual([
       { role: "system", content: system },
       { role: "user", content: u0 + "\n\n" + "🙂".repeat(300) },
@@ -302,10 +306,8 @@ describe("plugin context assembly", () => {
       lowWater: 0,
     };
     const result = preparePlugin(chat, p, settings, [provider], state, "");
-    expect(result.request.messages[0]).toEqual({
-      role: "system",
-      content: "custom system",
-    });
+    expect(result.request.messages[0]?.role).toBe("system");
+    expect(result.request.messages[0]?.content).toMatch(/^custom system/);
     expect(result.request.messages[1]).toEqual({
       role: "user",
       content: "开始",
@@ -328,9 +330,9 @@ describe("plugin context assembly", () => {
       state,
       draft,
     );
-    expect(result.request.messages).toHaveLength(1);
-    expect(result.request.messages[0]?.content).toContain(draft);
-    expect(result.request.messages[0]?.content).toMatch(/^好的\n\n/);
+    expect(result.request.messages).toHaveLength(2);
+    expect(result.request.messages[1]?.content).toContain(draft);
+    expect(result.request.messages[1]?.content).toMatch(/^好的\n\n/);
     expect(result.request.messages[0]?.content).toContain('"prompt1"');
   });
 

@@ -114,9 +114,10 @@ describe("cache-friendly request histories", () => {
     const c = prepare("clarify"),
       a = prepare("analysis");
     expect(c.messages[0]!.content).toContain("【插件固定任务】");
-    expect(a.messages[0]!.content).toContain("JSON Schema：");
-    expect(c.messages[1]).toEqual(a.messages[1]);
-    expect(c.messages[2]!.content).toContain("plugin_history");
+    expect(a.messages[1]!.content).toContain("JSON Schema：");
+    expect(c.messages[0]).toEqual(a.messages[0]);
+    expect(c.messages[2]).toEqual(a.messages[2]);
+    expect(c.messages[3]!.content).toContain("plugin_history");
     expect(c.messages.at(-2)!.content).toContain("recent_raw_rounds");
     expect(c.response_format).toEqual(a.response_format);
     expect(JSON.stringify(c.messages)).not.toContain(user.id);

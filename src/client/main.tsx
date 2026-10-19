@@ -1554,6 +1554,13 @@ function App() {
       if (response.jobId && ["section-generate", "retry"].includes(action))
         ownedSectionCandidates.current.add(response.jobId);
       await refresh(id, true, response.snapshot);
+      if (
+        action === "type-remove" ||
+        (action === "section-apply" &&
+          body.saveType === true &&
+          body.scope === "global")
+      )
+        setSettings(await api<Settings>("/settings"));
       if (!response.snapshot) await loadNavigation();
     } catch (error) {
       setError(error instanceof Error ? error.message : "插件操作失败");
@@ -2035,7 +2042,11 @@ function App() {
               </IconButton>
             )}
             {chat && (
-              <IconButton label="当前聊天设置" onClick={() => setPanel(!panel)}>
+              <IconButton
+                className="chat-settings-toggle"
+                label="当前聊天设置"
+                onClick={() => setPanel(!panel)}
+              >
                 <I.settings size={19} />
               </IconButton>
             )}

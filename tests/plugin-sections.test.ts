@@ -121,7 +121,8 @@ describe("structured plugin blocks", () => {
   });
   it("validates independent question/option fields and unique stable identities", () => {
     const text = JSON.stringify({ questions: [question] });
-    expect(readQuestions(text)).toEqual([question]);
+    const {multiple, ...current}=question;
+    expect(readQuestions(text)).toEqual([current]);
     expect(() =>
       readQuestions(JSON.stringify({ questions: [question, question] })),
     ).toThrow("重复");
@@ -153,7 +154,6 @@ describe("structured plugin blocks", () => {
     expect(answer).toContain("2. 选择地点\n本题跳过，不再追问");
     expect(answer).toContain("  自由回答原文\n保留空格  ");
     for (const selections of [
-      { q1: ["A", "B"] },
       { q1: ["Z"] },
       { q1: ["A", "A"] },
       { q1: "A" },
@@ -161,7 +161,7 @@ describe("structured plugin blocks", () => {
       expect(() => clarifyAnswer(text, selections, "")).toThrow("选择无效");
     expect(
       clarifyAnswer(
-        JSON.stringify({ questions: [{ ...question, multiple: true }] }),
+        JSON.stringify({ questions: [{ ...question, multiple: false }] }),
         { q1: ["A", "C"] },
         "",
       ),

@@ -22,6 +22,7 @@ export default defineConfig({
       name: "webkit-mobile",
       testMatch: [
         "mobile.spec.ts",
+        "mobile-viewport.spec.ts",
         "length-layout.spec.ts",
         "navigation.spec.ts",
         "provider-settings.spec.ts",

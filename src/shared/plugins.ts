@@ -1,10 +1,16 @@
 import { replyFallback, REPLY_FALLBACK_CHAR_LIMIT } from "./reply-context";
-import { CLARIFY_PROMPT } from "./clarify-defaults";
+import {
+  CLARIFY_PROMPT,
+  FIRST_CLARIFY_TASK,
+  FRONT_PLUGIN_GUARD,
+} from "./clarify-defaults";
 import { compatibleMessages } from "./upstream-compat";
 import {
   readQuestions,
   questionView,
   QUESTION_SCHEMA,
+  analysisRequestSchema,
+  analysisOutputSchema,
   type AnalysisType,
 } from "./plugin-sections";
 import { candidateTask, swappedHistory } from "./candidate-requests";
@@ -264,7 +270,11 @@ export function normalizePluginOutput(p: PluginDefinition, text: string) {
   if (p.kind === "clarify" && p.clarifyFormat === "questions")
     return JSON.stringify({ questions: readQuestions(text) }, null, 2);
   if (p.kind === "analysis")
-    return JSON.stringify(readPluginJSON(text, p.schema), null, 2);
+    return JSON.stringify(
+      readPluginJSON(text, analysisOutputSchema(p.schema, p.analysisTypes)),
+      null,
+      2,
+    );
   if (p.kind === "rewrite" && p.rewriteFormat === "fields")
     return JSON.stringify(readRewriteFields(text), null, 2);
   // An already-running job keeps the output contract captured before deployment.
@@ -419,13 +429,32 @@ export function preparePlugin(
           ref.modelId,
     );
 
-    if (p.system.trim()) messages.push({ role: "system", content: p.system });
+    messages.push({
+      role: "system",
+      content: [p.system.trim(), FRONT_PLUGIN_GUARD]
+        .filter(Boolean)
+        .join("\n\n"),
+    });
+    section("插件运行规则与独立 system", messages);
     let fixedTask = render(p.prompt, {
       USER_INPUT: "（本轮用户原话见最后一条消息；历史只作参考）",
       COUNT: String(p.suggestions),
     });
-    if (p.kind === "analysis" && p.schema.trim())
-      fixedTask += "\n\nJSON Schema：\n" + p.schema;
+    if (p.kind === "analysis" && (p.schema.trim() || p.analysisTypes?.length))
+      fixedTask +=
+        "\n\nJSON Schema：\n" +
+        analysisRequestSchema(p.schema, p.analysisTypes);
+    if (p.kind === "analysis" && p.analysisTypes?.length)
+      fixedTask +=
+        "\n\n持续启用的分析类型：\n" +
+        JSON.stringify(
+          p.analysisTypes.map(({ id, type, instruction }) => ({
+            id,
+            type,
+            instruction,
+          })),
+        ) +
+        "\n与内置字段一同生成 additional_sections，以上每个类型恰好一块，id/type 严格沿用，content 根据本轮已有事实按通用规则重新生成，无依据为 none。不得照搬历史内容、发明类型、预写未来剧情或生成主角第一人称心理。仅通用规则持续生效，本轮旧方向不变成长期要求。";
     if (p.kind === "analysis" && p.excludedCharacters?.trim())
       fixedTask +=
         "\n禁止生成以下主角/角色的第一人称内心：" + p.excludedCharacters;
@@ -539,7 +568,17 @@ export function preparePlugin(
       );
       section("本轮澄清问答", messages.slice(start));
     }
-    messages.push({ role: "user", content: "本轮用户要求：\n" + input });
+    messages.push({
+      role: "user",
+      content:
+        (p.kind === "clarify"
+          ? "【本轮原始用户提示】：\n"
+          : "本轮用户要求：\n") +
+        input +
+        (p.kind === "clarify" && p.clarifyFormat === "questions"
+          ? "\n\n" + FIRST_CLARIFY_TASK
+          : ""),
+    });
     section("本轮用户要求", messages.slice(-1));
   } else {
     const savedSummaries = summaryIndex(chat, summaries, path);
@@ -619,7 +658,13 @@ export function preparePlugin(
     ...(p.effort !== "inherit" ? { reasoning_effort: p.effort } : {}),
   };
   if (request.stream) request.stream_options = { include_usage: true };
-  return { request, metrics, provider, modelRef: ref };
+  return {
+    request,
+    metrics,
+    provider,
+    modelRef: ref,
+    analysisTypesContract: p.kind === "analysis" && !!p.analysisTypes?.length,
+  };
 }
 function objectSchema(schema: string) {
   try {

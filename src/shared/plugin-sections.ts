@@ -1,4 +1,5 @@
 import { readPluginJSON } from "./plugin-json";
+import { ANALYSIS_SCHEMA } from "./analysis-defaults";
 
 export type AnalysisSection = {
   id: string;
@@ -13,10 +14,92 @@ export type AnalysisType = {
   instruction: string;
   scope?: "chat" | "global";
 };
+/** Persisted types participate in normal full analysis, while local edits use the base schema. */
+export function analysisOutputSchema(
+  schemaText: string,
+  types: AnalysisType[] = [],
+) {
+  if (!types.length) return schemaText;
+  const base = schemaText.trim() ? JSON.parse(schemaText) : { type: "object" };
+  if (
+    !base ||
+    typeof base !== "object" ||
+    Array.isArray(base) ||
+    (base.type && base.type !== "object")
+  )
+    throw Error("自动分析类型需要对象类型的 JSON Schema");
+  return JSON.stringify({
+    ...base,
+    properties: {
+      ...base.properties,
+      additional_sections:
+        base.properties?.additional_sections ??
+        JSON.parse(ANALYSIS_SCHEMA).properties.additional_sections,
+    },
+  });
+}
+export function analysisRequestSchema(
+  schemaText: string,
+  types: AnalysisType[] = [],
+) {
+  if (!types.length) return schemaText;
+  const base = JSON.parse(analysisOutputSchema(schemaText, types));
+  if (
+    !base ||
+    typeof base !== "object" ||
+    Array.isArray(base) ||
+    (base.type && base.type !== "object")
+  )
+    throw Error("自动分析类型需要对象类型的 JSON Schema");
+  return JSON.stringify({
+    ...base,
+    type: "object",
+    required: [...new Set([...(base.required ?? []), "additional_sections"])],
+    properties: {
+      ...base.properties,
+      additional_sections: {
+        type: "array",
+        minItems: types.length,
+        maxItems: types.length,
+        items: {
+          type: "object",
+          required: ["id", "type", "content"],
+          additionalProperties: false,
+          properties: {
+            id: { type: "string", enum: types.map((t) => t.id) },
+            type: { type: "string", enum: types.map((t) => t.type) },
+            content: { type: "string", minLength: 1, pattern: "\\S" },
+            instruction: { type: "string" },
+          },
+        },
+      },
+    },
+  });
+}
+export function validateAnalysisTypesResult(
+  text: string,
+  schema: string,
+  types: AnalysisType[] = [],
+) {
+  const value = readPluginJSON(text, analysisRequestSchema(schema, types)) as {
+    additional_sections?: AnalysisSection[];
+  };
+  if (types.length) {
+    const sections = value.additional_sections ?? [];
+    if (
+      new Set(sections.map((s) => s.id)).size !== types.length ||
+      types.some(
+        (t) => !sections.some((s) => s.id === t.id && s.type === t.type),
+      )
+    )
+      throw Error("自动分析类型缺失、重复或名称与 ID 不匹配");
+  }
+  return value;
+}
 export type ClarifyQuestion = {
   id: string;
   question: string;
-  multiple: boolean;
+  multiple?: boolean; // Read-only compatibility with older saved question JSON.
   options: { id: string; text: string }[];
 };
 export const QUESTION_SCHEMA = JSON.stringify({
@@ -29,12 +112,11 @@ export const QUESTION_SCHEMA = JSON.stringify({
       maxItems: 24,
       items: {
         type: "object",
-        required: ["id", "question", "multiple", "options"],
+        required: ["id", "question", "options"],
         additionalProperties: false,
         properties: {
           id: { type: "string", minLength: 1, maxLength: 128 },
           question: { type: "string", minLength: 1 },
-          multiple: { type: "boolean" },
           options: {
             type: "array",
             minItems: 3,
@@ -55,7 +137,15 @@ export const QUESTION_SCHEMA = JSON.stringify({
   },
 });
 export function readQuestions(text: string): ClarifyQuestion[] {
-  const result = readPluginJSON(text, QUESTION_SCHEMA) as {
+  const value = readPluginJSON(text) as { questions?: unknown };
+  // Normalize the old discriminator away before applying the current contract.
+  if (value && Array.isArray(value.questions))
+    value.questions = value.questions.map((q) => {
+      if (!q || typeof q !== "object" || Array.isArray(q)) return q;
+      const { multiple, ...current } = q as Record<string, unknown>;
+      return current;
+    });
+  const result = readPluginJSON(JSON.stringify(value), QUESTION_SCHEMA) as {
     questions: ClarifyQuestion[];
   };
   if (
@@ -215,8 +305,7 @@ export function clarifyAnswer(
       values.some(
         (v) => typeof v !== "string" || !q.options.some((o) => o.id === v),
       ) ||
-      new Set(values).size !== values.length ||
-      (!q.multiple && values.length > 1)
+      new Set(values).size !== values.length
     )
       throw Error("问题选择无效");
     return `${index + 1}. ${q.question}\n${

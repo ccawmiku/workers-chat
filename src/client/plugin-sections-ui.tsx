@@ -59,7 +59,7 @@ export function QuestionSections({
             <Text text={`${index + 1}. ${q.question}`} />
           </div>
           <small className="muted">
-            {q.multiple ? "可多选" : "单选"} · 也可在输入框自由回答
+            可任选一项或多项，也可在输入框自由回答
           </small>
           <div className="question-options">
             {q.options.map((o) => {
@@ -78,13 +78,9 @@ export function QuestionSections({
                   onClick={() =>
                     select(
                       q.id,
-                      q.multiple
-                        ? selected
-                          ? values.filter((v) => v !== o.id)
-                          : [...values, o.id]
-                        : selected
-                          ? []
-                          : [o.id],
+                      selected
+                        ? values.filter((v) => v !== o.id)
+                        : [...values, o.id],
                     )
                   }
                 >
@@ -241,7 +237,7 @@ export function AnalysisSections({
                         setInstruction(value!.instruction ?? "");
                       }}
                     />
-                    保存为可选类型模板（以后手动添加）
+                    后续每轮自动生成此类型
                   </label>
                   {saveTemplate && (
                     <div className="type-template-fields">
@@ -454,31 +450,22 @@ export function AnalysisSections({
                     <Trash2 size={13} />
                     {custom ? "仅本轮移除" : "设为 none"}
                   </button>
-                  {custom && templates.some((t) => t.id === section.id) && (
-                    <button
-                      className="du-btn du-btn-ghost du-btn-xs"
-                      disabled={locked}
-                      onClick={() =>
-                        void act("section-remove", {
-                          runId: run.id,
-                          targetId: section.id,
-                          removeTemplate: true,
-                          scope:
-                            templates.find((t) => t.id === section.id)?.scope ??
-                            "chat",
-                        })
-                      }
-                    >
-                      <I.delete size={13} />
-                      同时移除
-                      {templates.find((t) => t.id === section.id)?.scope ===
-                      "global"
-                        ? "全局"
-                        : "当前对话"}
-                      模板
-                    </button>
-                  )}
                 </div>
+              )}
+              {templates.some((t) => t.id === section.id) && (
+                <button
+                  className="du-btn du-btn-ghost du-btn-xs"
+                  disabled={locked}
+                  onClick={() =>
+                    void act("type-remove", {
+                      runId: run.id,
+                      targetId: section.id,
+                    })
+                  }
+                >
+                  <I.delete size={13} />
+                  删除类型（后续停用）
+                </button>
               )}
               {usage && <OperationUsage run={usage} />}
             </section>
@@ -495,32 +482,6 @@ export function AnalysisSections({
             <Plus size={14} />
             新增类型
           </button>
-          {templates.length > 0 && (
-            <select
-              className="du-select du-select-sm"
-              aria-label="添加已保存类型"
-              value=""
-              disabled={locked}
-              onChange={(e) => {
-                const t = templates.find((t) => t.id === e.target.value);
-                if (t)
-                  input({
-                    runId: run.id,
-                    pluginName: run.plugin.name,
-                    label: `添加「${t.type}」，可补充本轮要求`,
-                    body: { targetId: null },
-                    draft: `类型：${t.type}\n通用规则：${t.instruction}\n本轮要求：`,
-                  });
-              }}
-            >
-              <option value="">从已保存类型添加…</option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.type}
-                </option>
-              ))}
-            </select>
-          )}
         </div>
       )}
       {candidates.map(preview)}

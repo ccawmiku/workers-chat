@@ -1,3 +1,5 @@
+import { StyledMarkdown } from "./styled-markdown";
+import type { BodyStyles } from "../shared/body-styles";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
@@ -176,7 +178,9 @@ export function ComparisonPane({
   settings,
   open,
   configure,
+  bodyStyles,
 }: {
+  bodyStyles?: BodyStyles;
   run?: ComparisonRun;
   settings: ReactNode;
   open: (id: string) => void;
@@ -344,10 +348,10 @@ export function ComparisonPane({
         {answer?.role === "assistant" && (
           <article className="comparison-answer">
             <div className="markdown">
-              <Markdown remarkPlugins={[remarkGfm]}>
+              <StyledMarkdown config={bodyStyles ?? snapshot?.chat.bodyStyles} tagged={!!answer.styleTagged}>
                 {answer.content ||
                   (answer.status === "running" ? "正在生成…" : "（空回答）")}
-              </Markdown>
+              </StyledMarkdown>
             </div>
             {answer.reasoning && (
               <details>

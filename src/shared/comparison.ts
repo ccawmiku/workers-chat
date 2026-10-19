@@ -1,3 +1,4 @@
+import { stripStyleMarkers } from "./body-styles";
 import {
   forkChat,
   type Chat,
@@ -49,10 +50,12 @@ export function comparisonFork(
     localUserId: copy.currentId!,
     mode: config.mode,
   };
+  if (config.mode === "plain" && copy.bodyStyles) copy.bodyStyles.enabled = false;
   if (config.mode === "plain")
     for (const m of Object.values(copy.messages)) {
       delete m.toolContext;
       delete m.lengthRequirement;
+      if (m.role === "assistant") { m.content = stripStyleMarkers(m.content); m.styleTagged = false; }
     }
   return copy;
 }

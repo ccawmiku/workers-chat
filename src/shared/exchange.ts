@@ -1,3 +1,4 @@
+import { parseBodyStyles } from "./body-styles";
 import {
   type Chat,
   type Message,
@@ -93,6 +94,7 @@ export function importChats(input: unknown): {
         : metadata;
       chat.title = string(source.title, "导入的聊天");
       chat.titleManual = true;
+      if (source.workers_chat_body_styles) { try { chat.bodyStyles=parseBodyStyles(source.workers_chat_body_styles); } catch { /* Invalid optional metadata does not discard message text. */ } }
       const at = Number(source.timestamp ?? rawRoot.created_at);
       if (Number.isFinite(at) && at > 0)
         chat.createdAt = at < 1e12 ? at * 1000 : at;
@@ -143,6 +145,7 @@ export function importChats(input: unknown): {
           reasoning: string(m.reasoning_content ?? m.reasoning),
           status: m.done === false ? "error" : "complete",
         };
+        if(typeof m.workers_chat_style_tagged === "boolean") msg.styleTagged = m.workers_chat_style_tagged;
         // Keep original model metadata in raw without guessing a provider identity.
         if (m.usage && typeof m.usage === "object") msg.usage = object(m.usage);
         chat.messages[id] = msg;
@@ -189,6 +192,7 @@ export function exportChat(chat: Chat): Obj {
       childrenIds: (children.get(m.id) ?? []).map((child) => child.id),
       role: m.role,
       content: m.content,
+      ...(m.styleTagged !== undefined ? {workers_chat_style_tagged:m.styleTagged} : {}),
       timestamp: m.createdAt / 1000,
       done: m.status !== "running",
       ...(m.reasoning ? { reasoning_content: m.reasoning } : {}),
@@ -199,6 +203,7 @@ export function exportChat(chat: Chat): Obj {
   const output = {
     ...original,
     title: chat.title,
+    ...(chat.bodyStyles ? {workers_chat_body_styles:chat.bodyStyles} : {}),
     timestamp: chat.createdAt / 1000,
     history: {
       ...object(original.history),

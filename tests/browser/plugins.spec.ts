@@ -118,49 +118,60 @@ for (const mobile of [false, true])
             action_state: "none",
             knowledge_boundaries: "none",
           });
-        } else if (fixed.includes("只提出必要、未回答且未明确跳过的澄清问题")) {
+          if (fixed.includes("持续启用的分析类型：")) {
+            const types = JSON.parse(
+              fixed.split("持续启用的分析类型：\n")[1]!.split("\n")[0]!,
+            );
+            content = JSON.stringify({
+              ...JSON.parse(content),
+              additional_sections: types.map((t: any) => ({
+                id: t.id,
+                type: t.type,
+                content: "none",
+              })),
+            });
+          }
+        } else if (fixed.includes("仅运行补充提问插件")) {
           kind = "clarify";
           content = JSON.stringify({
-            questions:
-              ledger.some((l) => l.kind === "clarify") ||
-              messages.some((m) => (m as any).role === "tool")
-                ? [
-                    {
-                      id: "q3",
-                      question: "后续希望优先处理哪一项？",
-                      multiple: false,
-                      options: [
-                        { id: "A", text: "延续互动" },
-                        { id: "B", text: "解释背景" },
-                        { id: "C", text: "推进动作" },
-                        { id: "D", text: "暂不指定" },
-                      ],
-                    },
-                  ]
-                : [
-                    {
-                      id: "q1",
-                      question: "希望采用哪种风格？",
-                      multiple: false,
-                      options: [
-                        { id: "A", text: "轻松" },
-                        { id: "B", text: "正式" },
-                        { id: "C", text: "其他" },
-                        { id: "D", text: "不限定" },
-                      ],
-                    },
-                    {
-                      id: "q2",
-                      question: "需要哪些已有角色？",
-                      multiple: true,
-                      options: [
-                        { id: "A", text: "甲" },
-                        { id: "B", text: "乙" },
-                        { id: "C", text: "都不指定" },
-                        { id: "D", text: "其他角色" },
-                      ],
-                    },
-                  ],
+            questions: !last.includes("【首批补充提问契约】")
+              ? [
+                  {
+                    id: "q3",
+                    question: "准备阶段的气氛希望突出哪一点？",
+                    multiple: false,
+                    options: [
+                      { id: "A", text: "延续互动" },
+                      { id: "B", text: "解释背景" },
+                      { id: "C", text: "推进动作" },
+                      { id: "D", text: "暂不指定" },
+                    ],
+                  },
+                ]
+              : [
+                  {
+                    id: "q1",
+                    question: "希望采用哪种风格？",
+                    multiple: false,
+                    options: [
+                      { id: "A", text: "轻松" },
+                      { id: "B", text: "正式" },
+                      { id: "C", text: "其他" },
+                      { id: "D", text: "不限定" },
+                    ],
+                  },
+                  {
+                    id: "q2",
+                    question: "需要哪些已有角色？",
+                    multiple: true,
+                    options: [
+                      { id: "A", text: "甲" },
+                      { id: "B", text: "乙" },
+                      { id: "C", text: "都不指定" },
+                      { id: "D", text: "其他角色" },
+                    ],
+                  },
+                ],
           });
         } else if (all.includes('"suggestions"')) {
           kind = "suggest";
@@ -396,7 +407,7 @@ for (const mobile of [false, true])
       name: "上下文消息类型",
       exact: true,
     });
-    await expect(messageMenu.locator(".plugin-role")).toHaveCount(2);
+    await expect(messageMenu.locator(".plugin-role")).toHaveCount(3);
     await expect(messageMenu.locator(".plugin-role-user")).toHaveText([
       "user",
       "user",
@@ -459,6 +470,19 @@ for (const mobile of [false, true])
       .first()
       .getByRole("button", { name: "A 轻松", exact: true })
       .click();
+    const firstQuestion = page.locator(".question-section").first();
+    await firstQuestion
+      .getByRole("button", { name: "B 正式", exact: true })
+      .click();
+    await expect(
+      firstQuestion.getByRole("button", { name: "A 轻松", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      firstQuestion.getByRole("button", { name: "B 正式", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await firstQuestion
+      .getByRole("button", { name: "B 正式", exact: true })
+      .click();
     await expect
       .poll(() =>
         page
@@ -466,7 +490,7 @@ for (const mobile of [false, true])
           .first()
           .evaluate((node) => {
             const selected = node.querySelector('[aria-pressed="true"]')!;
-            const plain = node.querySelector('[aria-pressed="false"]')!;
+            const plain = node.querySelectorAll('[aria-pressed="false"]')[1]!;
             return (
               getComputedStyle(selected).backgroundColor !==
               getComputedStyle(plain).backgroundColor
@@ -478,6 +502,91 @@ for (const mobile of [false, true])
       .locator(".question-section")
       .nth(1)
       .getByRole("button", { name: "跳过本题", exact: true });
+    const rootStyle = await page.locator("html").getAttribute("style");
+    const rootTheme = await page.locator("html").getAttribute("data-theme");
+    const tintColors: string[] = [];
+    for (const theme of [
+      {
+        name: "light-pink",
+        accent: "#f077af",
+        panel: "#fcfcfc",
+        input: "#f0f0f0",
+        text: "#0d0d0d",
+      },
+      {
+        name: "dark-blue",
+        accent: "#4169e1",
+        panel: "#141414",
+        input: "#202020",
+        text: "#ededed",
+      },
+    ]) {
+      await page.evaluate((t) => {
+        document.documentElement.dataset.theme = t.name.startsWith("light")
+          ? "light"
+          : "dark";
+        document.documentElement.style.setProperty(
+          "--accent-ink",
+          t.name.startsWith("light") ? "#0d0d0d" : "#ffffff",
+        );
+        for (const [key, value] of Object.entries({
+          accent: t.accent,
+          panel: t.panel,
+          input: t.input,
+          text: t.text,
+          bg: t.panel,
+        }))
+          document.documentElement.style.setProperty("--" + key, value);
+      }, theme);
+      await expect
+        .poll(() =>
+          firstQuestion.evaluate((node) => {
+            const probe = document.createElement("i");
+            probe.style.backgroundColor = "var(--accent)";
+            document.body.appendChild(probe);
+            const matches =
+              getComputedStyle(node.querySelector('[aria-pressed="true"]')!)
+                .backgroundColor === getComputedStyle(probe).backgroundColor;
+            probe.remove();
+            return matches;
+          }),
+        )
+        .toBe(true);
+      const backgrounds = await firstQuestion.evaluate((node) => {
+        const plain = node.querySelectorAll('[aria-pressed="false"]')[1]!;
+        const selected = node.querySelector('[aria-pressed="true"]')!;
+        const probe = document.createElement("i");
+        probe.style.backgroundColor = "var(--accent)";
+        document.body.appendChild(probe);
+        const accent = getComputedStyle(probe).backgroundColor;
+        probe.style.backgroundColor = "var(--panel)";
+        const panel = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return {
+          plain: getComputedStyle(plain).backgroundColor,
+          selected: getComputedStyle(selected).backgroundColor,
+          accent,
+          panel,
+        };
+      });
+      expect(backgrounds.selected).toBe(backgrounds.accent);
+      expect(backgrounds.plain).not.toBe(backgrounds.accent);
+      expect(backgrounds.plain).not.toBe(backgrounds.panel);
+      expect(backgrounds.plain).not.toBe("rgba(0, 0, 0, 0)");
+      tintColors.push(backgrounds.plain);
+      await page.screenshot({
+        path: `test-results/action-tint-${theme.name}-${mobile ? "phone" : "desktop"}-${test.info().project.name}.png`,
+      });
+    }
+    expect(new Set(tintColors).size).toBe(2);
+    await page.evaluate((style) => {
+      if (style === null) document.documentElement.removeAttribute("style");
+      else document.documentElement.setAttribute("style", style);
+    }, rootStyle);
+    await page.evaluate((theme) => {
+      if (theme === null) delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = theme;
+    }, rootTheme);
     await skip.click();
     await expect(skip).toHaveAttribute("aria-pressed", "true");
     await expect(skip).toHaveClass(/du-btn-primary/);
@@ -486,7 +595,7 @@ for (const mobile of [false, true])
     await expect(
       page
         .locator(".plugin-question[open]")
-        .getByText("后续希望优先处理哪一项？", { exact: true }),
+        .getByText("准备阶段的气氛希望突出哪一点？", { exact: true }),
     ).toBeVisible();
     await expect(page.locator(".plugin-question[open]")).toHaveCount(1);
     await expect(
@@ -506,7 +615,10 @@ for (const mobile of [false, true])
     await expect(
       page.locator(".plugin-result:not(.plugin-question)[open] .plugin-usage"),
     ).toContainText("缓存率 80.0%");
-    const sceneCard = page.locator('.analysis-section[aria-label="场景记录"]');
+    // Regeneration keeps the old run as history; target the latest result.
+    const sceneCard = page
+      .locator('.analysis-section[aria-label="场景记录"]')
+      .last();
     await expect(sceneCard).toBeVisible();
     await sceneCard
       .getByRole("button", { name: "重新生成此块", exact: true })
@@ -562,15 +674,21 @@ for (const mobile of [false, true])
       "保留主聊天草稿",
     );
     await expect(
-      page.getByLabel("添加已保存类型", { exact: true }),
+      page.getByRole("button", { name: "删除类型（后续停用）", exact: true }),
     ).toBeVisible();
     await page
-      .getByLabel("添加已保存类型", { exact: true })
-      .selectOption({ label: "服装状态" });
-    await expect(page.getByLabel("消息", { exact: true })).toHaveValue(
-      /通用规则：只记录历史已经明确的服装状态/,
-    );
-    await page.getByRole("button", { name: "取消操作", exact: true }).click();
+      .getByRole("button", { name: "删除类型（后续停用）", exact: true })
+      .click();
+    await expect(
+      page.locator('.analysis-section[aria-label="服装状态"]'),
+    ).toHaveCount(0);
+    await expect
+      .poll(async () => {
+        const data = await (await page.request.get("/api/chats/" + id)).json();
+        return data.chat.plugins.find((p: any) => p.id === "builtin-analysis")
+          .overrides.analysisTypes.length;
+      })
+      .toBe(0);
     await sceneCard.getByRole("button", { name: "编辑", exact: true }).click();
     await sceneCard
       .getByLabel("编辑分块正文", { exact: true })
@@ -665,7 +783,7 @@ for (const mobile of [false, true])
     expect(JSON.stringify(analysisCall.messages)).toContain("轻松幽默");
     expect(JSON.stringify(analysisCall.messages)).toContain("哪种风格");
     expect(JSON.stringify(analysisCall.messages)).not.toContain(
-      "后续希望优先处理哪一项？",
+      "准备阶段的气氛希望突出哪一点？",
     );
     const transmitted = analysisCall.messages.filter(
       (m: any) => m.role === "tool",

@@ -387,7 +387,7 @@ describe("front plugin summary context", () => {
       );
       expect(result.request.messages[0]).toEqual({
         role: "system",
-        content: "PLUGIN_SYSTEM",
+        content: expect.stringContaining("PLUGIN_SYSTEM"),
       });
       expect(result.request.messages[3]?.content).toContain("ACCEPTED_SUMMARY");
       expect(result.request.messages[5]?.content).toBe("FULL2_MISSING");

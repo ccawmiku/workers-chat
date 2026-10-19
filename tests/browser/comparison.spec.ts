@@ -236,6 +236,6 @@ for (const mobile of [false, true])
     ).not.toBeChecked();
     await expect(page.locator(".comparison-pane")).toHaveCount(0);
     await page.getByRole("button", { name: "返回聊天", exact: true }).click();
-    await expect(page.locator(".app-version")).toHaveText("v1.2.0");
+    await expect(page.locator(".app-version")).toHaveText("v1.2.1");
     expect(errors).toEqual([]);
   });

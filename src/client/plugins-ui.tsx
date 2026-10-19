@@ -211,7 +211,7 @@ export function PluginEditor({
               </label>
               {!!p.analysisTypes?.length && (
                 <details>
-                  <summary>已保存类型（手动添加，不自动生成）</summary>
+                  <summary>持续生成的类型（每轮自动生成）</summary>
                   {p.analysisTypes.map((t) => (
                     <div key={t.id} className="saved-analysis-type">
                       <label>

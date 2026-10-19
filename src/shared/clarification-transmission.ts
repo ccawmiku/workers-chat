@@ -34,7 +34,7 @@ export function clarificationSubmission(
       const ids = [...new Set(raw)].filter((id) =>
         q.options.some((o) => o.id === id),
       );
-      if (!ids.length || (!q.multiple && ids.length > 1)) return [];
+      if (!ids.length) return [];
       return [
         {
           id: q.id,

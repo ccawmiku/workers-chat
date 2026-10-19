@@ -39,13 +39,18 @@ import {
   questionView,
   clarifyAnswer,
   type AnalysisType,
+  validateAnalysisTypesResult,
 } from "../shared/plugin-sections";
 import { ANALYSIS_SCHEMA } from "../shared/analysis-defaults";
 import {
   clarificationSubmission,
   legacyClarificationSubmission,
 } from "../shared/clarification-transmission";
-import { CONTINUE_CLARIFY_TASK } from "../shared/clarify-defaults";
+import {
+  CONTINUE_CLARIFY_TASK,
+  FIRST_CLARIFY_TASK,
+  continueClarifyTask,
+} from "../shared/clarify-defaults";
 import { fallbackRequest } from "./fallback-model";
 import { compatibleMessages } from "../shared/upstream-compat";
 
@@ -54,6 +59,7 @@ export type PluginTask = {
   runId: string;
   flowId?: string;
   transport?: "device";
+  analysisTypesContract?: boolean;
   provider: Pick<Provider, "id" | "baseUrl" | "encryptedKey">;
   request: PluginRequest;
 };
@@ -74,6 +80,7 @@ async function frozenPreparation(
     throw new HttpError(409, "原服务商已移除");
   return {
     request: structuredClone(saved.value.request),
+    analysisTypesContract: saved.value.analysisTypesContract === true,
     metrics: {
       ...structuredClone(source.metrics),
       capacity:
@@ -127,12 +134,10 @@ async function frozenClarification(
   if (task)
     prepared.request.messages.push({
       ...task,
-      content:
-        (task.content ?? "") +
-        "\n\n" +
-        (source.plugin.clarifyFormat === "questions"
-          ? CONTINUE_CLARIFY_TASK
-          : "用户明确要求继续提问，请至少提出一个尚未问过、未回答或跳过的新问题，不得只回答无。保留原来的提问格式，不代写正文。"),
+      content: continueClarifyTask(
+        task.content ?? "",
+        source.plugin.clarifyFormat === "questions",
+      ),
     });
   prepared.request.messages = compatibleMessages(
     prepared.request.model,
@@ -535,6 +540,7 @@ async function enqueue(
       encryptedKey: prepared.provider.encryptedKey,
     },
     request,
+    analysisTypesContract: prepared.analysisTypesContract || undefined,
   };
   stateDoc.value.runs.push(run);
   if (flow && !replaces) {
@@ -809,6 +815,17 @@ async function finishPluginOnce(
         ? JSON.stringify(sectionResult(text))
         : normalizePluginOutput(run.plugin, text);
       if (
+        !run.sectionEdit &&
+        run.plugin.kind === "analysis" &&
+        taskDoc?.value.analysisTypesContract &&
+        run.plugin.analysisTypes?.length
+      )
+        validateAnalysisTypesResult(
+          text,
+          run.plugin.schema,
+          run.plugin.analysisTypes,
+        );
+      if (
         run.plugin.kind === "clarify" &&
         run.plugin.clarifyFormat === "questions" &&
         run.flowId
@@ -828,17 +845,30 @@ async function finishPluginOnce(
         );
         text = JSON.stringify(
           {
-            questions: (questionView(text) ?? []).filter(
-              (q) => !asked.has(key(q.question)),
-            ),
+            questions: (questionView(text) ?? []).filter((q) => {
+              const normalized = key(q.question);
+              if (asked.has(normalized)) return false;
+              asked.add(normalized);
+              return true;
+            }),
           },
           null,
           2,
         );
+        const count = questionView(text)?.length ?? 0;
         if (
           taskDoc?.value.request.messages
             .at(-1)
-            ?.content?.includes(CONTINUE_CLARIFY_TASK) &&
+            ?.content?.endsWith(FIRST_CLARIFY_TASK) &&
+          (count < 2 || count > 4)
+        )
+          throw Error(
+            "首批补充提问必须生成 2–4 个本轮提示范围内的问题；原始输出已保留，请重新生成或切换备用模型",
+          );
+        if (
+          taskDoc?.value.request.messages
+            .at(-1)
+            ?.content?.endsWith(CONTINUE_CLARIFY_TASK) &&
           !questionView(text)?.length
         )
           throw Error(
@@ -1066,6 +1096,79 @@ export async function pluginEndpoint(
     const { settings } = await config(env);
     chat.plugins = validatedBindings(body.plugins, definitions(settings));
     await store.save(chat.id, "chat", chat, chatDoc.revision, summary(chat));
+    return { ok: true };
+  }
+  if (action === "type-remove") {
+    if (!run || run.plugin.kind !== "analysis")
+      throw new HttpError(404, "分析记录不存在");
+    const targetId = str(body.targetId, 128),
+      settingsDoc = await store.get<Settings>("settings"),
+      settings = settingsDoc?.value ?? defaultSettings(),
+      base = definitions(settings).find((p) => p.id === run.plugin.id);
+    if (!base) throw new HttpError(404, "插件不存在");
+    const binding = chat.plugins?.find((p) => p.id === base.id),
+      local = binding?.overrides?.analysisTypes,
+      types = local ?? base.analysisTypes ?? [];
+    if (!types.some((t) => t.id === targetId))
+      throw new HttpError(409, "该类型已停用，请刷新后重试");
+    const extra: D1PreparedStatement[] = [];
+    if (local) {
+      chat.plugins = validatedBindings(
+        (chat.plugins ?? []).map((b) =>
+          b.id === base.id
+            ? {
+                ...b,
+                overrides: {
+                  ...b.overrides,
+                  analysisTypes: types.filter((t) => t.id !== targetId),
+                },
+              }
+            : b,
+        ),
+        definitions(settings),
+      );
+      extra.push(
+        ...store.planSave(
+          chat.id,
+          "chat",
+          chat,
+          chatDoc.revision,
+          summary(chat),
+        ),
+      );
+    } else {
+      settings.plugins = definitions(settings).map((p) =>
+        p.id === base.id
+          ? { ...p, analysisTypes: types.filter((t) => t.id !== targetId) }
+          : p,
+      );
+      extra.push(
+        ...store.planSave(
+          "settings",
+          "settings",
+          settings,
+          settingsDoc?.revision ?? 0,
+        ),
+      );
+    }
+    // Completed history and in-flight requests are immutable; only an editable current block is removed.
+    if (
+      !active &&
+      run.status === "waiting" &&
+      flow?.status === "waiting" &&
+      flow.results.at(-1) === run.id &&
+      analysisSections(run.output).some((s) => s.id === targetId)
+    )
+      run.output = normalizePluginOutput(
+        run.plugin,
+        mergeSection(
+          run.output,
+          targetId,
+          { id: targetId, type: "", content: "none" },
+          true,
+        ),
+      );
+    await saveState(env, chat.id, state, extra);
     return { ok: true };
   }
   if (action === "request") {

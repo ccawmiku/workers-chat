@@ -48,15 +48,16 @@ describe("stable request prefixes and isolated comparison forks", () => {
     const c = make(clarify),
       a = make(analysis);
     expect(c[0]).toEqual(a[0]);
-    expect(c[0]!.content).toBe("shared history user");
+    expect(c[0]!.role).toBe("system");
+    expect(c[1]!.content).toBe("shared history user");
     expect(
-      c.findIndex((m) => m.content?.includes("【插件固定任务】")),
+      c.findIndex((m) => m.content?.startsWith("【插件固定任务】")),
     ).toBeGreaterThan(1);
     analysis.system = "independent rules";
     const isolated = make(analysis);
     expect(isolated[0]).toEqual({
       role: "system",
-      content: "independent rules",
+      content: expect.stringContaining("independent rules"),
     });
     expect(isolated[1]!.content).toContain("【插件固定任务】");
   });
@@ -76,7 +77,7 @@ describe("stable request prefixes and isolated comparison forks", () => {
       const a = make("INPUT_ONE"),
         b = make("INPUT_TWO");
       expect(a.slice(0, -1)).toEqual(b.slice(0, -1));
-      expect(a[0]!.content).toContain("fixed example");
+      expect(a[1]!.content).toContain("fixed example");
       expect(a[0]!.content).not.toContain("INPUT_ONE");
       expect(a.at(-1)!.content).toContain("INPUT_ONE");
     }

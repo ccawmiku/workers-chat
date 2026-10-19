@@ -16,6 +16,10 @@
 - [移植文件结构映射表](#移植文件结构映射表)
 - [构建与打包指南](#构建与打包指南)
 - [在 DeepSeek Harness 中安装与启用](#在-deepseek-harness-中安装与启用)
+  - [方式一：🚀 一键自动安装（最推荐，零配置）](#方式一-一键自动安装最推荐零配置)
+  - [方式二：通过 DSH 官方 CLI 工具安装](#方式二通过-dsh-官方-cli-工具安装)
+  - [方式三：手动配置安装（开发者本地调试）](#方式三手动配置安装开发者本地调试)
+  - [一键卸载](#️-一键卸载)
 - [后续同步上游更新与维护指南](#后续同步上游更新与维护指南)
 
 ---
@@ -158,19 +162,64 @@ npm run build
 
 ## 在 DeepSeek Harness 中安装与启用
 
-### 方式一：直接在 DSH 桌面 profile 中链接使用（推荐开发与自用）
+### 方式一：🚀 一键自动安装（最推荐，零配置）
 
-1. **链接插件到 DSH profile**：
-   在 Windows 上（以管理员身份打开 cmd 或 PowerShell）：
-   ```cmd
-   mklink /J "%USERPROFILE%\.dsh\profiles\desktop\node_modules\dsh-plugin-workers-chat" "C:\你的代码路径\workers-chat"
-   ```
-   在 macOS / Linux 上：
-   ```sh
-   ln -s "/你的代码路径/workers-chat" "$HOME/.dsh/profiles/desktop/node_modules/dsh-plugin-workers-chat"
-   ```
+无论你是否已经下载了源码，都可以直接在终端运行以下一行命令。安装脚本会自动下载/链接插件代码、配置 `package.json` 依赖声明、更新 `cordis.patch.yml` 插件注册表并开启桌面端内置浏览器访问权限：
 
-2. **在 DSH profile 的 `package.json` 中声明依赖**：
+#### 🪟 Windows 系统 (PowerShell)
+打开 PowerShell，执行以下一行命令即可完成安装：
+```powershell
+irm https://raw.githubusercontent.com/ccawmiku/workers-chat/DeepSeekHarness/scripts/install.ps1 | iex
+```
+*如果你已经克隆了本仓库，也可以在仓库根目录直接运行：*
+```powershell
+.\scripts\install.ps1
+```
+
+#### 🍎/🐧 macOS 与 Linux 系统 (Bash)
+打开终端，执行以下一行命令：
+```bash
+curl -fsSL https://raw.githubusercontent.com/ccawmiku/workers-chat/DeepSeekHarness/scripts/install.sh | bash
+```
+*如果你已经克隆了本仓库，也可以在仓库根目录直接运行：*
+```bash
+bash scripts/install.sh
+```
+
+> **安装后启用**：
+> 运行完成后，**完全退出并重新启动 DeepSeek Harness 客户端**。进入后即可在左侧侧边栏看到 **Workers Chat** 专属图标，点击即刻进入体验！
+
+---
+
+### 方式二：通过 DSH 官方 CLI 工具安装
+
+如果你的系统中可以使用 `dsh` 或桌面版内置 CLI：
+
+```sh
+# 桌面客户端环境 (Desktop Profile)
+& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add github:ccawmiku/workers-chat#DeepSeekHarness
+
+# Web 终端环境 (Web Profile)
+dsh plugin --profile web add github:ccawmiku/workers-chat#DeepSeekHarness
+```
+
+---
+
+### 方式三：手动配置安装（开发者本地调试）
+
+如果你希望直接使用本地开发代码进行二次开发与调试：
+
+1. **链接插件到 DSH 桌面 Profile**：
+   - **Windows**（以管理员身份运行 cmd 或 PowerShell）：
+     ```cmd
+     mklink /J "%USERPROFILE%\.dsh\profiles\desktop\node_modules\dsh-plugin-workers-chat" "C:\你的代码路径\workers-chat"
+     ```
+   - **macOS / Linux**：
+     ```sh
+     ln -s "/你的代码路径/workers-chat" "$HOME/.dsh/profiles/desktop/node_modules/dsh-plugin-workers-chat"
+     ```
+
+2. **在 DSH 桌面 Profile 的 `package.json` 中声明依赖**：
    编辑 `~/.dsh/profiles/desktop/package.json`：
    ```json
    {
@@ -188,22 +237,40 @@ npm run build
    ```
 
 3. **在 `cordis.patch.yml` 中激活插件**：
-   编辑 `~/.dsh/profiles/desktop/cordis.patch.yml`，在相应位置添加：
+   编辑 `~/.dsh/profiles/desktop/cordis.patch.yml`，追加：
    ```yaml
    - id: workers-chat
      name: dsh-plugin-workers-chat
    ```
 
 4. **开启桌面浏览器访问权限**：
-   确保 `~/.dsh/desktop-preferences.json` 中配置了允许浏览器访问：
+   编辑 `~/.dsh/desktop-preferences.json`，确保包含：
    ```json
    {
      "browserAccess": true
    }
    ```
 
-5. **体验插件**：
-   打开 DeepSeek Harness 客户端，左侧导航栏将出现 **Workers Chat** 图标，点击即可进入对话界面。
+5. **编译产物与启动**：
+   在源码目录运行 `npm run build`，重启 DSH 客户端即可加载。
+
+---
+
+### 🗑️ 一键卸载
+
+如果需要从 DSH 卸载该插件，可运行一键卸载脚本：
+
+- **Windows (PowerShell)**：
+  ```powershell
+  irm https://raw.githubusercontent.com/ccawmiku/workers-chat/DeepSeekHarness/scripts/uninstall.ps1 | iex
+  # 或在本地仓库运行: .\scripts\uninstall.ps1
+  ```
+- **macOS / Linux (Bash)**：
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/ccawmiku/workers-chat/DeepSeekHarness/scripts/uninstall.sh | bash
+  # 或在本地仓库运行: bash scripts/uninstall.sh
+  ```
+卸载后重启客户端即可恢复原状。
 
 ---
 

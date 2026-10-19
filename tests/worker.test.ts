@@ -315,8 +315,9 @@ beforeAll(async () => {
                     });
               }
               const pluginMarker =
-                messages.find((m) => m.content?.startsWith("[PLUGIN_TEST_"))
-                  ?.content ?? "";
+                messages
+                  .find((m) => m.content?.includes("[PLUGIN_TEST_"))
+                  ?.content?.replace("【插件固定任务】\n", "") ?? "";
               if (pluginMarker) {
                 if (controls.mode === "plugin-http-error")
                   return MFResponse.json(
@@ -327,10 +328,7 @@ beforeAll(async () => {
                   controls.mode === "plugin-invalid"
                     ? "invalid JSON"
                     : pluginMarker.startsWith("[PLUGIN_TEST_analysis]")
-                      ? !messages
-                          .at(-1)
-                          ?.content?.split("JSON Schema：")[1]
-                          ?.includes('"ABC"')
+                      ? !pluginMarker.includes('"ABC"')
                         ? JSON.stringify({
                             character_thoughts: [
                               {
@@ -701,14 +699,14 @@ describe("workerd HTTP + D1 + Workflows", () => {
       content: "多写点",
     });
     done = await finished(chat.id);
-    expect(readTool()).toHaveLength(1);
-    expect(readTool()[0]!.content).toContain('"上一轮要求":"3000字左右"');
-    expect(readTool()[0]!.content).toContain('"本轮要求":"多写点"');
+    expect(readTool()).toHaveLength(2);
+    expect(readTool().at(-1)!.content).toContain('"上一轮要求":"3000字左右"');
+    expect(readTool().at(-1)!.content).toContain('"本轮要求":"多写点"');
     expect(
       (upstreamCalls.at(-1)!.messages as { name?: string }[]).filter(
         (m) => m.name === "plugin_reply_length",
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     await value(endpoint, "PATCH", {
       lengthGuidance: { enabled: true, requirement: "每轮约2000字" },
     });
@@ -717,16 +715,16 @@ describe("workerd HTTP + D1 + Workflows", () => {
       confirmPost: true,
     });
     done = await finished(chat.id);
-    expect(readTool()[0]!.content).toContain('"上一轮要求":"多写点"');
-    expect(readTool()[0]!.content).not.toContain("3000字左右");
-    expect(readTool()[0]!.content).toContain('"本轮要求":"每轮约2000字"');
+    expect(readTool().at(-1)!.content).toContain('"上一轮要求":"多写点"');
+    expect(readTool().at(-1)!.content).not.toContain("3000字左右");
+    expect(readTool().at(-1)!.content).toContain('"本轮要求":"每轮约2000字"');
     snapshot = await value<SummarySnapshot>(endpoint);
     expect(snapshot.pluginState.flows).toHaveLength(2); // Fixed text adds no waiting-flow snapshots.
 
     await value(endpoint + "/retry", "POST", { messageId: done.currentId });
     done = await finished(chat.id);
-    expect(readTool()).toHaveLength(1);
-    expect(readTool()[0]!.content).toContain("每轮约2000字");
+    expect(readTool()).toHaveLength(3);
+    expect(readTool().at(-1)!.content).toContain("每轮约2000字");
     const directChat = await value<Chat>("/chats", "POST", {});
     await value("/chats/" + directChat.id, "PATCH", {
       title: "direct local length",
@@ -803,6 +801,111 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(tools[0]?.name).not.toBe("plugin_reply_length");
     await value("/settings", "PUT", settings);
   });
+  it("creates one independent comparison fork per main round and isolates plain mode from every tool", async () => {
+    controls.mode = "normal";
+    controls.delay = 0;
+    const chat = await value<Chat>("/chats", "POST", {});
+    const config = {
+      enabled: true,
+      model: null,
+      parameters: { temperature: 0.2 },
+      effort: "inherit",
+      mode: "plain",
+    };
+    await value("/chats/" + chat.id, "PATCH", {
+      title: "comparison fixture",
+      comparison: config,
+      lengthGuidance: { enabled: true, requirement: "短一点" },
+      parameters: { temperature: 0.7 },
+    });
+    const get = () => value<{ chat: Chat }>("/chats/" + chat.id);
+    let before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "FIRST_MAIN",
+      confirmPost: true,
+    });
+    await finished(chat.id);
+    let main = (await get()).chat;
+    expect(main.comparisonRuns).toHaveLength(1);
+    const first = main.comparisonRuns![0]!;
+    await finished(first.chatId);
+    let calls = upstreamCalls.slice(before);
+    expect(calls).toHaveLength(2);
+    const compare = calls.find((c) => c.temperature === 0.2)!;
+    expect(
+      (compare.messages as { role: string }[]).some((m) => m.role === "tool"),
+    ).toBe(false);
+    expect(
+      JSON.stringify(calls.find((c) => c.temperature === 0.7)?.messages),
+    ).toContain("plugin_reply_length");
+    const fork = await value<{ chat: Chat }>("/chats/" + first.chatId);
+    expect(fork.chat.comparisonSource?.userId).toBe(first.userId);
+    await value("/chats/" + first.chatId + "/edit", "POST", {
+      messageId: fork.chat.currentId,
+      content: "COMPARISON_ONLY_DO_NOT_CARRY",
+    });
+    before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "SECOND_MAIN",
+      confirmPost: true,
+    });
+    await finished(chat.id);
+    main = (await get()).chat;
+    expect(main.comparisonRuns).toHaveLength(2);
+    await finished(main.comparisonRuns![1]!.chatId);
+    calls = upstreamCalls.slice(before);
+    expect(calls).toHaveLength(2);
+    expect(JSON.stringify(calls)).not.toContain("COMPARISON_ONLY_DO_NOT_CARRY");
+    expect(JSON.stringify(calls)).toContain("FIRST_MAIN");
+    expect(JSON.stringify(calls)).toContain("SECOND_MAIN");
+    const pure = calls.find((c) => c.temperature === 0.2)!;
+    expect(
+      (pure.messages as { role: string }[]).filter((m) => m.role === "tool"),
+    ).toHaveLength(0);
+    await value("/chats/" + chat.id, "PATCH", {
+      comparison: { ...config, mode: "same" },
+    });
+    before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "THIRD_MAIN",
+      confirmPost: true,
+    });
+    await finished(chat.id);
+    main = (await get()).chat;
+    await finished(main.comparisonRuns!.at(-1)!.chatId);
+    calls = upstreamCalls.slice(before);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.messages).toEqual(calls[1]!.messages);
+    const count = main.comparisonRuns!.length;
+    await value("/chats/" + chat.id, "PATCH", {
+      comparison: { ...config, enabled: false },
+    });
+    before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "FOURTH_MAIN",
+      confirmPost: true,
+    });
+    await finished(chat.id);
+    expect((await get()).chat.comparisonRuns).toHaveLength(count);
+    expect(upstreamCalls.length - before).toBe(1);
+    await value("/chats/" + chat.id, "PATCH", {
+      comparison: {
+        ...config,
+        model: { providerId: provider.id, modelId: "missing-comparison-model" },
+      },
+    });
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "MAIN_SURVIVES_SECONDARY_FAILURE",
+      confirmPost: true,
+    });
+    await finished(chat.id);
+    main = (await get()).chat;
+    const failed = await value<{ chat: Chat }>(
+      "/chats/" + main.comparisonRuns!.at(-1)!.chatId,
+    );
+    expect(failed.chat.messages[failed.chat.currentId!]!.status).toBe("error");
+    expect(main.messages[main.currentId!]!.status).toBe("complete");
+  }, 30000);
   it("saves provider metadata offline, preserves models and keys, and keeps device save separate from fetching", async () => {
     const models = provider.models;
     const saved = await value<Provider>("/providers", "POST", {
@@ -1691,10 +1794,9 @@ describe("workerd HTTP + D1 + Workflows", () => {
     await finished(id);
     const request = titleCalls.at(-1)!;
     const messages = request.messages as { role: string; content: string }[];
-    const inserted = messages[0]!.content.match(
-      /<chat_history>\s*([\s\S]*?)\s*<\/chat_history>/,
-    )![1]!;
-    expect(JSON.parse(inserted)).toEqual([
+    const inserted = JSON.parse(messages.at(-1)!.content).chat_history[0]
+      .messages;
+    expect(inserted).toEqual([
       { role: "user", content: "second question" },
       { role: "assistant", content: "second answer" },
     ]);
@@ -1788,7 +1890,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(JSON.stringify(title)).not.toMatch(
       /encryptedKey|synthetic-fixture-key/,
     );
-    expect(title.candidates[0]!.request.messages[0]!.content).toContain(
+    expect(title.candidates[0]!.request.messages.at(-1)!.content).toContain(
       "device answer",
     );
     expect(
@@ -2796,7 +2898,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     let snapshot = await value<Snapshot>("/chats/" + chat.id);
     expect(
       snapshot.pluginJob!.direct!.request.messages.map((m) => m.role),
-    ).toEqual(["user"]);
+    ).toEqual(["system", "user"]);
     expect(
       snapshot.pluginJob!.direct!.request.messages.at(-1)?.content,
     ).toContain("first request");

@@ -1,3 +1,10 @@
+import { APP_VERSION } from "../shared/version";
+import {
+  ComparisonSettings,
+  ComparisonBranches,
+  ComparisonPane,
+} from "./comparison-ui";
+import { defaultComparison, type ComparisonConfig } from "../shared/comparison";
 import { LengthSettings } from "./length-settings";
 import type { LengthGuidance } from "../shared/length-guidance";
 import { hasCacheRequest, recordCacheRequest } from "./cache-usage";
@@ -168,6 +175,8 @@ function desktopInput() {
   );
 }
 function App() {
+  const comparisonQueue = useRef<Promise<void>>(Promise.resolve()),
+    comparisonPending = useRef(new Map<string, ComparisonConfig>());
   const connection = useDeviceConnection();
   const [loginNotice, setLoginNotice] = useState<LoginNotice | null>(
     readLoginNotice,
@@ -1117,6 +1126,62 @@ function App() {
     )
       await loadNavigation();
   }
+  async function saveComparison(change: Partial<ComparisonConfig>) {
+    if (!chat) return;
+    const id = chat.id,
+      base =
+        comparisonPending.current.get(id) ??
+        chat.comparison ??
+        defaultComparison(),
+      value = { ...base, ...change, parameters: { ...base.parameters } };
+    for (const key of ["temperature", "top_p", "top_k"] as const)
+      if (change.parameters && key in change.parameters) {
+        if (change.parameters[key] === undefined) delete value.parameters[key];
+        else value.parameters[key] = change.parameters[key];
+      }
+    comparisonPending.current.set(id, value);
+    setChat((old) => (old?.id === id ? { ...old, comparison: value } : old));
+    const oldRun =
+      !value.enabled && base.enabled ? chat.comparisonRuns?.at(-1) : undefined;
+    const pending = comparisonQueue.current
+      .catch(() => {})
+      .then(async () => {
+        try {
+          if (oldRun && !connection.stop(oldRun.chatId))
+            await api("/chats/" + oldRun.chatId + "/stop", "POST", {});
+          const updated = await api<Chat>("/chats/" + id, "PATCH", {
+            comparison: value,
+          });
+          if (comparisonPending.current.get(id) === value)
+            comparisonPending.current.delete(id);
+          setChat((old) =>
+            old?.id === id
+              ? {
+                  ...old,
+                  comparison:
+                    comparisonPending.current.get(id) ?? updated.comparison,
+                }
+              : old,
+          );
+        } catch (error) {
+          if (comparisonPending.current.get(id) === value) {
+            comparisonPending.current.delete(id);
+            const restored = await api<{ chat: Chat }>("/chats/" + id).catch(
+              () => null,
+            );
+            if (restored && !comparisonPending.current.has(id))
+              setChat((old) =>
+                old?.id === id
+                  ? { ...old, comparison: restored.chat.comparison }
+                  : old,
+              );
+          }
+          throw error;
+        }
+      });
+    comparisonQueue.current = pending.catch(() => {});
+    await run(() => pending);
+  }
   function acceptGeneration(result: GenerationStart) {
     if (!result.direct) return;
     const task = result.direct;
@@ -1155,6 +1220,8 @@ function App() {
     body: Record<string, unknown> = {},
     revealMessage?: string,
   ) {
+    if (["regenerate", "retry", "continue"].includes(name))
+      await comparisonQueue.current;
     if (!chat) return;
     if (name === "stop" && connection.stop(chat.id)) return;
     await flushDraft();
@@ -1183,6 +1250,7 @@ function App() {
     }
   }
   async function send(confirmedPost = false) {
+    await comparisonQueue.current;
     if (pluginInput) {
       if (
         submitting.current ||
@@ -1472,6 +1540,7 @@ function App() {
     action: string,
     body: Record<string, unknown> = {},
   ) {
+    await comparisonQueue.current;
     const id = idRef.current;
     if (!id) return;
     try {
@@ -1744,7 +1813,9 @@ function App() {
         />
         <div className="brand">
           <Sparkles className="brand-mark" size={25} aria-hidden="true" />
-          <strong>在线AI</strong>
+          <strong>
+            在线AI <small className="app-version">v{APP_VERSION}</small>
+          </strong>
           <IconButton label="收起导航" onClick={() => setSidebar(false)}>
             <PanelLeft size={18} />
           </IconButton>
@@ -1950,868 +2021,907 @@ function App() {
           />
         </div>
       </aside>
-      <main>
-        <div className="chat-corner-controls">
-          {!sidebar && (
-            <IconButton label="打开导航" onClick={() => setSidebar(true)}>
-              <I.navigation size={19} />
-            </IconButton>
-          )}
-          {chat && (
-            <IconButton label="当前聊天设置" onClick={() => setPanel(!panel)}>
-              <I.settings size={19} />
-            </IconButton>
-          )}
-        </div>
-        {loginNotice && (
-          <LoginNoticeBanner
-            notice={loginNotice}
-            close={() => {
-              setLoginNotice(null);
-              saveLoginNotice(null);
-            }}
-          />
-        )}
-        {error && (
-          <div className="error-banner du-alert du-alert-error" role="alert">
-            <CircleAlert size={16} />
-            <span>{error}</span>
-            {chat && connection.unsaved(chat.id) && (
-              <button
-                onClick={() =>
-                  void run(async () => {
-                    await connection.retrySave(chat.id);
-                    setError("");
-                    await refresh(chat.id, true);
-                  })
-                }
-              >
-                <I.save size={15} />
-                重试保存回答
-              </button>
+      <div
+        className={
+          "conversation-workspace" +
+          (chat?.comparison?.enabled ? " is-comparing" : "")
+        }
+      >
+        <main>
+          <div className="chat-corner-controls">
+            {!sidebar && (
+              <IconButton label="打开导航" onClick={() => setSidebar(true)}>
+                <I.navigation size={19} />
+              </IconButton>
             )}
-            <IconButton label="关闭提示" onClick={() => setError("")}>
-              <X size={15} />
-            </IconButton>
+            {chat && (
+              <IconButton label="当前聊天设置" onClick={() => setPanel(!panel)}>
+                <I.settings size={19} />
+              </IconButton>
+            )}
           </div>
-        )}
-        <div
-          className="message-scroll"
-          ref={scrollRef}
-          onWheel={(e) => noteScrollGesture(e.deltaY)}
-          onTouchStart={(e) => {
-            scrollGesture.current.touchY = e.touches[0]?.clientY ?? 0;
-          }}
-          onTouchMove={(e) => {
-            const y = e.touches[0]?.clientY;
-            if (y === undefined) return;
-            noteScrollGesture(scrollGesture.current.touchY - y);
-            scrollGesture.current.touchY = y;
-          }}
-          onKeyDown={(e) => {
-            if (["ArrowUp", "PageUp", "Home"].includes(e.key))
-              noteScrollGesture(-60);
-            if (["ArrowDown", "PageDown", "End"].includes(e.key))
-              noteScrollGesture(60);
-          }}
-          onPointerDown={(e) => {
-            if (e.target === e.currentTarget)
-              scrollGesture.current.downward = true;
-          }}
-          onScroll={() => {
-            const el = scrollRef.current!;
-            const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-            const upward = scrollGesture.current.lastTop - el.scrollTop;
-            scrollGesture.current.lastTop = el.scrollTop;
-            if (upward > 0) noteScrollGesture(-upward);
-            // A small layout shift must never re-arm follow after an upward gesture.
-            if (distance > 100) stick.current = false;
-            else if (distance <= 4 && scrollGesture.current.downward) {
-              stick.current = true;
-              scrollGesture.current.downward = false;
-              scrollGesture.current.upward = 0;
-            }
-            setScrollBottom(!stick.current);
-          }}
-        >
-          {!path.length ? (
-            <div className="welcome">
-              <Sparkles
-                className="welcome-symbol"
-                size={44}
-                aria-hidden="true"
-              />
-              <h1>有什么想聊的？</h1>
-              <p>让想法从这里开始。</p>
-              {!models.some((m) => m.enabled) && (
-                <button
-                  className="subtle-button"
-                  onClick={() => showSettings()}
-                >
-                  配置服务商与模型 <ChevronRight size={14} />
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="messages">
-              {path.map((m) => {
-                const siblings = chat
-                    ? (byParent.get(m.parentId) ?? []).filter(
-                        (s) => s.role === m.role,
-                      )
-                    : [],
-                  version = siblings.findIndex((s) => s.id === m.id);
-                return (
-                  <article
-                    key={m.id}
-                    className={"message " + m.role}
-                    data-message-id={m.id}
-                    onPointerDown={(e) => {
-                      if (
-                        e.pointerType !== "touch" ||
-                        (e.target as HTMLElement).closest(
-                          "button,a,input,textarea,select",
-                        )
-                      )
-                        return;
-                      cancelLongPress();
-                      longPress.current = {
-                        x: e.clientX,
-                        y: e.clientY,
-                        timer: setTimeout(() => {
-                          setMenu(m.id);
-                          longPress.current = null;
-                        }, 500),
-                      };
-                    }}
-                    onPointerMove={(e) => {
-                      if (
-                        longPress.current &&
-                        Math.hypot(
-                          e.clientX - longPress.current.x,
-                          e.clientY - longPress.current.y,
-                        ) > 10
-                      )
-                        cancelLongPress();
-                    }}
-                    onPointerUp={cancelLongPress}
-                    onPointerCancel={cancelLongPress}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setMenu(m.id);
-                    }}
-                  >
-                    {editing?.id === m.id ? (
-                      <MessageEditor
-                        value={editing.content}
-                        expanded={editing.expanded}
-                        saving={editSaving}
-                        busy={busy || !!job || !!pluginJob}
-                        error={error}
-                        user={m.role === "user"}
-                        rewriteActions={rewriteButtons(editing.content, m.id)}
-                        onChange={(content) =>
-                          setEditing({ ...editing, content })
-                        }
-                        onExpand={(expanded) => {
-                          scrollIntent.current = {
-                            id: m.id,
-                            offset: editing.offset,
-                          };
-                          setEditing({ ...editing, expanded });
-                        }}
-                        onCancel={finishEdit}
-                        onSave={() => {
-                          setEditSaving(true);
-                          void run(async () => {
-                            await action("edit", {
-                              messageId: m.id,
-                              content: editing.content,
-                            });
-                            if (m.role === "assistant")
-                              scrollIntent.current = {
-                                id: m.id,
-                                offset: editing.offset,
-                              };
-                            else {
-                              scrollIntent.current = {};
-                              stick.current = true;
-                            }
-                            setEditing(null);
-                          }).finally(() => setEditSaving(false));
-                        }}
-                      />
-                    ) : (
-                      <div className="message-body">
-                        {m.reasoning && (
-                          <details
-                            className="reasoning-collapse du-collapse du-collapse-arrow"
-                            open={m.status === "running"}
-                          >
-                            <summary className="du-collapse-title">
-                              思考过程
-                            </summary>
-                            <div className="reasoning du-collapse-content">
-                              {m.reasoning}
-                            </div>
-                          </details>
-                        )}
-                        <div
-                          id={"text-" + m.id}
-                          className={
-                            "markdown " +
-                            (appearance.collapse && m.content.length > 5000
-                              ? "collapsible"
-                              : "")
-                          }
-                        >
-                          <MessageMarkdown
-                            content={
-                              m.content ||
-                              (m.status === "running" ? "" : "（空消息）")
-                            }
-                          />
-                        </div>
-                        {appearance.collapse && m.content.length > 5000 && (
-                          <button
-                            className="text-button"
-                            onClick={(e) => {
-                              e.currentTarget.previousElementSibling?.classList.toggle(
-                                "collapsible",
-                              );
-                              e.currentTarget.textContent =
-                                e.currentTarget.textContent === "展开全文"
-                                  ? "收起"
-                                  : "展开全文";
-                            }}
-                          >
-                            <I.expandText size={15} />
-                            展开全文
-                          </button>
-                        )}
-                        {m.status === "running" && !m.content && (
-                          <span className="generating-dot" />
-                        )}
-                        {m.error && <p className="message-error">{m.error}</p>}
-                        {m.status === "stopped" && (
-                          <p className="muted">已停止 · 保留部分回答</p>
-                        )}
-                        <div
-                          className={
-                            "message-actions " +
-                            (menu === m.id ? "visible" : "")
-                          }
-                        >
-                          <IconButton
-                            label="复制 Markdown"
-                            onClick={() =>
-                              void run(() =>
-                                navigator.clipboard.writeText(m.content),
-                              )
-                            }
-                          >
-                            <Copy size={14} />
-                          </IconButton>
-                          <IconButton
-                            label="编辑消息"
-                            disabled={!!job || !!pluginJob}
-                            onClick={() => beginEdit(m)}
-                          >
-                            <Pencil size={14} />
-                          </IconButton>
-                          {m.role === "assistant" && (
-                            <IconButton
-                              label="重新生成"
-                              disabled={!!job || !!pluginJob}
-                              onClick={() =>
-                                void run(() =>
-                                  action("regenerate", { messageId: m.id }),
-                                )
-                              }
-                            >
-                              <I.regenerateReply size={14} />
-                            </IconButton>
-                          )}
-                          <IconButton
-                            label="从这里 Fork"
-                            disabled={!!job || !!pluginJob}
-                            onClick={() =>
-                              void run(() =>
-                                action("fork", { messageId: m.id }),
-                              )
-                            }
-                          >
-                            <GitBranch size={15} />
-                          </IconButton>
-                          {m.role === "assistant" && (
-                            <IconButton
-                              label="继续回答"
-                              disabled={!!job || !!pluginJob}
-                              onClick={() =>
-                                void run(() =>
-                                  action("continue", { messageId: m.id }),
-                                )
-                              }
-                            >
-                              <CirclePlay size={15} />
-                            </IconButton>
-                          )}
-                          {m.role === "assistant" && m.status === "error" && (
-                            <IconButton
-                              label="重试为新版本"
-                              disabled={!!job || !!pluginJob}
-                              onClick={() =>
-                                void run(() =>
-                                  action("retry", { messageId: m.id }),
-                                )
-                              }
-                            >
-                              <I.retry size={15} />
-                            </IconButton>
-                          )}
-                          <IconButton
-                            label="复制纯文字"
-                            onClick={() =>
-                              void run(() =>
-                                navigator.clipboard.writeText(plainText(m.id)),
-                              )
-                            }
-                          >
-                            <FileText size={15} />
-                          </IconButton>
-                          <IconButton
-                            label="消息详情"
-                            onClick={() => setModal("request:" + m.id)}
-                          >
-                            <Info size={15} />
-                          </IconButton>
-                          <IconButton
-                            label="删除消息"
-                            disabled={!!job || !!pluginJob || busy}
-                            onClick={() =>
-                              chat &&
-                              setDeleteTarget({
-                                chatId: chat.id,
-                                messageId: m.id,
-                              })
-                            }
-                          >
-                            <Trash2 size={15} />
-                          </IconButton>
-                          {siblings.length > 1 && (
-                            <div className="versions">
-                              <IconButton
-                                label="上个版本"
-                                disabled={!!job || !!pluginJob || version === 0}
-                                onClick={() =>
-                                  void run(() =>
-                                    action("select", {
-                                      messageId: siblings[version - 1]?.id,
-                                    }),
-                                  )
-                                }
-                              >
-                                <ChevronLeft size={14} />
-                              </IconButton>
-                              <button
-                                aria-label="选择消息版本"
-                                onClick={() => setModal("versions:" + m.id)}
-                              >
-                                {version + 1} / {siblings.length}
-                              </button>
-                              <IconButton
-                                label="下个版本"
-                                disabled={
-                                  !!job ||
-                                  !!pluginJob ||
-                                  version === siblings.length - 1
-                                }
-                                onClick={() =>
-                                  void run(() =>
-                                    action("select", {
-                                      messageId: siblings[version + 1]?.id,
-                                    }),
-                                  )
-                                }
-                              >
-                                <ChevronRight size={14} />
-                              </IconButton>
-                            </div>
-                          )}
-                        </div>
-                        {m.role === "assistant" && (
-                          <MessageUsage
-                            message={m}
-                            historical={m.id !== lastAssistant && menu !== m.id}
-                          />
-                        )}
-                        {m.role === "assistant" && (
-                          <ReplySummaryCard
-                            chat={chat!}
-                            messageId={m.id}
-                            sourceKey={summaryKeys.get(m.id) ?? ""}
-                            runs={summaryRuns.get(m.id) ?? []}
-                            latest={m.id === lastAssistant}
-                            command={summaryCommand}
-                          />
-                        )}
-                        {m.role === "user" && (
-                          <PluginTurnCards
-                            chatId={chat!.id}
-                            userId={m.id}
-                            state={pluginState}
-                            activeUserId={pluginFlow?.userId}
-                            selections={clarifySelections}
-                            select={(runId, id, values) =>
-                              setClarifySelections((current) => ({
-                                ...current,
-                                [runId]: { ...current[runId], [id]: values },
-                              }))
-                            }
-                            input={requestPluginInput}
-                            answer={(value, finish) =>
-                              void run(() => answerClarification(value, finish))
-                            }
-                            templates={(id) =>
-                              chat
-                                ? (
-                                    enabledPlugins(chat, settings).find(
-                                      (p) => p.id === id,
-                                    )?.analysisTypes ?? []
-                                  ).map((t) => ({
-                                    ...t,
-                                    scope: chat.plugins
-                                      ?.find((b) => b.id === id)
-                                      ?.overrides?.analysisTypes?.some(
-                                        (v) => v.id === t.id,
-                                      )
-                                      ? ("chat" as const)
-                                      : ("global" as const),
-                                  }))
-                                : []
-                            }
-                            command={pluginCommand}
-                            busy={busy || !!job || !!pluginJob}
-                          />
-                        )}
-                        {m.role === "assistant" && (
-                          <Suggestions
-                            state={pluginState}
-                            messageId={m.id}
-                            onChoose={chooseSuggestion}
-                            command={pluginCommand}
-                            busy={busy || !!job || !!pluginJob}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </div>
-        <div className="composer-area">
-          {scrollBottom && (
-            <IconButton
-              label="回到底部"
-              className="to-bottom"
-              onClick={() => {
-                stick.current = true;
-                const container = scrollRef.current;
-                if (container) container.scrollTop = container.scrollHeight;
-                scrollGesture.current.upward = 0;
-                setScrollBottom(false);
+          {loginNotice && (
+            <LoginNoticeBanner
+              notice={loginNotice}
+              close={() => {
+                setLoginNotice(null);
+                saveLoginNotice(null);
               }}
-            >
-              <ArrowDown size={17} />
-            </IconButton>
+            />
           )}
-          {pluginFlow && (
-            <div className="plugin-flow-controls">
-              <span>
-                {waitingLength
-                  ? "字数要求：请在下方输入本轮要求，可留空发送"
-                  : waitingPlugin
-                    ? `正在回答 ${waitingPlugin.plugin.name}`
-                    : pluginFlow.status === "debug"
-                      ? "调试完成，尚未生成正文"
-                      : pluginFlow.status === "waiting"
-                        ? "请确认写前分析结果"
-                        : pluginFlow.status === "error"
-                          ? "插件流程已暂停"
-                          : "插件正在运行"}
-              </span>
-              {waitingLength && (
+          {error && (
+            <div className="error-banner du-alert du-alert-error" role="alert">
+              <CircleAlert size={16} />
+              <span>{error}</span>
+              {chat && connection.unsaved(chat.id) && (
                 <button
-                  className="du-btn du-btn-xs"
-                  disabled={busy}
                   onClick={() =>
-                    void run(() =>
-                      pluginCommand("length-answer", { content: "" }),
-                    )
+                    void run(async () => {
+                      await connection.retrySave(chat.id);
+                      setError("");
+                      await refresh(chat.id, true);
+                    })
                   }
                 >
-                  本轮未提供
+                  <I.save size={15} />
+                  重试保存回答
                 </button>
               )}
-              {pluginFlow.status === "debug" && (
-                <>
+              <IconButton label="关闭提示" onClick={() => setError("")}>
+                <X size={15} />
+              </IconButton>
+            </div>
+          )}
+          <div
+            className="message-scroll"
+            ref={scrollRef}
+            onWheel={(e) => noteScrollGesture(e.deltaY)}
+            onTouchStart={(e) => {
+              scrollGesture.current.touchY = e.touches[0]?.clientY ?? 0;
+            }}
+            onTouchMove={(e) => {
+              const y = e.touches[0]?.clientY;
+              if (y === undefined) return;
+              noteScrollGesture(scrollGesture.current.touchY - y);
+              scrollGesture.current.touchY = y;
+            }}
+            onKeyDown={(e) => {
+              if (["ArrowUp", "PageUp", "Home"].includes(e.key))
+                noteScrollGesture(-60);
+              if (["ArrowDown", "PageDown", "End"].includes(e.key))
+                noteScrollGesture(60);
+            }}
+            onPointerDown={(e) => {
+              if (e.target === e.currentTarget)
+                scrollGesture.current.downward = true;
+            }}
+            onScroll={() => {
+              const el = scrollRef.current!;
+              const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+              const upward = scrollGesture.current.lastTop - el.scrollTop;
+              scrollGesture.current.lastTop = el.scrollTop;
+              if (upward > 0) noteScrollGesture(-upward);
+              // A small layout shift must never re-arm follow after an upward gesture.
+              if (distance > 100) stick.current = false;
+              else if (distance <= 4 && scrollGesture.current.downward) {
+                stick.current = true;
+                scrollGesture.current.downward = false;
+                scrollGesture.current.upward = 0;
+              }
+              setScrollBottom(!stick.current);
+            }}
+          >
+            {!path.length ? (
+              <div className="welcome">
+                <Sparkles
+                  className="welcome-symbol"
+                  size={44}
+                  aria-hidden="true"
+                />
+                <h1>有什么想聊的？</h1>
+                <p>让想法从这里开始。</p>
+                {!models.some((m) => m.enabled) && (
+                  <button
+                    className="subtle-button"
+                    onClick={() => showSettings()}
+                  >
+                    配置服务商与模型 <ChevronRight size={14} />
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="messages">
+                {path.map((m) => {
+                  const siblings = chat
+                      ? (byParent.get(m.parentId) ?? []).filter(
+                          (s) => s.role === m.role,
+                        )
+                      : [],
+                    version = siblings.findIndex((s) => s.id === m.id);
+                  return (
+                    <article
+                      key={m.id}
+                      className={"message " + m.role}
+                      data-message-id={m.id}
+                      onPointerDown={(e) => {
+                        if (
+                          e.pointerType !== "touch" ||
+                          (e.target as HTMLElement).closest(
+                            "button,a,input,textarea,select",
+                          )
+                        )
+                          return;
+                        cancelLongPress();
+                        longPress.current = {
+                          x: e.clientX,
+                          y: e.clientY,
+                          timer: setTimeout(() => {
+                            setMenu(m.id);
+                            longPress.current = null;
+                          }, 500),
+                        };
+                      }}
+                      onPointerMove={(e) => {
+                        if (
+                          longPress.current &&
+                          Math.hypot(
+                            e.clientX - longPress.current.x,
+                            e.clientY - longPress.current.y,
+                          ) > 10
+                        )
+                          cancelLongPress();
+                      }}
+                      onPointerUp={cancelLongPress}
+                      onPointerCancel={cancelLongPress}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setMenu(m.id);
+                      }}
+                    >
+                      {editing?.id === m.id ? (
+                        <MessageEditor
+                          value={editing.content}
+                          expanded={editing.expanded}
+                          saving={editSaving}
+                          busy={busy || !!job || !!pluginJob}
+                          error={error}
+                          user={m.role === "user"}
+                          rewriteActions={rewriteButtons(editing.content, m.id)}
+                          onChange={(content) =>
+                            setEditing({ ...editing, content })
+                          }
+                          onExpand={(expanded) => {
+                            scrollIntent.current = {
+                              id: m.id,
+                              offset: editing.offset,
+                            };
+                            setEditing({ ...editing, expanded });
+                          }}
+                          onCancel={finishEdit}
+                          onSave={() => {
+                            setEditSaving(true);
+                            void run(async () => {
+                              await action("edit", {
+                                messageId: m.id,
+                                content: editing.content,
+                              });
+                              if (m.role === "assistant")
+                                scrollIntent.current = {
+                                  id: m.id,
+                                  offset: editing.offset,
+                                };
+                              else {
+                                scrollIntent.current = {};
+                                stick.current = true;
+                              }
+                              setEditing(null);
+                            }).finally(() => setEditSaving(false));
+                          }}
+                        />
+                      ) : (
+                        <div className="message-body">
+                          {m.reasoning && (
+                            <details
+                              className="reasoning-collapse du-collapse du-collapse-arrow"
+                              open={m.status === "running"}
+                            >
+                              <summary className="du-collapse-title">
+                                思考过程
+                              </summary>
+                              <div className="reasoning du-collapse-content">
+                                {m.reasoning}
+                              </div>
+                            </details>
+                          )}
+                          <div
+                            id={"text-" + m.id}
+                            className={
+                              "markdown " +
+                              (appearance.collapse && m.content.length > 5000
+                                ? "collapsible"
+                                : "")
+                            }
+                          >
+                            <MessageMarkdown
+                              content={
+                                m.content ||
+                                (m.status === "running" ? "" : "（空消息）")
+                              }
+                            />
+                          </div>
+                          {appearance.collapse && m.content.length > 5000 && (
+                            <button
+                              className="text-button"
+                              onClick={(e) => {
+                                e.currentTarget.previousElementSibling?.classList.toggle(
+                                  "collapsible",
+                                );
+                                e.currentTarget.textContent =
+                                  e.currentTarget.textContent === "展开全文"
+                                    ? "收起"
+                                    : "展开全文";
+                              }}
+                            >
+                              <I.expandText size={15} />
+                              展开全文
+                            </button>
+                          )}
+                          {m.status === "running" && !m.content && (
+                            <span className="generating-dot" />
+                          )}
+                          {m.error && (
+                            <p className="message-error">{m.error}</p>
+                          )}
+                          {m.status === "stopped" && (
+                            <p className="muted">已停止 · 保留部分回答</p>
+                          )}
+                          <div
+                            className={
+                              "message-actions " +
+                              (menu === m.id ? "visible" : "")
+                            }
+                          >
+                            <IconButton
+                              label="复制 Markdown"
+                              onClick={() =>
+                                void run(() =>
+                                  navigator.clipboard.writeText(m.content),
+                                )
+                              }
+                            >
+                              <Copy size={14} />
+                            </IconButton>
+                            <IconButton
+                              label="编辑消息"
+                              disabled={!!job || !!pluginJob}
+                              onClick={() => beginEdit(m)}
+                            >
+                              <Pencil size={14} />
+                            </IconButton>
+                            {m.role === "assistant" && (
+                              <IconButton
+                                label="重新生成"
+                                disabled={!!job || !!pluginJob}
+                                onClick={() =>
+                                  void run(() =>
+                                    action("regenerate", { messageId: m.id }),
+                                  )
+                                }
+                              >
+                                <I.regenerateReply size={14} />
+                              </IconButton>
+                            )}
+                            <IconButton
+                              label="从这里 Fork"
+                              disabled={!!job || !!pluginJob}
+                              onClick={() =>
+                                void run(() =>
+                                  action("fork", { messageId: m.id }),
+                                )
+                              }
+                            >
+                              <GitBranch size={15} />
+                            </IconButton>
+                            {m.role === "assistant" && (
+                              <IconButton
+                                label="继续回答"
+                                disabled={!!job || !!pluginJob}
+                                onClick={() =>
+                                  void run(() =>
+                                    action("continue", { messageId: m.id }),
+                                  )
+                                }
+                              >
+                                <CirclePlay size={15} />
+                              </IconButton>
+                            )}
+                            {m.role === "assistant" && m.status === "error" && (
+                              <IconButton
+                                label="重试为新版本"
+                                disabled={!!job || !!pluginJob}
+                                onClick={() =>
+                                  void run(() =>
+                                    action("retry", { messageId: m.id }),
+                                  )
+                                }
+                              >
+                                <I.retry size={15} />
+                              </IconButton>
+                            )}
+                            <IconButton
+                              label="复制纯文字"
+                              onClick={() =>
+                                void run(() =>
+                                  navigator.clipboard.writeText(
+                                    plainText(m.id),
+                                  ),
+                                )
+                              }
+                            >
+                              <FileText size={15} />
+                            </IconButton>
+                            <IconButton
+                              label="消息详情"
+                              onClick={() => setModal("request:" + m.id)}
+                            >
+                              <Info size={15} />
+                            </IconButton>
+                            <IconButton
+                              label="删除消息"
+                              disabled={!!job || !!pluginJob || busy}
+                              onClick={() =>
+                                chat &&
+                                setDeleteTarget({
+                                  chatId: chat.id,
+                                  messageId: m.id,
+                                })
+                              }
+                            >
+                              <Trash2 size={15} />
+                            </IconButton>
+                            {siblings.length > 1 && (
+                              <div className="versions">
+                                <IconButton
+                                  label="上个版本"
+                                  disabled={
+                                    !!job || !!pluginJob || version === 0
+                                  }
+                                  onClick={() =>
+                                    void run(() =>
+                                      action("select", {
+                                        messageId: siblings[version - 1]?.id,
+                                      }),
+                                    )
+                                  }
+                                >
+                                  <ChevronLeft size={14} />
+                                </IconButton>
+                                <button
+                                  aria-label="选择消息版本"
+                                  onClick={() => setModal("versions:" + m.id)}
+                                >
+                                  {version + 1} / {siblings.length}
+                                </button>
+                                <IconButton
+                                  label="下个版本"
+                                  disabled={
+                                    !!job ||
+                                    !!pluginJob ||
+                                    version === siblings.length - 1
+                                  }
+                                  onClick={() =>
+                                    void run(() =>
+                                      action("select", {
+                                        messageId: siblings[version + 1]?.id,
+                                      }),
+                                    )
+                                  }
+                                >
+                                  <ChevronRight size={14} />
+                                </IconButton>
+                              </div>
+                            )}
+                          </div>
+                          {m.role === "assistant" && (
+                            <MessageUsage
+                              message={m}
+                              historical={
+                                m.id !== lastAssistant && menu !== m.id
+                              }
+                            />
+                          )}
+                          {m.role === "assistant" && (
+                            <ReplySummaryCard
+                              chat={chat!}
+                              messageId={m.id}
+                              sourceKey={summaryKeys.get(m.id) ?? ""}
+                              runs={summaryRuns.get(m.id) ?? []}
+                              latest={m.id === lastAssistant}
+                              command={summaryCommand}
+                            />
+                          )}
+                          {m.role === "user" && (
+                            <PluginTurnCards
+                              chatId={chat!.id}
+                              userId={m.id}
+                              state={pluginState}
+                              activeUserId={pluginFlow?.userId}
+                              selections={clarifySelections}
+                              select={(runId, id, values) =>
+                                setClarifySelections((current) => ({
+                                  ...current,
+                                  [runId]: { ...current[runId], [id]: values },
+                                }))
+                              }
+                              input={requestPluginInput}
+                              answer={(value, finish) =>
+                                void run(() =>
+                                  answerClarification(value, finish),
+                                )
+                              }
+                              templates={(id) =>
+                                chat
+                                  ? (
+                                      enabledPlugins(chat, settings).find(
+                                        (p) => p.id === id,
+                                      )?.analysisTypes ?? []
+                                    ).map((t) => ({
+                                      ...t,
+                                      scope: chat.plugins
+                                        ?.find((b) => b.id === id)
+                                        ?.overrides?.analysisTypes?.some(
+                                          (v) => v.id === t.id,
+                                        )
+                                        ? ("chat" as const)
+                                        : ("global" as const),
+                                    }))
+                                  : []
+                              }
+                              command={pluginCommand}
+                              busy={busy || !!job || !!pluginJob}
+                            />
+                          )}
+                          {m.role === "assistant" && (
+                            <Suggestions
+                              state={pluginState}
+                              messageId={m.id}
+                              onChoose={chooseSuggestion}
+                              command={pluginCommand}
+                              busy={busy || !!job || !!pluginJob}
+                            />
+                          )}
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div className="composer-area">
+            {scrollBottom && (
+              <IconButton
+                label="回到底部"
+                className="to-bottom"
+                onClick={() => {
+                  stick.current = true;
+                  const container = scrollRef.current;
+                  if (container) container.scrollTop = container.scrollHeight;
+                  scrollGesture.current.upward = 0;
+                  setScrollBottom(false);
+                }}
+              >
+                <ArrowDown size={17} />
+              </IconButton>
+            )}
+            {pluginFlow && (
+              <div className="plugin-flow-controls">
+                <span>
+                  {waitingLength
+                    ? "字数要求：请在下方输入本轮要求，可留空发送"
+                    : waitingPlugin
+                      ? `正在回答 ${waitingPlugin.plugin.name}`
+                      : pluginFlow.status === "debug"
+                        ? "调试完成，尚未生成正文"
+                        : pluginFlow.status === "waiting"
+                          ? "请确认写前分析结果"
+                          : pluginFlow.status === "error"
+                            ? "插件流程已暂停"
+                            : "插件正在运行"}
+                </span>
+                {waitingLength && (
                   <button
                     className="du-btn du-btn-xs"
-                    onClick={() => void run(() => pluginCommand("use"))}
+                    disabled={busy}
+                    onClick={() =>
+                      void run(() =>
+                        pluginCommand("length-answer", { content: "" }),
+                      )
+                    }
                   >
-                    <CirclePlay size={14} />
-                    使用结果生成正文
+                    本轮未提供
                   </button>
-                  <button
-                    className="du-btn du-btn-xs"
-                    onClick={() => void run(() => pluginCommand("debug-rerun"))}
-                  >
-                    <RotateCcw size={14} />
-                    重新调试
-                  </button>
-                </>
-              )}
-              {pluginFlow.status === "error" &&
-                !pluginState.runs.some(
-                  (r) => r.flowId === pluginFlow.id && r.status === "error",
-                ) && (
+                )}
+                {pluginFlow.status === "debug" && (
                   <>
-                    <span role="alert">{pluginFlow.error}</span>
                     <button
                       className="du-btn du-btn-xs"
-                      onClick={() => void run(() => pluginCommand("retry"))}
+                      onClick={() => void run(() => pluginCommand("use"))}
+                    >
+                      <CirclePlay size={14} />
+                      使用结果生成正文
+                    </button>
+                    <button
+                      className="du-btn du-btn-xs"
+                      onClick={() =>
+                        void run(() => pluginCommand("debug-rerun"))
+                      }
                     >
                       <RotateCcw size={14} />
-                      重试流程
+                      重新调试
                     </button>
                   </>
                 )}
-              <button
-                className="du-btn du-btn-ghost du-btn-xs"
-                onClick={() =>
-                  void run(() =>
-                    pluginJob ? stopGeneration() : pluginCommand("cancel"),
-                  )
-                }
-              >
-                <X size={14} />
-                取消本轮
-              </button>
-            </div>
-          )}
-          <PluginBar
-            entryTarget={pluginEntry}
-            chat={chat}
-            settings={settings}
-            providers={providers}
-            state={pluginPreviewState.current}
-            summaries={summaryState}
-            summaryCommand={summaryCommand}
-            draft={draft}
-            debug={debugPlugins}
-            setDebug={setDebugPlugins}
-            configure={configurePlugins}
-            configureLength={configureLength}
-            command={pluginCommand}
-            busy={busy || !!job || !!pluginJob}
-          />
-          <div
-            className={
-              "composer " +
-              (expanded ? "expanded " : "") +
-              (waitingPlugin || pluginInput ? "plugin-reply " : "") +
-              (waitingLength ? "length-reply" : "")
-            }
-          >
-            {pluginInput && (
-              <div className="composer-operation">
-                <span>{pluginInput.label}</span>
+                {pluginFlow.status === "error" &&
+                  !pluginState.runs.some(
+                    (r) => r.flowId === pluginFlow.id && r.status === "error",
+                  ) && (
+                    <>
+                      <span role="alert">{pluginFlow.error}</span>
+                      <button
+                        className="du-btn du-btn-xs"
+                        onClick={() => void run(() => pluginCommand("retry"))}
+                      >
+                        <RotateCcw size={14} />
+                        重试流程
+                      </button>
+                    </>
+                  )}
                 <button
                   className="du-btn du-btn-ghost du-btn-xs"
-                  onClick={() => {
-                    inputDrafts.current.set(
-                      pluginInput.runId +
-                        ":" +
-                        (pluginInput.body.targetId ?? "add"),
-                      pluginInput.draft,
-                    );
-                    setPluginInput(null);
-                  }}
+                  onClick={() =>
+                    void run(() =>
+                      pluginJob ? stopGeneration() : pluginCommand("cancel"),
+                    )
+                  }
                 >
-                  <I.cancel size={15} />
-                  取消操作
+                  <X size={14} />
+                  取消本轮
                 </button>
               </div>
             )}
-            {!selectedModel && (
-              <p className="muted" role="status">
-                没有可用的当前模型或默认模型，请在设置中添加服务商并选择有效的默认模型。
-              </p>
-            )}
-            <div className="composer-input">
-              <textarea
-                className="du-textarea"
-                ref={textarea}
-                disabled={opening || initializing}
-                aria-label="消息"
-                placeholder={
-                  waitingLength
-                    ? "请输入字数要求，例如3000字、多写点；留空发送记为未提供…"
-                    : pluginInput
-                      ? `请输入${pluginInput.label}…`
-                      : waitingPlugin
-                        ? `你现在正在回复「${pluginDisplayName(waitingPlugin.plugin.id, waitingPlugin.plugin.name)}」插件…`
-                        : "发送消息…"
-                }
-                value={composerValue}
-                rows={expanded ? 14 : 2}
-                onChange={(e) => updateDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (
-                    e.key === "Enter" &&
-                    !e.shiftKey &&
-                    !e.nativeEvent.isComposing &&
-                    desktopInput() &&
-                    appearance.enter
-                  ) {
-                    e.preventDefault();
-                    void run(send);
-                  }
-                }}
-              />
-              <IconButton
-                label={expanded ? "收起编辑区" : "展开编辑区"}
-                className="composer-expand"
-                onClick={() => setExpanded(!expanded)}
-              >
-                <Expand size={16} />
-              </IconButton>
-            </div>
-            <div className="composer-controls">
-              <div className="composer-plugin-entry" ref={setPluginEntry} />
-              <div className="composer-rewrite-entry">
-                {rewriteButtons(draft, undefined, true)}
-              </div>
-              <div className="composer-spacer" />
-              <div className="composer-model-settings">
-                <ContextUsage used={estimate} capacity={capacity} />
-                <div className="model-control">
+            <PluginBar
+              entryTarget={pluginEntry}
+              chat={chat}
+              settings={settings}
+              providers={providers}
+              state={pluginPreviewState.current}
+              summaries={summaryState}
+              summaryCommand={summaryCommand}
+              draft={draft}
+              debug={debugPlugins}
+              setDebug={setDebugPlugins}
+              configure={configurePlugins}
+              configureLength={configureLength}
+              command={pluginCommand}
+              busy={busy || !!job || !!pluginJob}
+            />
+            <div
+              className={
+                "composer " +
+                (expanded ? "expanded " : "") +
+                (waitingPlugin || pluginInput ? "plugin-reply " : "") +
+                (waitingLength ? "length-reply" : "")
+              }
+            >
+              {pluginInput && (
+                <div className="composer-operation">
+                  <span>{pluginInput.label}</span>
                   <button
-                    className="model-trigger"
-                    aria-label="选择模型"
-                    title={
+                    className="du-btn du-btn-ghost du-btn-xs"
+                    onClick={() => {
+                      inputDrafts.current.set(
+                        pluginInput.runId +
+                          ":" +
+                          (pluginInput.body.targetId ?? "add"),
+                        pluginInput.draft,
+                      );
+                      setPluginInput(null);
+                    }}
+                  >
+                    <I.cancel size={15} />
+                    取消操作
+                  </button>
+                </div>
+              )}
+              {!selectedModel && (
+                <p className="muted" role="status">
+                  没有可用的当前模型或默认模型，请在设置中添加服务商并选择有效的默认模型。
+                </p>
+              )}
+              <div className="composer-input">
+                <textarea
+                  className="du-textarea"
+                  ref={textarea}
+                  disabled={opening || initializing}
+                  aria-label="消息"
+                  placeholder={
+                    waitingLength
+                      ? "请输入字数要求，例如3000字、多写点；留空发送记为未提供…"
+                      : pluginInput
+                        ? `请输入${pluginInput.label}…`
+                        : waitingPlugin
+                          ? `你现在正在回复「${pluginDisplayName(waitingPlugin.plugin.id, waitingPlugin.plugin.name)}」插件…`
+                          : "发送消息…"
+                  }
+                  value={composerValue}
+                  rows={expanded ? 14 : 2}
+                  onChange={(e) => updateDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (
+                      e.key === "Enter" &&
+                      !e.shiftKey &&
+                      !e.nativeEvent.isComposing &&
+                      desktopInput() &&
+                      appearance.enter
+                    ) {
+                      e.preventDefault();
+                      void run(send);
+                    }
+                  }}
+                />
+                <IconButton
+                  label={expanded ? "收起编辑区" : "展开编辑区"}
+                  className="composer-expand"
+                  onClick={() => setExpanded(!expanded)}
+                >
+                  <Expand size={16} />
+                </IconButton>
+              </div>
+              <div className="composer-controls">
+                <div className="composer-plugin-entry" ref={setPluginEntry} />
+                <div className="composer-rewrite-entry">
+                  {rewriteButtons(draft, undefined, true)}
+                </div>
+                <div className="composer-spacer" />
+                <div className="composer-model-settings">
+                  <ContextUsage used={estimate} capacity={capacity} />
+                  <div className="model-control">
+                    <button
+                      className="model-trigger"
+                      aria-label="选择模型"
+                      title={
+                        selectedModel
+                          ? selectedModel.provider.prefix + selectedModel.id
+                          : "选择模型"
+                      }
+                      aria-expanded={modelMenu}
+                      disabled={opening || initializing}
+                      onClick={() => {
+                        setModelMenu(!modelMenu);
+                        setSearch("");
+                      }}
+                    >
+                      <I.settings size={14} />
+                      <span>
+                        {selectedModel
+                          ? selectedModel.provider.prefix + selectedModel.id
+                          : "选择模型"}
+                      </span>
+                    </button>
+                    {modelMenu && (
+                      <div className="model-popover">
+                        <div className="search-box">
+                          <Search size={15} />
+                          <input
+                            className="du-input du-input-sm"
+                            aria-label="搜索模型"
+                            autoFocus={desktopInput()}
+                            placeholder="搜索模型或服务商"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                          />
+                        </div>
+                        <div className="model-options">
+                          {filteredModels.map((m) => (
+                            <button
+                              key={m.provider.id + "/" + m.id}
+                              onClick={() =>
+                                void run(async () => {
+                                  if (!chat) {
+                                    await ensureComposerChat();
+                                    await api(
+                                      "/chats/" + idRef.current,
+                                      "PATCH",
+                                      {
+                                        model: m.ref,
+                                      },
+                                    );
+                                    await refresh();
+                                  } else await patch({ model: m.ref });
+                                  setModelMenu(false);
+                                })
+                              }
+                            >
+                              <span>
+                                {m.provider.prefix + m.id}
+                                <small>{m.provider.name}</small>
+                              </span>
+                              {m.id === current?.modelId &&
+                                m.provider.id === current.providerId && (
+                                  <Check size={15} />
+                                )}
+                            </button>
+                          ))}
+                          {!filteredModels.length && (
+                            <p className="muted">没有启用的匹配模型</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <EffortControl
+                    key={chat?.id ?? "new-chat"}
+                    value={chat?.effort ?? "inherit"}
+                    model={
                       selectedModel
                         ? selectedModel.provider.prefix + selectedModel.id
                         : "选择模型"
                     }
-                    aria-expanded={modelMenu}
-                    disabled={opening || initializing}
-                    onClick={() => {
-                      setModelMenu(!modelMenu);
-                      setSearch("");
-                    }}
-                  >
-                    <I.settings size={14} />
-                    <span>
-                      {selectedModel
-                        ? selectedModel.provider.prefix + selectedModel.id
-                        : "选择模型"}
-                    </span>
-                  </button>
-                  {modelMenu && (
-                    <div className="model-popover">
-                      <div className="search-box">
-                        <Search size={15} />
-                        <input
-                          className="du-input du-input-sm"
-                          aria-label="搜索模型"
-                          autoFocus={desktopInput()}
-                          placeholder="搜索模型或服务商"
-                          value={search}
-                          onChange={(e) => setSearch(e.target.value)}
-                        />
-                      </div>
-                      <div className="model-options">
-                        {filteredModels.map((m) => (
-                          <button
-                            key={m.provider.id + "/" + m.id}
-                            onClick={() =>
-                              void run(async () => {
-                                if (!chat) {
-                                  await ensureComposerChat();
-                                  await api(
-                                    "/chats/" + idRef.current,
-                                    "PATCH",
-                                    {
-                                      model: m.ref,
-                                    },
-                                  );
-                                  await refresh();
-                                } else await patch({ model: m.ref });
-                                setModelMenu(false);
-                              })
-                            }
-                          >
-                            <span>
-                              {m.provider.prefix + m.id}
-                              <small>{m.provider.name}</small>
-                            </span>
-                            {m.id === current?.modelId &&
-                              m.provider.id === current.providerId && (
-                                <Check size={15} />
-                              )}
-                          </button>
-                        ))}
-                        {!filteredModels.length && (
-                          <p className="muted">没有启用的匹配模型</p>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                    onChooseModel={() => setModelMenu(true)}
+                    onChange={(effort) =>
+                      run(async () => {
+                        if (!chat) {
+                          await ensureComposerChat();
+                          await api("/chats/" + idRef.current, "PATCH", {
+                            effort,
+                          });
+                          await refresh();
+                        } else await patch({ effort });
+                      })
+                    }
+                  />
                 </div>
-                <EffortControl
-                  key={chat?.id ?? "new-chat"}
-                  value={chat?.effort ?? "inherit"}
-                  model={
-                    selectedModel
-                      ? selectedModel.provider.prefix + selectedModel.id
-                      : "选择模型"
-                  }
-                  onChooseModel={() => setModelMenu(true)}
-                  onChange={(effort) =>
-                    run(async () => {
-                      if (!chat) {
-                        await ensureComposerChat();
-                        await api("/chats/" + idRef.current, "PATCH", {
-                          effort,
-                        });
-                        await refresh();
-                      } else await patch({ effort });
-                    })
-                  }
-                />
+                {job || pluginJob ? (
+                  <IconButton
+                    label="停止生成"
+                    className="send-button"
+                    onClick={() => void run(stopGeneration)}
+                  >
+                    <Square size={15} fill="currentColor" />
+                  </IconButton>
+                ) : (
+                  <IconButton
+                    label="发送"
+                    className="send-button"
+                    disabled={
+                      (!composerValue.trim() &&
+                        !hasClarifySelection &&
+                        !waitingLength) ||
+                      busy ||
+                      !!chat?.deleted ||
+                      (!selectedModel &&
+                        !waitingPlugin &&
+                        !pluginInput &&
+                        !waitingLength) ||
+                      (!!pluginFlow &&
+                        !waitingPlugin &&
+                        !pluginInput &&
+                        !waitingLength)
+                    }
+                    onClick={() => void run(send)}
+                  >
+                    {busy ? <Loading /> : <ArrowUp size={21} />}
+                  </IconButton>
+                )}
               </div>
-              {job || pluginJob ? (
-                <IconButton
-                  label="停止生成"
-                  className="send-button"
-                  onClick={() => void run(stopGeneration)}
-                >
-                  <Square size={15} fill="currentColor" />
-                </IconButton>
-              ) : (
-                <IconButton
-                  label="发送"
-                  className="send-button"
-                  disabled={
-                    (!composerValue.trim() &&
-                      !hasClarifySelection &&
-                      !waitingLength) ||
-                    busy ||
-                    !!chat?.deleted ||
-                    (!selectedModel &&
-                      !waitingPlugin &&
-                      !pluginInput &&
-                      !waitingLength) ||
-                    (!!pluginFlow &&
-                      !waitingPlugin &&
-                      !pluginInput &&
-                      !waitingLength)
-                  }
-                  onClick={() => void run(send)}
-                >
-                  {busy ? <Loading /> : <ArrowUp size={21} />}
-                </IconButton>
-              )}
             </div>
-          </div>
 
-          {pluginJob && connection.pluginUnsaved(pluginJob.id) && (
-            <button
-              className="du-btn du-btn-xs"
-              onClick={() =>
-                void run(async () => {
-                  await connection.retryPluginSave(pluginJob.id);
-                  await refresh();
-                  await loadNavigation();
-                })
-              }
-            >
-              <I.save size={15} />
-              重试保存插件结果
-            </button>
-          )}
-          {rewriteError && (
-            <div className="plugin-flow-controls" role="alert">
-              <span>
-                {rewriteError.plugin.name}：{rewriteError.error}
-              </span>
-              <FallbackButton
-                disabled={!!pluginJob || !!job}
-                retry={(model) =>
-                  pluginCommand("fallback", { runId: rewriteError.id, model })
-                }
-              />
+            {pluginJob && connection.pluginUnsaved(pluginJob.id) && (
               <button
                 className="du-btn du-btn-xs"
-                disabled={!!pluginJob || !!job}
                 onClick={() =>
                   void run(async () => {
-                    await pluginCommand("dismiss", {
-                      runId: rewriteError.id,
-                    });
-                    await pluginCommand("rewrite", {
-                      pluginId: rewriteError.plugin.id,
-                      content: rewriteError.input,
-                      ...(rewriteError.rewriteMessageId
-                        ? { messageId: rewriteError.rewriteMessageId }
-                        : {}),
-                    });
+                    await connection.retryPluginSave(pluginJob.id);
+                    await refresh();
+                    await loadNavigation();
                   })
                 }
               >
-                <RotateCcw size={14} />
-                重试
+                <I.save size={15} />
+                重试保存插件结果
               </button>
-              <button
-                className="du-btn du-btn-xs"
-                onClick={() =>
-                  void run(() =>
-                    pluginCommand("dismiss", { runId: rewriteError.id }),
-                  )
+            )}
+            {rewriteError && (
+              <div className="plugin-flow-controls" role="alert">
+                <span>
+                  {rewriteError.plugin.name}：{rewriteError.error}
+                </span>
+                <FallbackButton
+                  disabled={!!pluginJob || !!job}
+                  retry={(model) =>
+                    pluginCommand("fallback", { runId: rewriteError.id, model })
+                  }
+                />
+                <button
+                  className="du-btn du-btn-xs"
+                  disabled={!!pluginJob || !!job}
+                  onClick={() =>
+                    void run(async () => {
+                      await pluginCommand("dismiss", {
+                        runId: rewriteError.id,
+                      });
+                      await pluginCommand("rewrite", {
+                        pluginId: rewriteError.plugin.id,
+                        content: rewriteError.input,
+                        ...(rewriteError.rewriteMessageId
+                          ? { messageId: rewriteError.rewriteMessageId }
+                          : {}),
+                      });
+                    })
+                  }
+                >
+                  <RotateCcw size={14} />
+                  重试
+                </button>
+                <button
+                  className="du-btn du-btn-xs"
+                  onClick={() =>
+                    void run(() =>
+                      pluginCommand("dismiss", { runId: rewriteError.id }),
+                    )
+                  }
+                >
+                  <I.cancel size={14} />
+                  关闭
+                </button>
+              </div>
+            )}
+            {estimate > capacity && (
+              <p className="context-warning">超出所设上下文预算，仍可发送。</p>
+            )}
+          </div>
+          {chat && (
+            <ConversationTimeline
+              key={chat.id}
+              messages={path}
+              scrollRef={scrollRef}
+              onJump={(id) => {
+                const container = scrollRef.current,
+                  element = messageElement(id);
+                if (container && element) {
+                  stick.current = false;
+                  scrollIntent.current = null;
+                  container.scrollTop +=
+                    element.getBoundingClientRect().top -
+                    container.getBoundingClientRect().top -
+                    20;
                 }
-              >
-                <I.cancel size={14} />
-                关闭
-              </button>
-            </div>
+              }}
+            />
           )}
-          {estimate > capacity && (
-            <p className="context-warning">超出所设上下文预算，仍可发送。</p>
-          )}
-        </div>
-        {chat && (
-          <ConversationTimeline
+        </main>
+        {chat?.comparison?.enabled && (
+          <ComparisonPane
             key={chat.id}
-            messages={path}
-            scrollRef={scrollRef}
-            onJump={(id) => {
-              const container = scrollRef.current,
-                element = messageElement(id);
-              if (container && element) {
-                stick.current = false;
-                scrollIntent.current = null;
-                container.scrollTop +=
-                  element.getBoundingClientRect().top -
-                  container.getBoundingClientRect().top -
-                  20;
-              }
+            run={chat.comparisonRuns
+              ?.filter((r) => path.some((m) => m.id === r.mainMessageId))
+              .at(-1)}
+            settings={
+              <ComparisonSettings
+                chat={chat}
+                providers={providers}
+                save={saveComparison}
+              />
+            }
+            open={(id) => void run(() => open(id))}
+            configure={() => {
+              setPanel(true);
+              setPanelTab("settings");
             }}
           />
         )}
-      </main>
+      </div>
       {panel && chat && (
         <aside className="parameters">
           <div className="panel-heading">
@@ -2886,6 +2996,15 @@ function App() {
                 save={configureLength}
                 disabled={busy || !!job || !!pluginJob || !!pluginFlow}
               />
+              <h3>
+                <I.compare size={15} />
+                模型对比
+              </h3>
+              <ComparisonSettings
+                chat={chat}
+                providers={providers}
+                save={saveComparison}
+              />
               <h3>生成参数</h3>
               {(["temperature", "top_p", "top_k"] as const).map((key) => (
                 <ParameterControl
@@ -2931,6 +3050,10 @@ function App() {
             </div>
           ) : (
             <div className="overview-content">
+              <ComparisonBranches
+                runs={chat.comparisonRuns ?? []}
+                open={(id) => void run(() => open(id))}
+              />
               <Suspense fallback={<div className="center">加载分支…</div>}>
                 <BranchOverview
                   chat={chat}
@@ -3578,7 +3701,9 @@ function SettingsPanel({
         )}
         {tab === "about" && (
           <>
-            <h3>关于在线AI</h3>
+            <h3>
+              关于在线AI <small>v{APP_VERSION}</small>
+            </h3>
             <p>
               分支总览组件源自{" "}
               <a

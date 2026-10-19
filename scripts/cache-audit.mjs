@@ -15,7 +15,7 @@ async function moduleAt(ref) {
   const bundled = await build({
     stdin: {
       resolveDir: root,
-      contents: `export {newChat,addMessage,contextMessages,defaultSettings,estimateTokens} from './src/shared/chat.ts'; export {pluginDefaults,preparePlugin,emptyPluginState,injectPlugins} from './src/shared/plugins.ts'; export {prepareSummary,summarySourceKey,defaultSummaryConfig} from './src/shared/summaries.ts';`,
+      contents: `export {newChat,addMessage,contextMessages,defaultSettings,estimateTokens} from './src/shared/chat.ts'; export {pluginDefaults,preparePlugin,emptyPluginState,injectPlugins} from './src/shared/plugins.ts'; export {prepareSummary,summarySourceKey,defaultSummaryConfig} from './src/shared/summaries.ts'; export {lengthInjection} from './src/shared/length-guidance.ts'; export * as titles from './src/shared/title-template.ts';`,
     },
     bundle: true,
     platform: "node",
@@ -88,6 +88,10 @@ function fixtures(m, salt) {
     settings = m.defaultSettings(),
     state = m.emptyPluginState(),
     summaries = { runs: [] };
+  chat.plugins = ["clarify", "analysis", "suggest", "rewrite"].map((kind) => ({
+    id: "builtin-" + kind,
+    enabled: true,
+  }));
   const main = [];
   for (let round = 1; round <= 6; round++) {
     const u = m.addMessage(
@@ -211,7 +215,60 @@ function fixtures(m, salt) {
       sourceKey: m.summarySourceKey(copy, remap.get(v.messageId)),
     })),
   };
+  const scoped = m.newChat(chat.model),
+    lengthRequests = [];
+  for (let round = 1; round <= 2; round++) {
+    const u = m.addMessage(scoped, "user", "length round " + round),
+      tools = [m.lengthInjection(scoped, "约100字", "length-" + round)];
+    lengthRequests.push({
+      messages: m.injectPlugins(m.contextMessages(scoped), tools),
+    });
+    const a = m.addMessage(
+      scoped,
+      "assistant",
+      "A neutral scene. ".repeat(100),
+    );
+    a.toolContext = {
+      parentId: u.id,
+      stable: true,
+      messages: m
+        .injectPlugins([{ role: "user", content: u.content }], tools)
+        .slice(1),
+    };
+    a.lengthRequirement = "约100字";
+  }
+  const titleTemplate =
+    "标题规则。".repeat(300) +
+    "{{MESSAGES:END:2}}" +
+    "只输出title JSON。".repeat(100);
+  const title = (selection) => ({
+    messages: m.titles.titleMessages
+      ? m.titles.titleMessages(titleTemplate, chat, selection)
+      : [
+          {
+            role: "user",
+            content: m.titles.renderTitlePrompt(titleTemplate, chat, selection),
+          },
+        ],
+  });
+  const isolated = structuredClone(chat);
+  isolated.plugins = [{ id: "builtin-rewrite", enabled: true }];
+  const alone = (input) =>
+    m.preparePlugin(
+      isolated,
+      m.pluginDefaults("rewrite"),
+      settings,
+      [provider],
+      state,
+      input,
+      null,
+      [],
+      summaries,
+    ).request;
   return {
+    scopedMain: lengthRequests,
+    title: [title(messages[1].id), title(messages.at(-1).id)],
+    isolatedRewrite: [alone("我先观察。"), alone("我先问清楚。")],
     main: [main[4], main[5]],
     front: [plugin("clarify"), plugin("analysis")],
     candidates: [

@@ -113,6 +113,8 @@ export async function queueSummary(
     (!manual && message.status !== "complete")
   )
     return null;
+  if (!manual && chat.comparisonSource?.localUserId === message.parentId)
+    return null;
   const key = summarySourceKey(chat, messageId),
     state = await summaryState(env, chatId);
   const related = state.value.runs.filter(

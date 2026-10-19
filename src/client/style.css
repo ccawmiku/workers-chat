@@ -4334,3 +4334,122 @@ main {
 .panel-content .summary-tools {
   margin-block: 2px;
 }
+
+.conversation-workspace {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+.conversation-workspace > main {
+  flex: 1;
+  min-width: 0;
+}
+.comparison-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line-color);
+  background: var(--bg);
+}
+.comparison-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 14px;
+  flex-wrap: wrap;
+}
+.comparison-heading strong {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-right: auto;
+}
+.comparison-messages {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
+  font-size: var(--font-size, 16px);
+  line-height: var(--line-height, 1.6);
+}
+.comparison-answer .message-meta {
+  margin-top: 16px;
+}
+.comparison-prompt {
+  background: var(--input);
+  border-radius: 14px;
+  padding: 8px 14px;
+  margin-bottom: 20px;
+  overflow-wrap: anywhere;
+}
+.comparison-inline-settings {
+  padding: 0 14px 10px;
+  flex-shrink: 0;
+  max-height: 40dvh;
+  overflow: auto;
+}
+.comparison-inline-settings summary {
+  display: flex;
+  gap: 6px;
+  cursor: pointer;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+.comparison-settings {
+  display: grid;
+  gap: 12px;
+  font-size: 13px;
+  padding: 10px 0;
+}
+.comparison-settings label:not(.toggle) {
+  display: grid;
+  gap: 6px;
+}
+.comparison-settings .du-select {
+  width: 100%;
+  min-width: 0;
+}
+.comparison-settings small,
+.comparison-branches small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.comparison-branches {
+  padding: 10px 14px;
+  display: grid;
+  gap: 4px;
+}
+.comparison-branches h3 {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.comparison-branches button {
+  justify-content: flex-start;
+}
+.comparison-stop {
+  margin: 8px 14px;
+}
+.app-version {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 3px;
+}
+@media (max-width: 760px) {
+  .conversation-workspace.is-comparing {
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+  }
+  .conversation-workspace.is-comparing > main,
+  .conversation-workspace.is-comparing > .comparison-pane {
+    flex: 0 0 92vw;
+    min-width: 320px;
+    scroll-snap-align: start;
+  }
+}

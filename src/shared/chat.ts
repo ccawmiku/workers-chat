@@ -1,3 +1,4 @@
+import type { ComparisonConfig, ComparisonRun } from "./comparison";
 import { withoutLengthTools, type LengthGuidance } from "./length-guidance";
 import type { SummaryConfig } from "./summaries";
 export const MODEL_ID_MAX_LENGTH = 1000;
@@ -36,9 +37,17 @@ export type Message = {
   error?: string;
   raw?: Record<string, unknown>;
   /** Exact request-only prelude; deliberately excluded from ordinary export. */
-  toolContext?: { parentId: string; messages: APIMessage[] };
+  toolContext?: { parentId: string; messages: APIMessage[]; stable?: true };
 };
 export type Chat = {
+  comparison?: ComparisonConfig;
+  comparisonRuns?: ComparisonRun[];
+  comparisonSource?: {
+    chatId: string;
+    userId: string;
+    localUserId?: string;
+    mode: "same" | "plain";
+  };
   lengthGuidance?: LengthGuidance;
   summaryOverrides?: Partial<SummaryConfig>;
   plugins?: PluginBinding[];
@@ -372,8 +381,11 @@ export function contextMessages(chat: Chat, draft?: string, reasoning = false) {
       m.parentId === previous.id
     )
       messages.push(
-        ...withoutLengthTools(
-          cleanLegacyClarificationTools(m.toolContext.messages),
+        ...(m.toolContext.stable
+          ? cleanLegacyClarificationTools(m.toolContext.messages)
+          : withoutLengthTools(
+              cleanLegacyClarificationTools(m.toolContext.messages),
+            )
         ).map((v) => structuredClone(v)),
       );
     messages.push({

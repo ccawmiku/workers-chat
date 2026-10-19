@@ -93,7 +93,10 @@ for (const mobile of [false, true])
         const body = JSON.parse(String(init?.body || "{}")),
           messages = body.messages as { content: string | null }[];
         const last = messages.at(-1)?.content ?? "",
-          all = messages.map((m) => m.content ?? "").join("\n");
+          all = messages.map((m) => m.content ?? "").join("\n"),
+          fixed =
+            messages.find((m) => m.content?.startsWith("【插件固定任务】"))
+              ?.content ?? "";
         let kind = "main",
           content = "主回答已结合目标、约束和澄清结果完成。";
         let part: any;
@@ -107,10 +110,7 @@ for (const mobile of [false, true])
             content: part.user_requirement || "这是一条重新整理的已有状态。",
             instruction: "只记录历史已经明确的服装状态",
           });
-        } else if (
-          last.includes("JSON Schema：") &&
-          !last.includes('"questions"')
-        ) {
+        } else if (fixed.includes('"scene_state"')) {
           kind = "analysis";
           content = JSON.stringify({
             character_thoughts: "none",
@@ -118,7 +118,7 @@ for (const mobile of [false, true])
             action_state: "none",
             knowledge_boundaries: "none",
           });
-        } else if (last.includes("只提出必要、未回答且未明确跳过的澄清问题")) {
+        } else if (fixed.includes("只提出必要、未回答且未明确跳过的澄清问题")) {
           kind = "clarify";
           content = JSON.stringify({
             questions:
@@ -167,7 +167,7 @@ for (const mobile of [false, true])
           content = JSON.stringify({
             suggestions: ["再给我一个例子", "换成更简短的版本", "加入新的场景"],
           });
-        } else if (last.includes('"prompt1"')) {
+        } else if (all.includes('"prompt1"')) {
           kind = "rewrite";
           content = JSON.stringify({
             prompt1: ledger.some((l) => l.kind === "rewrite")
@@ -396,9 +396,12 @@ for (const mobile of [false, true])
       name: "上下文消息类型",
       exact: true,
     });
-    await expect(messageMenu.locator(".plugin-role")).toHaveCount(1);
-    await expect(messageMenu.locator(".plugin-role-user")).toHaveText("user");
-    await messageMenu.getByRole("button").first().click();
+    await expect(messageMenu.locator(".plugin-role")).toHaveCount(2);
+    await expect(messageMenu.locator(".plugin-role-user")).toHaveText([
+      "user",
+      "user",
+    ]);
+    await messageMenu.getByRole("button").last().click();
     await expect(page.locator(".plugin-context-text")).toContainText(
       "写一个短故事",
     );

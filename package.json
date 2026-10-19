@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-workers-chat",
-  "version": "1.0.0",
+  "version": "1.2.1",
   "description": "DeepSeek Harness 桌面插件版 Workers Chat：保留分支消息树、五大内置插件、多服务商管理及纯本地离线 SQLite 存储",
   "directories": {
     "doc": "docs"

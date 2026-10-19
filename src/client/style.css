@@ -29,7 +29,9 @@
   --hover: #262626;
   --text: #ededed;
   --muted: #929292;
-  --line-color: #363636;
+  --line-color: color-mix(in srgb, var(--text) 12%, var(--bg));
+  --line-soft: color-mix(in srgb, var(--text) 7%, var(--bg));
+  --line-control: color-mix(in srgb, var(--text) 18%, var(--bg));
   --accent: #f077af;
   --accent-ink: #0d0d0d;
   --composer-radius: 24px;
@@ -513,7 +515,7 @@ header {
   display: flex;
   align-items: center;
   margin: 8px -4px 0;
-  gap: 1px;
+  gap: 4px;
   flex-wrap: wrap;
   row-gap: 4px;
   opacity: 1;
@@ -722,7 +724,7 @@ summary {
   background: var(--accent);
 }
 .send-button:hover {
-  background: #f394c7;
+  background: color-mix(in srgb, var(--accent) 85%, var(--text));
 }
 .send-button:disabled {
   background: #727272;
@@ -1366,7 +1368,7 @@ summary {
   --hover: #e8e8e8;
   --text: #0d0d0d;
   --muted: #777;
-  --line-color: #dedede;
+  --line-color: color-mix(in srgb, var(--text) 12%, var(--bg));
   --accent: #f077af;
   --danger: #b93535;
 }
@@ -4037,7 +4039,7 @@ main {
 .plugin-question,
 .composer.plugin-reply {
   background: var(--input);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line-color));
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line-soft));
 }
 .plugin-result-body .plugin-card-actions .du-select {
   width: auto;
@@ -4134,7 +4136,7 @@ main {
   background: var(--bg);
   opacity: 0.82;
 }
-.chat-corner-controls > button:last-child {
+.chat-corner-controls > .chat-settings-toggle {
   margin-inline-start: auto;
 }
 .plugin-card-actions {
@@ -4324,7 +4326,7 @@ main {
 }
 .composer.length-reply {
   background: color-mix(in srgb, var(--accent) 10%, var(--input));
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--line-color));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line-soft));
 }
 .length-settings small {
   display: block;
@@ -4333,4 +4335,216 @@ main {
 
 .panel-content .summary-tools {
   margin-block: 2px;
+}
+
+.conversation-workspace {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+.conversation-workspace > main {
+  flex: 1;
+  min-width: 0;
+}
+.comparison-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line-color);
+  background: var(--bg);
+}
+.comparison-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 14px;
+  flex-wrap: wrap;
+}
+.comparison-heading strong {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-right: auto;
+}
+.comparison-messages {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
+  font-size: var(--font-size, 16px);
+  line-height: var(--line-height, 1.6);
+}
+.comparison-answer .message-meta {
+  margin-top: 16px;
+}
+.comparison-prompt {
+  background: var(--input);
+  border-radius: 14px;
+  padding: 8px 14px;
+  margin-bottom: 20px;
+  overflow-wrap: anywhere;
+}
+.comparison-inline-settings {
+  padding: 0 14px 10px;
+  flex-shrink: 0;
+  max-height: 40dvh;
+  overflow: auto;
+}
+.comparison-inline-settings summary {
+  display: flex;
+  gap: 6px;
+  cursor: pointer;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+.comparison-settings {
+  display: grid;
+  gap: 12px;
+  font-size: 13px;
+  padding: 10px 0;
+}
+.comparison-settings label:not(.toggle) {
+  display: grid;
+  gap: 6px;
+}
+.comparison-settings .du-select {
+  width: 100%;
+  min-width: 0;
+}
+.comparison-settings small,
+.comparison-branches small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.comparison-branches {
+  padding: 10px 14px;
+  display: grid;
+  gap: 4px;
+}
+.comparison-branches h3 {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.comparison-branches button {
+  justify-content: flex-start;
+}
+.comparison-stop {
+  margin: 8px 14px;
+}
+.app-version {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 3px;
+}
+@media (max-width: 760px) {
+  .conversation-workspace.is-comparing {
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+  }
+  .conversation-workspace.is-comparing > main,
+  .conversation-workspace.is-comparing > .comparison-pane {
+    flex: 0 0 92vw;
+    min-width: 320px;
+    scroll-snap-align: start;
+  }
+}
+
+/* Keep iOS focus from zooming the page; pinch zoom remains available. */
+@media (max-width: 760px), (pointer: coarse) {
+  :is(#root, .plugin-modal, .modal-backdrop)
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
+      [type="color"]
+    ),
+  :is(#root, .plugin-modal, .modal-backdrop) textarea,
+  :is(#root, .plugin-modal, .modal-backdrop) select {
+    font-size: max(16px, var(--font-size, 1em));
+  }
+}
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Quiet theme-tinted actions throughout the conversation and its dialogs.
+   Primary/selected actions keep their stronger state and existing geometry. */
+:is(.conversation-workspace, .plugin-modal, .modal-backdrop) {
+  --chat-action-bg: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  --chat-action-hover: color-mix(in srgb, var(--accent) 16%, var(--panel));
+  --chat-action-line: color-mix(in srgb, var(--accent) 14%, var(--line-soft));
+}
+:is(.conversation-workspace, .plugin-modal, .modal-backdrop)
+  :is(button, button.du-btn):not(
+    :is(
+      .primary,
+      .du-btn-primary,
+      .du-btn-error,
+      .send-button,
+      .selected,
+      .du-menu-active,
+      [aria-pressed="true"]
+    )
+  ) {
+  background-color: var(--chat-action-bg);
+  border-color: var(--chat-action-line);
+}
+:is(.conversation-workspace, .plugin-modal, .modal-backdrop)
+  :is(button, button.du-btn):not(
+    :is(
+      .primary,
+      .du-btn-primary,
+      .du-btn-error,
+      .send-button,
+      .selected,
+      .du-menu-active,
+      [aria-pressed="true"]
+    )
+  ):hover:not(:disabled) {
+  background-color: var(--chat-action-hover);
+}
+:is(.conversation-workspace, .plugin-modal, .modal-backdrop)
+  button:is(.selected, .du-menu-active, [aria-pressed="true"]):not(
+    :is(.primary, .du-btn-primary, .du-btn-error, .send-button)
+  ) {
+  background-color: color-mix(in srgb, var(--accent) 24%, var(--panel));
+  border-color: var(--accent);
+}
+:is(.conversation-workspace, .plugin-modal, .modal-backdrop) summary {
+  background-color: var(--chat-action-bg);
+  border-radius: 8px;
+}
+:is(.conversation-workspace, .plugin-modal, .modal-backdrop) summary:hover {
+  background-color: var(--chat-action-hover);
+}
+:is(.conversation-workspace, .plugin-modal, .modal-backdrop)
+  summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Borders describe hierarchy, not every container: quiet dividers and cards,
+   clearer editable controls, with accent outlines reserved for selection/focus. */
+.du-input,
+.du-select,
+.du-textarea,
+:where(button.du-btn):not(
+  :is(.du-btn-primary, .du-btn-error, .theme-mode, [aria-pressed="true"])
+) {
+  border-color: var(--line-control);
+}
+:is(
+  .analysis-section.du-card,
+  .question-section.du-card,
+  .section-candidate.du-card
+),
+.plugin-result,
+.appearance-group,
+.account-quota-sidebar.du-btn {
+  border-color: var(--line-soft);
 }

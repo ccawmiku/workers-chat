@@ -938,6 +938,28 @@ async function api(request: Request, env: Env) {
           changed = true;
         }
       };
+      if (body.comparison !== undefined) {
+        const c = obj(body.comparison);
+        if (
+          typeof c.enabled !== "boolean" ||
+          !["same", "plain"].includes(str(c.mode))
+        )
+          throw new HttpError(400, "对比配置无效");
+        const effort = c.effort ?? "inherit";
+        if (
+          !["inherit", "none", "low", "medium", "high", "max"].includes(
+            str(effort),
+          )
+        )
+          throw new HttpError(400, "对比思考强度无效");
+        set("comparison", {
+          enabled: c.enabled,
+          mode: c.mode as "same" | "plain",
+          model: c.model === null ? null : modelRef(c.model),
+          parameters: parameters(c.parameters ?? {}),
+          effort: effort as Chat["effort"],
+        });
+      }
       if (body.title !== undefined) {
         chat.title = str(body.title, 500);
         chat.titleManual = true;

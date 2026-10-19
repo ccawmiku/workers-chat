@@ -77,7 +77,7 @@ describe("cache-friendly request histories", () => {
       }),
     ).toBeUndefined();
   });
-  it("shares long raw material before front-plugin references diverge", () => {
+  it("keeps fixed front-plugin contracts before independently appendable historical references", () => {
     const { chat, user, summaries, settings } = fixture(),
       state = emptyPluginState();
     for (const kind of ["clarify", "analysis"] as const)
@@ -113,9 +113,12 @@ describe("cache-friendly request histories", () => {
       ).request;
     const c = prepare("clarify"),
       a = prepare("analysis");
-    expect(c.messages.slice(0, 3)).toEqual(a.messages.slice(0, 3));
-    expect(c.messages[2]!.content).toContain("recent_raw_rounds");
-    expect(c.messages[3]!.content).not.toBe(a.messages[3]!.content);
+    expect(c.messages[0]!.content).toContain("【插件固定任务】");
+    expect(a.messages[1]!.content).toContain("JSON Schema：");
+    expect(c.messages[0]).toEqual(a.messages[0]);
+    expect(c.messages[2]).toEqual(a.messages[2]);
+    expect(c.messages[3]!.content).toContain("plugin_history");
+    expect(c.messages.at(-2)!.content).toContain("recent_raw_rounds");
     expect(c.response_format).toEqual(a.response_format);
     expect(JSON.stringify(c.messages)).not.toContain(user.id);
     expect(

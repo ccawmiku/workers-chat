@@ -22,11 +22,13 @@ export default defineConfig({
       name: "webkit-mobile",
       testMatch: [
         "mobile.spec.ts",
+        "mobile-viewport.spec.ts",
         "length-layout.spec.ts",
         "navigation.spec.ts",
         "provider-settings.spec.ts",
         "request-budget.spec.ts",
         "plugins.spec.ts",
+        "comparison.spec.ts",
         "plugin-settings.spec.ts",
         "summaries.spec.ts",
         "appearance.spec.ts",

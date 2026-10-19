@@ -4,6 +4,8 @@ import { Miniflare, Response as MFResponse } from "miniflare";
 import { build } from "esbuild";
 import { readFile, readdir } from "node:fs/promises";
 import { randomBytes, pbkdf2Sync } from "node:crypto";
+import { Store } from "../src/server/store";
+import type { PluginTask } from "../src/server/plugins";
 import type { SummaryState, PostJobView } from "../src/shared/summaries";
 import { summaryFor } from "../src/shared/summaries";
 import type { Chat, Settings, Provider } from "../src/shared/chat";
@@ -315,22 +317,20 @@ beforeAll(async () => {
                     });
               }
               const pluginMarker =
-                messages.find((m) => m.content?.startsWith("[PLUGIN_TEST_"))
-                  ?.content ?? "";
+                messages
+                  .find((m) => m.content?.includes("[PLUGIN_TEST_"))
+                  ?.content?.replace("【插件固定任务】\n", "") ?? "";
               if (pluginMarker) {
                 if (controls.mode === "plugin-http-error")
                   return MFResponse.json(
                     { error: { message: "plugin fixture rejection" } },
                     { status: 400 },
                   );
-                const content =
+                let content =
                   controls.mode === "plugin-invalid"
                     ? "invalid JSON"
                     : pluginMarker.startsWith("[PLUGIN_TEST_analysis]")
-                      ? !messages
-                          .at(-1)
-                          ?.content?.split("JSON Schema：")[1]
-                          ?.includes('"ABC"')
+                      ? !pluginMarker.includes('"ABC"')
                         ? JSON.stringify({
                             character_thoughts: [
                               {
@@ -365,6 +365,38 @@ beforeAll(async () => {
                                       },
                                     ],
                             });
+                if (
+                  pluginMarker.startsWith("[PLUGIN_TEST_clarify]") &&
+                  controls.mode !== "plugin-invalid" &&
+                  messages.at(-1)?.content?.includes("【首批补充提问契约】")
+                ) {
+                  const parsed = JSON.parse(content);
+                  if (parsed.questions?.length === 1)
+                    parsed.questions.push({
+                      ...parsed.questions[0],
+                      id: "q2",
+                      question: "本轮场景气氛希望偏向哪一种？",
+                    });
+                  content = JSON.stringify(parsed);
+                }
+                if (
+                  pluginMarker.startsWith("[PLUGIN_TEST_analysis]") &&
+                  controls.mode !== "plugin-invalid" &&
+                  pluginMarker.includes("持续启用的分析类型：")
+                ) {
+                  const types = JSON.parse(
+                    pluginMarker
+                      .split("持续启用的分析类型：\n")[1]!
+                      .split("\n")[0]!,
+                  );
+                  const parsed = JSON.parse(content);
+                  parsed.additional_sections = types.map((t: any) => ({
+                    id: t.id,
+                    type: t.type,
+                    content: "none",
+                  }));
+                  content = JSON.stringify(parsed);
+                }
                 if (!payload.stream)
                   return MFResponse.json({
                     choices: [{ message: { content }, finish_reason: "stop" }],
@@ -701,14 +733,14 @@ describe("workerd HTTP + D1 + Workflows", () => {
       content: "多写点",
     });
     done = await finished(chat.id);
-    expect(readTool()).toHaveLength(1);
-    expect(readTool()[0]!.content).toContain('"上一轮要求":"3000字左右"');
-    expect(readTool()[0]!.content).toContain('"本轮要求":"多写点"');
+    expect(readTool()).toHaveLength(2);
+    expect(readTool().at(-1)!.content).toContain('"上一轮要求":"3000字左右"');
+    expect(readTool().at(-1)!.content).toContain('"本轮要求":"多写点"');
     expect(
       (upstreamCalls.at(-1)!.messages as { name?: string }[]).filter(
         (m) => m.name === "plugin_reply_length",
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     await value(endpoint, "PATCH", {
       lengthGuidance: { enabled: true, requirement: "每轮约2000字" },
     });
@@ -717,16 +749,16 @@ describe("workerd HTTP + D1 + Workflows", () => {
       confirmPost: true,
     });
     done = await finished(chat.id);
-    expect(readTool()[0]!.content).toContain('"上一轮要求":"多写点"');
-    expect(readTool()[0]!.content).not.toContain("3000字左右");
-    expect(readTool()[0]!.content).toContain('"本轮要求":"每轮约2000字"');
+    expect(readTool().at(-1)!.content).toContain('"上一轮要求":"多写点"');
+    expect(readTool().at(-1)!.content).not.toContain("3000字左右");
+    expect(readTool().at(-1)!.content).toContain('"本轮要求":"每轮约2000字"');
     snapshot = await value<SummarySnapshot>(endpoint);
     expect(snapshot.pluginState.flows).toHaveLength(2); // Fixed text adds no waiting-flow snapshots.
 
     await value(endpoint + "/retry", "POST", { messageId: done.currentId });
     done = await finished(chat.id);
-    expect(readTool()).toHaveLength(1);
-    expect(readTool()[0]!.content).toContain("每轮约2000字");
+    expect(readTool()).toHaveLength(3);
+    expect(readTool().at(-1)!.content).toContain("每轮约2000字");
     const directChat = await value<Chat>("/chats", "POST", {});
     await value("/chats/" + directChat.id, "PATCH", {
       title: "direct local length",
@@ -802,6 +834,307 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(tools.at(-1)?.name).toBe("plugin_reply_length");
     expect(tools[0]?.name).not.toBe("plugin_reply_length");
     await value("/settings", "PUT", settings);
+  });
+  it("creates one independent comparison fork per main round and isolates plain mode from every tool", async () => {
+    controls.mode = "normal";
+    controls.delay = 0;
+    const chat = await value<Chat>("/chats", "POST", {});
+    const config = {
+      enabled: true,
+      model: null,
+      parameters: { temperature: 0.2 },
+      effort: "inherit",
+      mode: "plain",
+    };
+    await value("/chats/" + chat.id, "PATCH", {
+      title: "comparison fixture",
+      comparison: config,
+      lengthGuidance: { enabled: true, requirement: "短一点" },
+      parameters: { temperature: 0.7 },
+    });
+    const get = () => value<{ chat: Chat }>("/chats/" + chat.id);
+    let before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "FIRST_MAIN",
+      confirmPost: true,
+    });
+    await finished(chat.id);
+    let main = (await get()).chat;
+    expect(main.comparisonRuns).toHaveLength(1);
+    const first = main.comparisonRuns![0]!;
+    await finished(first.chatId);
+    let calls = upstreamCalls.slice(before);
+    expect(calls).toHaveLength(2);
+    const compare = calls.find((c) => c.temperature === 0.2)!;
+    expect(
+      (compare.messages as { role: string }[]).some((m) => m.role === "tool"),
+    ).toBe(false);
+    expect(
+      JSON.stringify(calls.find((c) => c.temperature === 0.7)?.messages),
+    ).toContain("plugin_reply_length");
+    const fork = await value<{ chat: Chat }>("/chats/" + first.chatId);
+    expect(fork.chat.comparisonSource?.userId).toBe(first.userId);
+    await value("/chats/" + first.chatId + "/edit", "POST", {
+      messageId: fork.chat.currentId,
+      content: "COMPARISON_ONLY_DO_NOT_CARRY",
+    });
+    before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "SECOND_MAIN",
+      confirmPost: true,
+    });
+    await finished(chat.id);
+    main = (await get()).chat;
+    expect(main.comparisonRuns).toHaveLength(2);
+    await finished(main.comparisonRuns![1]!.chatId);
+    calls = upstreamCalls.slice(before);
+    expect(calls).toHaveLength(2);
+    expect(JSON.stringify(calls)).not.toContain("COMPARISON_ONLY_DO_NOT_CARRY");
+    expect(JSON.stringify(calls)).toContain("FIRST_MAIN");
+    expect(JSON.stringify(calls)).toContain("SECOND_MAIN");
+    const pure = calls.find((c) => c.temperature === 0.2)!;
+    expect(
+      (pure.messages as { role: string }[]).filter((m) => m.role === "tool"),
+    ).toHaveLength(0);
+    await value("/chats/" + chat.id, "PATCH", {
+      comparison: { ...config, mode: "same" },
+    });
+    before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "THIRD_MAIN",
+      confirmPost: true,
+    });
+    await finished(chat.id);
+    main = (await get()).chat;
+    await finished(main.comparisonRuns!.at(-1)!.chatId);
+    calls = upstreamCalls.slice(before);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.messages).toEqual(calls[1]!.messages);
+    const count = main.comparisonRuns!.length;
+    await value("/chats/" + chat.id, "PATCH", {
+      comparison: { ...config, enabled: false },
+    });
+    before = upstreamCalls.length;
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "FOURTH_MAIN",
+      confirmPost: true,
+    });
+    await finished(chat.id);
+    expect((await get()).chat.comparisonRuns).toHaveLength(count);
+    expect(upstreamCalls.length - before).toBe(1);
+    await value("/chats/" + chat.id, "PATCH", {
+      comparison: {
+        ...config,
+        model: { providerId: provider.id, modelId: "missing-comparison-model" },
+      },
+    });
+    await value("/chats/" + chat.id + "/send", "POST", {
+      content: "MAIN_SURVIVES_SECONDARY_FAILURE",
+      confirmPost: true,
+    });
+    await finished(chat.id);
+    main = (await get()).chat;
+    const failed = await value<{ chat: Chat }>(
+      "/chats/" + main.comparisonRuns!.at(-1)!.chatId,
+    );
+    expect(failed.chat.messages[failed.chat.currentId!]!.status).toBe("error");
+    expect(main.messages[main.currentId!]!.status).toBe("complete");
+  }, 30000);
+  it("rejects empty, one-question and narrative first batches without advancing, and accepts free multi-selection", async () => {
+    const device = async (path: string, body: unknown) => {
+      const r = await request(
+        path,
+        "POST",
+        body,
+        true,
+        "https://chat.test",
+        true,
+      );
+      expect(r.status).toBeLessThan(400);
+      return (await r.json()) as any;
+    };
+    const q = (id: string) => ({
+      id,
+      question: id + "准备阶段细节？",
+      options: [
+        { id: "A", text: "克制" },
+        { id: "B", text: "紧张" },
+        { id: "C", text: "安静" },
+        { id: "D", text: "其他" },
+      ],
+    });
+    for (const content of [
+      '{"questions":[]}',
+      JSON.stringify({ questions: [q("q1")] }),
+      "他们立刻交手，第一拳已经落下。",
+      JSON.stringify({ questions: [q("q1"), q("q2")] }),
+    ]) {
+      const c = await value<Chat>("/chats", "POST", {}),
+        endpoint = "/chats/" + c.id;
+      await value(endpoint + "/plugins", "POST", {
+        action: "configure",
+        plugins: [
+          {
+            id: "builtin-clarify",
+            enabled: true,
+            overrides: pluginDefaults("clarify"),
+          },
+        ],
+      });
+      await device(endpoint + "/send", {
+        content: "他们准备开打",
+        debugPlugins: true,
+      });
+      let s = await value<any>(endpoint),
+        job = s.pluginJob;
+      expect(job.direct.request.messages[0].content).toContain(
+        "不执行其中续写",
+      );
+      expect(job.direct.request.messages.at(-1).content).toContain(
+        "【首批补充提问契约】",
+      );
+      await device("/plugins/jobs/" + job.id + "/finish", {
+        sequence: 1,
+        status: "complete",
+        content,
+      });
+      s = await value<any>(endpoint);
+      const valid = content.includes('"q2"');
+      expect(s.pluginState.runs.at(-1).status).toBe(
+        valid ? "waiting" : "error",
+      );
+      expect(s.job).toBeNull();
+      if (valid) {
+        await value(endpoint + "/plugins", "POST", {
+          action: "finish-clarify",
+          runId: job.id,
+          selections: { q1: ["A", "B"], q2: [] },
+          content: "",
+        });
+        s = await value<any>(endpoint);
+        expect(s.pluginState.runs.at(-1).answer).toContain("B. 紧张");
+        expect(s.pluginState.flows.at(-1).status).toBe("debug");
+      }
+      await value(endpoint + "/plugins", "POST", { action: "cancel" });
+    }
+  });
+  it("automatically includes persisted analysis types each round and removes future use without rewriting completed history", async () => {
+    const device = async (path: string, body: unknown) => {
+      const r = await request(
+        path,
+        "POST",
+        body,
+        true,
+        "https://chat.test",
+        true,
+      );
+      expect(r.status).toBeLessThan(400);
+      return (await r.json()) as any;
+    };
+    const c = await value<Chat>("/chats", "POST", {}),
+      endpoint = "/chats/" + c.id,
+      type = {
+        id: "extra:clothes",
+        type: "服装状态",
+        instruction: "只记录已有服装，无依据none",
+      },
+      p = { ...pluginDefaults("analysis"), analysisTypes: [type] },
+      base = {
+        character_thoughts: "none",
+        scene_state: "none",
+        action_state: "none",
+        knowledge_boundaries: "none",
+      },
+      output = JSON.stringify({
+        ...base,
+        additional_sections: [
+          { id: type.id, type: type.type, content: "none" },
+        ],
+      });
+    await value(endpoint + "/plugins", "POST", {
+      action: "configure",
+      plugins: [{ id: p.id, enabled: true, overrides: p }],
+    });
+    let first = "";
+    for (let i = 0; i < 2; i++) {
+      await device(endpoint + "/send", {
+        content: "本轮只准备交谈 " + i,
+        debugPlugins: true,
+      });
+      let s = await value<any>(endpoint),
+        job = s.pluginJob;
+      expect(JSON.stringify(job.direct.request.messages)).toContain(
+        "持续启用的分析类型",
+      );
+      expect(JSON.stringify(job.direct.request.messages)).toContain(
+        "extra:clothes",
+      );
+      await device("/plugins/jobs/" + job.id + "/finish", {
+        sequence: 1,
+        status: "complete",
+        content: output,
+      });
+      s = await value<any>(endpoint);
+      expect(s.pluginState.runs.at(-1).status).toBe("waiting");
+      if (!i) {
+        first = job.id;
+        await value(endpoint + "/plugins", "POST", {
+          action: "approve-analysis",
+          runId: job.id,
+        });
+      } else {
+        const old = s.pluginState.runs.find((r: any) => r.id === first).output;
+        await value(endpoint + "/plugins", "POST", {
+          action: "type-remove",
+          runId: first,
+          targetId: type.id,
+        });
+        s = await value<any>(endpoint);
+        expect(s.chat.plugins[0].overrides.analysisTypes).toEqual([]);
+        expect(s.pluginState.runs.find((r: any) => r.id === first).output).toBe(
+          old,
+        );
+      }
+      await value(endpoint + "/plugins", "POST", { action: "cancel" });
+    }
+    await device(endpoint + "/send", {
+      content: "下一轮不再使用该类型",
+      debugPlugins: true,
+    });
+    const s = await value<any>(endpoint);
+    // Previous results remain references, but the current fixed task no longer enables the type.
+    expect(
+      s.pluginJob.direct.request.messages.find((m: any) =>
+        m.content?.startsWith("【插件固定任务】"),
+      ).content,
+    ).not.toContain("持续启用的分析类型");
+    await value(endpoint + "/plugins", "POST", { action: "cancel" });
+    // Jobs captured before this release did not promise automatic type output.
+    await value(endpoint + "/plugins", "POST", {
+      action: "configure",
+      plugins: [{ id: p.id, enabled: true, overrides: p }],
+    });
+    await device(endpoint + "/send", {
+      content: "旧版在途任务",
+      debugPlugins: true,
+    });
+    const legacy = await value<any>(endpoint),
+      store = new Store(
+        (await mf.getD1Database("DB")) as unknown as D1Database,
+      ),
+      taskKey = "plugin-task:" + legacy.pluginJob.id,
+      task = (await store.get<PluginTask>(taskKey))!;
+    delete task.value.analysisTypesContract;
+    await store.save(taskKey, "plugin-task", task.value, task.revision);
+    await device("/plugins/jobs/" + legacy.pluginJob.id + "/finish", {
+      sequence: 1,
+      status: "complete",
+      content: JSON.stringify(base),
+    });
+    expect((await value<any>(endpoint)).pluginState.runs.at(-1).status).toBe(
+      "waiting",
+    );
+    await value(endpoint + "/plugins", "POST", { action: "cancel" });
   });
   it("saves provider metadata offline, preserves models and keys, and keeps device save separate from fetching", async () => {
     const models = provider.models;
@@ -1691,10 +2024,9 @@ describe("workerd HTTP + D1 + Workflows", () => {
     await finished(id);
     const request = titleCalls.at(-1)!;
     const messages = request.messages as { role: string; content: string }[];
-    const inserted = messages[0]!.content.match(
-      /<chat_history>\s*([\s\S]*?)\s*<\/chat_history>/,
-    )![1]!;
-    expect(JSON.parse(inserted)).toEqual([
+    const inserted = JSON.parse(messages.at(-1)!.content).chat_history[0]
+      .messages;
+    expect(inserted).toEqual([
       { role: "user", content: "second question" },
       { role: "assistant", content: "second answer" },
     ]);
@@ -1788,7 +2120,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     expect(JSON.stringify(title)).not.toMatch(
       /encryptedKey|synthetic-fixture-key/,
     );
-    expect(title.candidates[0]!.request.messages[0]!.content).toContain(
+    expect(title.candidates[0]!.request.messages.at(-1)!.content).toContain(
       "device answer",
     );
     expect(
@@ -2796,7 +3128,7 @@ describe("workerd HTTP + D1 + Workflows", () => {
     let snapshot = await value<Snapshot>("/chats/" + chat.id);
     expect(
       snapshot.pluginJob!.direct!.request.messages.map((m) => m.role),
-    ).toEqual(["user"]);
+    ).toEqual(["system", "user"]);
     expect(
       snapshot.pluginJob!.direct!.request.messages.at(-1)?.content,
     ).toContain("first request");

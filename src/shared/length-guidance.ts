@@ -33,7 +33,7 @@ export function lengthInjection(
     name: "字数要求",
     runId: id,
     template:
-      "以下为本次写作长度参考，按用户自然语言要求尽量调整，不把它当作正文，也不声称能精确满足Token数。\n{{RESULT}}",
+      "以下仅为紧邻用户消息这一轮的写作长度参考，按用户自然语言要求尽量调整，不把它当作正文，也不声称能精确满足Token数。此工具结果作为历史记录保留时不再约束后续回复；后续轮次只使用其自己的最新要求，没有新要求时不得沿用旧轮次的字数限制。\n{{RESULT}}",
     content: JSON.stringify({
       上一轮要求: previous?.lengthRequirement?.trim() || "未提供",
       上一轮实际输出: actual,
@@ -42,7 +42,7 @@ export function lengthInjection(
   };
 }
 
-/** Historical tool preludes keep other plugins but never accumulate length guidance. */
+/** Remove legacy, unscoped length results; new scoped preludes replay unchanged. */
 export function withoutLengthTools(messages: APIMessage[]): APIMessage[] {
   const ids = new Set(
     messages.flatMap(

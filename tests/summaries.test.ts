@@ -196,7 +196,9 @@ describe("reply summaries", () => {
     addMessage(chat, "user", "U3");
     const a3 = addMessage(chat, "assistant", "CURRENT_FULL_A");
     const p = prepareSummary(chat, a3.id, state, settings, [provider]),
-      history = JSON.parse(p.request.messages[1]!.content!).history,
+      history = p.request.messages
+        .slice(1, -1)
+        .flatMap((m) => JSON.parse(m.content!).history),
       tail = JSON.parse(p.request.messages.at(-1)!.content!);
     expect(history).toHaveLength(2);
     expect(history[1]).toEqual({
@@ -385,10 +387,10 @@ describe("front plugin summary context", () => {
       );
       expect(result.request.messages[0]).toEqual({
         role: "system",
-        content: "PLUGIN_SYSTEM",
+        content: expect.stringContaining("PLUGIN_SYSTEM"),
       });
-      expect(result.request.messages[2]?.content).toContain("ACCEPTED_SUMMARY");
-      expect(result.request.messages[4]?.content).toBe("FULL2_MISSING");
+      expect(result.request.messages[3]?.content).toContain("ACCEPTED_SUMMARY");
+      expect(result.request.messages[5]?.content).toBe("FULL2_MISSING");
       const raw = JSON.parse(
         result.request.messages.at(-2)!.content!,
       ).recent_raw_rounds;
@@ -465,11 +467,17 @@ describe("front plugin summary context", () => {
       [],
       state,
     );
-    const ref = JSON.parse(result.request.messages[3]!.content!).plugin_history;
+    const ref = JSON.parse(
+      result.request.messages.find((m) =>
+        m.content?.includes('"plugin_history"'),
+      )!.content!,
+    ).plugin_history;
     expect(ref).toEqual([
       { message: 1, question: "QUESTION", answer: "ANSWER" },
     ]);
-    expect(result.request.messages[2]?.content).toContain("recent_raw_rounds");
+    expect(result.request.messages.at(-2)?.content).toContain(
+      "recent_raw_rounds",
+    );
     expect(JSON.stringify(result.request.messages)).not.toMatch(
       /OLD_PROMPT_FORBIDDEN|OLD_DUP_USER_FORBIDDEN|FOREIGN|OTHER_PLUGIN/,
     );

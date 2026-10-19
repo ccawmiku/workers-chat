@@ -1,6 +1,8 @@
 # 在线AI · Workers Chat (DeepSeek Harness 桌面插件版)
 
 > 本分支 (`DeepSeekHarness`) 将 [ccawmiku/workers-chat](https://github.com/ccawmiku/workers-chat) 原生移植至 **DeepSeek Harness (DSH)** 桌面客户端插件生态中，实现 100% 相同的界面与全功能体验，并支持全离线 SQLite 存储与本地模型（Ollama 等）直连。
+> 
+> 当前已同步主线版本：**v1.2.1**（包含移动端视口与导航优化、限定本轮范围的补充提问、持续分析类型自动生成、缓存编排与双窗口对比等全量最新特性）。
 
 ---
 

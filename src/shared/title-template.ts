@@ -48,3 +48,30 @@ export function extractTitle(value: string) {
     throw new Error("标题为空或超过 500 个字符");
   return title;
 }
+
+/** Stable template first; changing selected excerpts are data in the final message. */
+export function titleMessages(template: string, chat: Chat, selection: string) {
+  const excerpts: { reference: string; messages: unknown }[] = [];
+  const fixed = template.replace(
+    /\{\{MESSAGES:(START|END):(\d+)\}\}/g,
+    (token) => {
+      const reference = "chat_history_" + (excerpts.length + 1);
+      excerpts.push({
+        reference,
+        messages: JSON.parse(renderTitlePrompt(token, chat, selection)),
+      });
+      return "（聊天片段见末条资料的 " + reference + "）";
+    },
+  );
+  return [
+    { role: "user" as const, content: fixed },
+    ...(excerpts.length
+      ? [
+          {
+            role: "user" as const,
+            content: JSON.stringify({ chat_history: excerpts }),
+          },
+        ]
+      : []),
+  ];
+}

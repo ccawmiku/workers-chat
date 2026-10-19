@@ -10,6 +10,7 @@ export type CacheReading = {
   ratio: number;
   cached?: number;
   source: string;
+  historical?: boolean;
 };
 /** Calculate locally from returned counters. An absent counter is unknown, never zero. */
 export function cacheReading(value: unknown): CacheReading | undefined {
@@ -116,4 +117,29 @@ export function useCacheReading(
       recordCacheRequest(id, preview.modelRef, preview.request);
   }, [id, preview]);
   return cacheReading(usage) ?? (id ? localCacheEstimate(id) : undefined);
+}
+
+/** History stays within the caller's chat/branch and exact provider+model identity. */
+export function historicalCacheReading(
+  runs: { id: string; usage?: unknown; model?: ModelRef }[],
+  currentId: string | undefined,
+  model: ModelRef | undefined,
+): CacheReading | undefined {
+  if (!model) return;
+  for (let i = runs.length - 1; i >= 0; i--) {
+    const run = runs[i]!;
+    if (
+      run.id === currentId ||
+      run.model?.providerId !== model.providerId ||
+      run.model.modelId !== model.modelId
+    )
+      continue;
+    const reading = cacheReading(run.usage) ?? localCacheEstimate(run.id);
+    if (reading)
+      return {
+        ...reading,
+        historical: true,
+        source: reading.source + " · 历史缓存率（上一次有数据的请求）",
+      };
+  }
 }

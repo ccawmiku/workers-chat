@@ -278,7 +278,7 @@ beforeAll(async () => {
                 partialTask = JSON.parse(messages.at(-1)?.content ?? "");
               } catch {}
               if (partialTask?.output_contract) {
-                const content =
+                let content =
                   controls.mode === "plugin-invalid"
                     ? "invalid JSON"
                     : JSON.stringify({
@@ -287,6 +287,9 @@ beforeAll(async () => {
                           partialTask.user_requirement || "重新生成的客观记录",
                         instruction: "仅记录已有服装状态，无资料用 none",
                       });
+                if (controls.mode === "plugin-fenced")
+                  content =
+                    "结果如下：\n```json\n" + content + "\n```\n已完成。";
                 const usage = {
                   input_tokens: 1500,
                   output_tokens: 100,
@@ -652,6 +655,153 @@ describe("workerd HTTP + D1 + Workflows", () => {
     ).toBe(409);
     const sessions = await value<{ id: string }[]>("/auth/sessions");
     expect(sessions[0]!.id).not.toBe(cookie.replace("session=", ""));
+  });
+  it("collects free-text length requirements after analysis, injects only three current fields, and never calls a model for the local plugin", async () => {
+    controls.mode = "normal";
+    const chat = await value<Chat>("/chats", "POST", {}),
+      endpoint = "/chats/" + chat.id;
+    await value(endpoint, "PATCH", {
+      title: "length fixture",
+      lengthGuidance: { enabled: true, requirement: "" },
+    });
+    const before = upstreamCalls.length;
+    await value(endpoint + "/send", "POST", { content: "first writing" });
+    let snapshot = await value<SummarySnapshot>(endpoint);
+    expect(snapshot.pluginState.flows.at(-1)).toMatchObject({
+      status: "waiting",
+      lengthWaiting: true,
+    });
+    expect(snapshot.job).toBeNull();
+    expect(upstreamCalls).toHaveLength(before);
+    await value(endpoint + "/plugins", "POST", {
+      action: "length-answer",
+      content: "3000字左右",
+    });
+    let done = await finished(chat.id);
+    expect(upstreamCalls).toHaveLength(before + 1);
+    expect(done.messages[done.currentId!]!.lengthRequirement).toBe(
+      "3000字左右",
+    );
+    const readTool = () =>
+      (
+        upstreamCalls.at(-1)!.messages as {
+          role: string;
+          name?: string;
+          content: string;
+        }[]
+      ).filter((m) => m.role === "tool" && m.name === "plugin_reply_length");
+    expect(readTool()).toHaveLength(1);
+    expect(readTool()[0]!.content).toContain('"本轮要求":"3000字左右"');
+    await value(endpoint + "/send", "POST", {
+      content: "second writing",
+      confirmPost: true,
+    });
+    await value(endpoint + "/plugins", "POST", {
+      action: "length-answer",
+      content: "多写点",
+    });
+    done = await finished(chat.id);
+    expect(readTool()).toHaveLength(1);
+    expect(readTool()[0]!.content).toContain('"上一轮要求":"3000字左右"');
+    expect(readTool()[0]!.content).toContain('"本轮要求":"多写点"');
+    expect(
+      (upstreamCalls.at(-1)!.messages as { name?: string }[]).filter(
+        (m) => m.name === "plugin_reply_length",
+      ),
+    ).toHaveLength(1);
+    await value(endpoint, "PATCH", {
+      lengthGuidance: { enabled: true, requirement: "每轮约2000字" },
+    });
+    await value(endpoint + "/send", "POST", {
+      content: "third writing",
+      confirmPost: true,
+    });
+    done = await finished(chat.id);
+    expect(readTool()[0]!.content).toContain('"上一轮要求":"多写点"');
+    expect(readTool()[0]!.content).not.toContain("3000字左右");
+    expect(readTool()[0]!.content).toContain('"本轮要求":"每轮约2000字"');
+    snapshot = await value<SummarySnapshot>(endpoint);
+    expect(snapshot.pluginState.flows).toHaveLength(2); // Fixed text adds no waiting-flow snapshots.
+
+    await value(endpoint + "/retry", "POST", { messageId: done.currentId });
+    done = await finished(chat.id);
+    expect(readTool()).toHaveLength(1);
+    expect(readTool()[0]!.content).toContain("每轮约2000字");
+    const directChat = await value<Chat>("/chats", "POST", {});
+    await value("/chats/" + directChat.id, "PATCH", {
+      title: "direct local length",
+      lengthGuidance: { enabled: true, requirement: "写短一点" },
+    });
+    const directCalls = upstreamCalls.length;
+    const device = await request(
+      "/chats/" + directChat.id + "/send",
+      "POST",
+      { content: "device writing" },
+      true,
+      "https://chat.test",
+      true,
+    );
+    const deviceTask = (await device.json()) as {
+      direct: {
+        request: {
+          messages: { role: string; name?: string; content?: string }[];
+        };
+      };
+    };
+    expect(device.status).toBe(202);
+    expect(
+      deviceTask.direct.request.messages.filter(
+        (m) => m.role === "tool" && m.name === "plugin_reply_length",
+      ),
+    ).toHaveLength(1);
+    expect(JSON.stringify(deviceTask.direct.request.messages)).toContain(
+      "写短一点",
+    );
+    expect(upstreamCalls).toHaveLength(directCalls);
+    await value("/chats/" + directChat.id + "/stop", "POST", {});
+    const p = {
+      ...pluginDefaults("analysis"),
+      prompt: "[PLUGIN_TEST_analysis]\n" + pluginDefaults("analysis").prompt,
+    };
+    await value("/settings", "PUT", { ...settings, plugins: [p] });
+    const second = await value<Chat>("/chats", "POST", {}),
+      secondEndpoint = "/chats/" + second.id;
+    await value(secondEndpoint, "PATCH", {
+      title: "analysis length fixture",
+      lengthGuidance: { enabled: true, requirement: "" },
+    });
+    await value(secondEndpoint + "/plugins", "POST", {
+      action: "configure",
+      plugins: [{ id: p.id, enabled: true }],
+    });
+    await value(secondEndpoint + "/send", "POST", {
+      content: "analyze then write",
+    });
+    snapshot = await waitSummary(second.id, (s) =>
+      s.pluginState.runs.some((r) => r.status === "waiting"),
+    );
+    expect(snapshot.pluginState.flows.at(-1)?.lengthWaiting).toBeUndefined();
+    const analysis = snapshot.pluginState.runs.at(-1)!;
+    await value(secondEndpoint + "/plugins", "POST", {
+      action: "approve-analysis",
+      runId: analysis.id,
+    });
+    snapshot = await value<SummarySnapshot>(secondEndpoint);
+    expect(snapshot.pluginState.flows.at(-1)?.lengthWaiting).toBe(true);
+    const count = upstreamCalls.length;
+    await value(secondEndpoint + "/plugins", "POST", {
+      action: "length-answer",
+      content: "",
+    });
+    await finished(second.id);
+    expect(upstreamCalls).toHaveLength(count + 1);
+    expect(readTool()[0]!.content).toContain('"本轮要求":"未提供"');
+    const tools = (
+      upstreamCalls.at(-1)!.messages as { role: string; name?: string }[]
+    ).filter((m) => m.role === "tool");
+    expect(tools.at(-1)?.name).toBe("plugin_reply_length");
+    expect(tools[0]?.name).not.toBe("plugin_reply_length");
+    await value("/settings", "PUT", settings);
   });
   it("saves provider metadata offline, preserves models and keys, and keeps device save separate from fetching", async () => {
     const models = provider.models;
@@ -1916,11 +2066,27 @@ describe("workerd HTTP + D1 + Workflows", () => {
   });
   it("freezes partial analysis requests, preserves untouched blocks, guards stale candidates and saves optional templates", async () => {
     controls.mode = "normal";
+    const fallbackModelId = provider.models[0]!.id;
+    const savedProvider = (await value<Provider[]>("/providers")).find(
+      (p) => p.id === provider.id,
+    )!;
+    const originalEnabled = savedProvider.models.find(
+      (m) => m.id === fallbackModelId,
+    )!.enabled;
+    await value("/providers/" + provider.id + "/models", "PUT", {
+      models: [{ id: fallbackModelId, enabled: true }],
+    });
     const p = {
       ...pluginDefaults("analysis"),
       prompt: "[PLUGIN_TEST_analysis]\n" + pluginDefaults("analysis").prompt,
     };
-    await value("/settings", "PUT", { ...settings, plugins: [p] });
+    await value("/settings", "PUT", {
+      ...settings,
+      plugins: [p],
+      pluginFallbackModels: [
+        { providerId: provider.id, modelId: provider.models[0]!.id },
+      ],
+    });
     const chat = await value<Chat>("/chats", "POST", {}),
       endpoint = "/chats/" + chat.id + "/plugins";
     await value("/chats/" + chat.id, "PATCH", { title: "section fixture" });
@@ -1980,6 +2146,32 @@ describe("workerd HTTP + D1 + Workflows", () => {
       ...initial,
       scene_state: "只改场景",
     });
+    controls.mode = "plugin-invalid";
+    await value(endpoint, "POST", {
+      action: "section-generate",
+      runId: original.id,
+      targetId: "scene_state",
+      content: "只改场景",
+    });
+    s = await wait(
+      (s) => !s.pluginJob && s.pluginState.runs.at(-1)?.status === "error",
+    );
+    const failedSection = s.pluginState.runs.at(-1)!;
+    expect(failedSection.output).toBe("invalid JSON");
+    controls.mode = "plugin-fenced";
+    await value(endpoint, "POST", {
+      action: "fallback",
+      runId: failedSection.id,
+      model: { providerId: provider.id, modelId: provider.models[0]!.id },
+    });
+    s = await wait(
+      (s) => !s.pluginJob && s.pluginState.runs.at(-1)?.status === "candidate",
+    );
+    await value(endpoint, "POST", {
+      action: "section-apply",
+      runId: s.pluginState.runs.at(-1)!.id,
+    });
+    controls.mode = "normal";
     await value(endpoint, "POST", {
       action: "section-generate",
       runId: original.id,
@@ -2098,6 +2290,9 @@ describe("workerd HTTP + D1 + Workflows", () => {
       ).status,
     ).toBe(409);
     await value(endpoint, "POST", { action: "cancel" });
+    await value("/providers/" + provider.id + "/models", "PUT", {
+      models: [{ id: fallbackModelId, enabled: originalEnabled }],
+    });
   });
   it("repeats clarification with full submitted answers and skipped questions, reports a repeated/empty follow-up as a recoverable error and retains the main draft", async () => {
     controls.mode = "clarify-loop";

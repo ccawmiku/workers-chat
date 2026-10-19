@@ -1,3 +1,5 @@
+import { LengthSettings } from "./length-settings";
+import type { LengthGuidance } from "../shared/length-guidance";
 import { hasCacheRequest, recordCacheRequest } from "./cache-usage";
 import { compatibleMessages } from "../shared/upstream-compat";
 import { ActionIcons as I } from "./action-icons";
@@ -278,6 +280,7 @@ function App() {
   const [pluginInput, setPluginInput] = useState<PluginInputRequest | null>(
     null,
   );
+  const [lengthDrafts, setLengthDrafts] = useState<Record<string, string>>({});
   const inputDrafts = useRef(new Map<string, string>());
   const [clarifyDrafts, setClarifyDrafts] = useState<Record<string, string>>(
     {},
@@ -316,6 +319,7 @@ function App() {
   }
   useEffect(() => {
     setPluginInput(null);
+    setLengthDrafts({});
     setClarifyDrafts({});
     setClarifySelections({});
     inputDrafts.current.clear();
@@ -1206,6 +1210,18 @@ function App() {
       }
       return;
     }
+    if (waitingLength && pluginFlow) {
+      if (submitting.current || busy || job || pluginJob) return;
+      submitting.current = true;
+      try {
+        await pluginCommand("length-answer", {
+          content: lengthDrafts[pluginFlow.id] ?? "",
+        });
+      } finally {
+        submitting.current = false;
+      }
+      return;
+    }
     if (waitingPlugin) {
       await answerClarification(waitingPlugin, false);
       return;
@@ -1360,6 +1376,10 @@ function App() {
         Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
     );
   function updateDraft(value: string) {
+    if (waitingLength && pluginFlow) {
+      setLengthDrafts((v) => ({ ...v, [pluginFlow.id]: value }));
+      return;
+    }
     if (pluginInput) {
       setPluginInput({ ...pluginInput, draft: value });
       return;
@@ -1386,7 +1406,12 @@ function App() {
       r.status === "waiting" &&
       !r.dismissed,
   );
+  const waitingLength =
+    pluginFlow?.status === "waiting" && pluginFlow.lengthWaiting;
   const composerValue =
+    (waitingLength && pluginFlow
+      ? (lengthDrafts[pluginFlow.id] ?? "")
+      : undefined) ??
     pluginInput?.draft ??
     (waitingPlugin ? (clarifyDrafts[waitingPlugin.id] ?? "") : draft);
   const hasClarifySelection =
@@ -1465,6 +1490,26 @@ function App() {
       setError(error instanceof Error ? error.message : "插件操作失败");
       throw error;
     }
+  }
+  const lengthSaves = useRef(Promise.resolve());
+  async function configureLength(value: LengthGuidance) {
+    await ensureComposerChat();
+    const id = idRef.current!;
+    const save = lengthSaves.current
+      .catch(() => {})
+      .then(async () => {
+        await flushDraft();
+        const updated = await api<Chat>("/chats/" + id, "PATCH", {
+          lengthGuidance: value,
+        });
+        setChat((previous) =>
+          previous?.id === updated.id
+            ? { ...updated, messages: previous.messages }
+            : previous,
+        );
+      });
+    lengthSaves.current = save;
+    await save;
   }
   async function configurePlugins(plugins: PluginBinding[]) {
     await ensureComposerChat();
@@ -2385,16 +2430,31 @@ function App() {
           {pluginFlow && (
             <div className="plugin-flow-controls">
               <span>
-                {waitingPlugin
-                  ? `正在回答 ${waitingPlugin.plugin.name}`
-                  : pluginFlow.status === "debug"
-                    ? "调试完成，尚未生成正文"
-                    : pluginFlow.status === "waiting"
-                      ? "请确认写前分析结果"
-                      : pluginFlow.status === "error"
-                        ? "插件流程已暂停"
-                        : "插件正在运行"}
+                {waitingLength
+                  ? "字数要求：请在下方输入本轮要求，可留空发送"
+                  : waitingPlugin
+                    ? `正在回答 ${waitingPlugin.plugin.name}`
+                    : pluginFlow.status === "debug"
+                      ? "调试完成，尚未生成正文"
+                      : pluginFlow.status === "waiting"
+                        ? "请确认写前分析结果"
+                        : pluginFlow.status === "error"
+                          ? "插件流程已暂停"
+                          : "插件正在运行"}
               </span>
+              {waitingLength && (
+                <button
+                  className="du-btn du-btn-xs"
+                  disabled={busy}
+                  onClick={() =>
+                    void run(() =>
+                      pluginCommand("length-answer", { content: "" }),
+                    )
+                  }
+                >
+                  本轮未提供
+                </button>
+              )}
               {pluginFlow.status === "debug" && (
                 <>
                   <button
@@ -2453,6 +2513,7 @@ function App() {
             debug={debugPlugins}
             setDebug={setDebugPlugins}
             configure={configurePlugins}
+            configureLength={configureLength}
             command={pluginCommand}
             busy={busy || !!job || !!pluginJob}
           />
@@ -2460,7 +2521,8 @@ function App() {
             className={
               "composer " +
               (expanded ? "expanded " : "") +
-              (waitingPlugin || pluginInput ? "plugin-reply" : "")
+              (waitingPlugin || pluginInput ? "plugin-reply " : "") +
+              (waitingLength ? "length-reply" : "")
             }
           >
             {pluginInput && (
@@ -2495,11 +2557,13 @@ function App() {
                 disabled={opening || initializing}
                 aria-label="消息"
                 placeholder={
-                  pluginInput
-                    ? `请输入${pluginInput.label}…`
-                    : waitingPlugin
-                      ? `你现在正在回复「${pluginDisplayName(waitingPlugin.plugin.id, waitingPlugin.plugin.name)}」插件…`
-                      : "发送消息…"
+                  waitingLength
+                    ? "请输入字数要求，例如3000字、多写点；留空发送记为未提供…"
+                    : pluginInput
+                      ? `请输入${pluginInput.label}…`
+                      : waitingPlugin
+                        ? `你现在正在回复「${pluginDisplayName(waitingPlugin.plugin.id, waitingPlugin.plugin.name)}」插件…`
+                        : "发送消息…"
                 }
                 value={composerValue}
                 rows={expanded ? 14 : 2}
@@ -2642,11 +2706,19 @@ function App() {
                   label="发送"
                   className="send-button"
                   disabled={
-                    (!composerValue.trim() && !hasClarifySelection) ||
+                    (!composerValue.trim() &&
+                      !hasClarifySelection &&
+                      !waitingLength) ||
                     busy ||
                     !!chat?.deleted ||
-                    (!selectedModel && !waitingPlugin && !pluginInput) ||
-                    (!!pluginFlow && !waitingPlugin && !pluginInput)
+                    (!selectedModel &&
+                      !waitingPlugin &&
+                      !pluginInput &&
+                      !waitingLength) ||
+                    (!!pluginFlow &&
+                      !waitingPlugin &&
+                      !pluginInput &&
+                      !waitingLength)
                   }
                   onClick={() => void run(send)}
                 >
@@ -2801,10 +2873,18 @@ function App() {
               </label>
               <h3>回复摘要</h3>
               <SummaryTools
+                backfillOnly
                 chat={chat}
                 settings={settings}
                 providers={providers}
                 command={summaryCommand}
+              />
+              <h3>写作长度</h3>
+              <LengthSettings
+                key={"length:" + chat.id}
+                value={chat.lengthGuidance}
+                save={configureLength}
+                disabled={busy || !!job || !!pluginJob || !!pluginFlow}
               />
               <h3>生成参数</h3>
               {(["temperature", "top_p", "top_k"] as const).map((key) => (
@@ -2828,28 +2908,6 @@ function App() {
                   }}
                 />
               ))}
-              <label>
-                发送的对话轮数
-                <input
-                  className="du-input du-input-sm"
-                  type="number"
-                  min="1"
-                  placeholder="全部历史"
-                  aria-describedby="context-rounds-help"
-                  defaultValue={chat.rounds ?? ""}
-                  key={chat.id}
-                  onBlur={(e) =>
-                    void run(() =>
-                      patch({
-                        rounds: e.target.value ? Number(e.target.value) : null,
-                      }),
-                    )
-                  }
-                />
-                <small id="context-rounds-help">
-                  一轮是一次提问及其回复。数量包含本次提问；留空则发送当前分支的全部历史。
-                </small>
-              </label>
 
               <h3>当前聊天导出</h3>
               <div className="chat-exports">

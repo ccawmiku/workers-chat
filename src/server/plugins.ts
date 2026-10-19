@@ -1,3 +1,4 @@
+import { lengthInjection } from "../shared/length-guidance";
 import { generationDeadline } from "./deadline";
 import { summaryState } from "./summaries";
 import {
@@ -269,9 +270,10 @@ export async function pluginView(
   chat: Chat,
   active?: { id: string; kind?: string; transport?: string } | null,
 ) {
-  const state = chat.plugins?.length
-    ? (await pluginState(env, chat.id)).value
-    : emptyPluginState();
+  const state =
+    chat.plugins?.length || chat.lengthGuidance?.enabled || chat.pluginPending
+      ? (await pluginState(env, chat.id)).value
+      : emptyPluginState();
   if (active?.kind !== "plugin") return { pluginState: state, pluginJob: null };
   const doc = await new Store(env.DB).get<PluginTask>(taskId(active.id));
   const delivery =
@@ -310,7 +312,7 @@ export async function clonePlugins(
   forkId?: string,
 ) {
   delete copy.pluginPending;
-  if (!source.plugins?.length) return;
+  if (!source.plugins?.length && !source.lengthGuidance?.enabled) return;
   const original = (await pluginState(env, source.id)).value;
   const oldMessages = forkId
       ? route(source, forkId)
@@ -410,7 +412,7 @@ export async function planPruneMessagePlugins(
   chat: Chat,
   removed: string[],
 ) {
-  if (!chat.plugins?.length) return [];
+  if (!chat.plugins?.length && !chat.lengthGuidance?.enabled) return [];
   const store = new Store(env.DB),
     state = await pluginState(env, chat.id),
     ids = new Set(removed);
@@ -459,7 +461,7 @@ export async function removePlugins(env: Env, chatId: string) {
     .run();
 }
 export async function selectPluginFlow(env: Env, chat: Chat) {
-  if (!chat.plugins?.length) return;
+  if (!chat.plugins?.length && !chat.lengthGuidance?.enabled) return;
   const state = await pluginState(env, chat.id),
     ids = new Set(route(chat).map((m) => m.id));
   const flow = state.value.flows.findLast(
@@ -591,7 +593,12 @@ export async function startPluginFlow(
   const selected = enabledPlugins(chat, settings).filter(
     (p) => p.kind === "analysis" || p.kind === "clarify",
   );
-  if (!selected.length) return false;
+  // A fixed local requirement needs no persisted waiting flow of its own.
+  if (
+    !selected.length &&
+    (!chat.lengthGuidance?.enabled || chat.lengthGuidance.requirement.trim())
+  )
+    return false;
   const state = await pluginState(env, chat.id),
     user = chat.messages[chat.currentId!]!;
   const flow: PluginFlow = {
@@ -604,6 +611,14 @@ export async function startPluginFlow(
     transport,
     status: "running",
     signature: await signature(chat, settings),
+    ...(chat.lengthGuidance?.enabled
+      ? {
+          lengthEnabled: true,
+          ...(chat.lengthGuidance.requirement.trim()
+            ? { lengthRequirement: chat.lengthGuidance.requirement }
+            : {}),
+        }
+      : {}),
   };
   if (reuseMessageId) {
     const old = state.value.flows.findLast(
@@ -714,6 +729,13 @@ async function advance(env: Env, chatId: string, flowId: string) {
     await markChat(env, chatId, "debug");
     return;
   }
+  if (flow.lengthEnabled && flow.lengthRequirement === undefined) {
+    flow.lengthWaiting = true;
+    flow.status = "waiting";
+    await saveState(env, chatId, state);
+    await markChat(env, chatId, "waiting");
+    return;
+  }
   const { settings, providers } = await config(env);
   const mainChat = await store.get<Chat>(chatId);
   if (!mainChat) return;
@@ -728,7 +750,18 @@ async function advance(env: Env, chatId: string, flowId: string) {
     undefined,
     false,
     flow.transport,
-    flowInjections(state.value, flow),
+    [
+      ...flowInjections(state.value, flow),
+      ...(flow.lengthEnabled
+        ? [
+            lengthInjection(
+              mainChat.value,
+              flow.lengthRequirement ?? "",
+              flow.id,
+            ),
+          ]
+        : []),
+    ],
   );
   const job = await env.DB.prepare("SELECT message_id FROM jobs WHERE id=?")
     .bind(jobId)
@@ -1101,6 +1134,16 @@ export async function pluginEndpoint(
   }
   if (active && action !== "dismiss")
     throw new HttpError(409, "请等待当前生成结束，或先停止");
+  if (action === "length-answer") {
+    if (!flow || flow.status !== "waiting" || !flow.lengthWaiting)
+      throw new HttpError(409, "当前不在字数要求阶段");
+    flow.lengthRequirement = str(body.content ?? "", 10000);
+    delete flow.lengthWaiting;
+    flow.status = "running";
+    await saveState(env, chat.id, state);
+    await advanceFlow(env, chat.id, flow.id);
+    return { ok: true };
+  }
   if (action === "fallback") {
     if (!run || run.status !== "error" || run.dismissed)
       throw new HttpError(409, "只有尚未处理的失败结果可以切换备用模型");
@@ -1114,8 +1157,10 @@ export async function pluginEndpoint(
       throw new HttpError(409, "原插件阶段已变化，不能重新运行");
     if (
       run.sectionEdit &&
-      state.value.runs.find((r) => r.id === run.sectionEdit!.sourceId)
-        ?.output !== run.sectionEdit.expectedOutput
+      (await digest(
+        state.value.runs.find((r) => r.id === run.sectionEdit!.sourceId)
+          ?.output ?? "",
+      )) !== run.sectionEdit.expectedOutput
     )
       throw new HttpError(409, "分块内容已变化，请从当前块重新发起修改");
     const prepared = await frozenPreparation(env, run, true);
@@ -1187,6 +1232,16 @@ export async function pluginEndpoint(
         original_task: originalTask?.content?.split("\n\nJSON Schema：")[0],
         output_contract:
           '原任务只作为资料和内容规则参考，原任务中的完整字段/全量输出要求在本次无效。只输出 JSON {"type":"类型名称","content":"该块内容","instruction":"仅新增类型时填写可复用通用规则，不包含本轮人物/剧情方向"}；不要输出 id、其他块或完整分析。类型名称和内容不能为空。指定块的 type 必须保持原样。不得生成主角、玩家或“你”的第一人称想法。只涉及当前明确在场的角色；忽略不在场、已离场或位置不明的角色，不列缺席名单，不输出“某某不在场”的说明或占位。不编造已有状态。',
+        output_schema: {
+          type: "object",
+          required: ["type", "content"],
+          additionalProperties: false,
+          properties: {
+            type: { type: "string", minLength: 1 },
+            content: { type: "string", minLength: 1 },
+            instruction: { type: "string" },
+          },
+        },
         excluded_characters: source.plugin.excludedCharacters ?? "",
         current_sections: sections,
         task: targetId

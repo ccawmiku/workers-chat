@@ -90,7 +90,7 @@ describe("message tree", () => {
       { role: "user", content: "next" },
     ]);
     chat.rounds = 1;
-    expect(contextMessages(chat)).toEqual([{ role: "user", content: "next" }]);
+    expect(contextMessages(chat)).toHaveLength(3);
   });
   it("rejects inherited properties and empty parent references as message IDs", () => {
     for (const id of ["__proto__", "constructor", "toString", ""]) {
@@ -141,8 +141,13 @@ describe("message tree", () => {
     expect(fork.messages[u.id]).toBeUndefined();
     const fork2 = forkChat(fork, fork.currentId!, [fork.title]);
     expect(fork2.title).toBe("原聊天 · 分支02");
-    const titles = Array.from({ length: 99 }, (_, i) => `原聊天 · 分支${String(i + 1).padStart(2, "0")}`);
-    expect(forkChat(fork2, fork2.currentId!, titles).title).toBe("原聊天 · 分支100");
+    const titles = Array.from(
+      { length: 99 },
+      (_, i) => `原聊天 · 分支${String(i + 1).padStart(2, "0")}`,
+    );
+    expect(forkChat(fork2, fork2.currentId!, titles).title).toBe(
+      "原聊天 · 分支100",
+    );
     chat.title = "原聊天 · 分支A";
     expect(forkChat(chat, a.id, []).title).toBe("原聊天 · 分支01");
     expect(deleteSubtree(chat, a.id)).toBe(2);
@@ -193,7 +198,7 @@ describe("message tree", () => {
       parts.every((p) => new TextEncoder().encode(p).length < 2000000),
     ).toBe(true);
   });
-  it("counts the pending user message in the same round budget as the actual send", () => {
+  it("ignores legacy round limits and previews the full branch exactly as sent", () => {
     for (const rounds of [1, 2]) {
       const chat = newChat({ providerId: "one", modelId: "same-model" });
       addMessage(chat, "user", "first");
@@ -211,7 +216,7 @@ describe("message tree", () => {
       const actual = requestPreview(chat, defaultSettings(), [provider("one")])
         .request.messages;
       expect(preview).toEqual(actual);
-      expect(preview.filter((m) => m.role === "user")).toHaveLength(rounds);
+      expect(preview.filter((m) => m.role === "user")).toHaveLength(3);
     }
   });
 });

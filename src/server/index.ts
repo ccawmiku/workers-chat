@@ -1,3 +1,4 @@
+import { lengthInjection } from "../shared/length-guidance";
 import {
   summaryEndpoint,
   cloneSummaries,
@@ -864,6 +865,17 @@ async function api(request: Request, env: Env) {
         if (typeof body[k] === "boolean") set(k, body[k]);
       if (body.groupId === null || typeof body.groupId === "string")
         set("groupId", body.groupId);
+      if (body.lengthGuidance !== undefined) {
+        if (chat.pluginPending)
+          throw new HttpError(409, "请等待本轮插件流程结束");
+        const config = obj(body.lengthGuidance);
+        if (typeof config.enabled !== "boolean")
+          throw new HttpError(400, "字数要求开关无效");
+        set("lengthGuidance", {
+          enabled: config.enabled,
+          requirement: str(config.requirement ?? "", 10000),
+        });
+      }
       if (body.model !== undefined) {
         set("model", modelRef(body.model));
       }
@@ -1027,9 +1039,10 @@ async function api(request: Request, env: Env) {
         ))
       )
         return Response.json({ pluginFlow: true }, { status: 202 });
-      const pluginData = chat.plugins?.length
-        ? (await pluginState(env, id)).value
-        : null;
+      const pluginData =
+        chat.plugins?.length || chat.lengthGuidance?.enabled
+          ? (await pluginState(env, id)).value
+          : null;
       const previousFlow = pluginData?.flows.findLast(
         (f) => f.mainMessageId === message.id || f.userId === message.parentId,
       );
@@ -1042,9 +1055,23 @@ async function api(request: Request, env: Env) {
         action === "continue" ? message.id : undefined,
         false,
         transport,
-        previousFlow && pluginData
-          ? flowInjections(pluginData, previousFlow)
-          : undefined,
+        [
+          ...(previousFlow && pluginData
+            ? flowInjections(pluginData, previousFlow)
+            : []),
+          ...(previousFlow?.lengthEnabled ||
+          message.lengthRequirement !== undefined
+            ? [
+                lengthInjection(
+                  chat,
+                  previousFlow?.lengthRequirement ??
+                    message.lengthRequirement ??
+                    "",
+                  crypto.randomUUID(),
+                ),
+              ]
+            : []),
+        ],
       );
       return Response.json(await generationStart(env, jobId), { status: 202 });
     }

@@ -306,7 +306,7 @@ for (const mobile of [false, true])
       await page
         .locator(".plugin-chips")
         .evaluate((el) => parseFloat(getComputedStyle(el).gap)),
-    ).toBeGreaterThanOrEqual(12);
+    ).toBe(10);
     await expect(
       page.locator(".plugin-chips .ring-cache-value").first(),
     ).toHaveText("");
@@ -318,6 +318,17 @@ for (const mobile of [false, true])
         .first()
         .evaluate((el) => getComputedStyle(el).borderTopWidth),
     ).toBe("0px");
+    const bar = page.locator(".plugin-chips");
+    await expect(bar.locator(".chips-toggle")).toHaveCount(1);
+    expect(await bar.evaluate((el) => getComputedStyle(el).borderRadius)).toBe(
+      await page
+        .locator(".composer")
+        .evaluate((el) => getComputedStyle(el).borderRadius),
+    );
+    const nameLines = page.locator(".plugin-chip-name").first().locator("span");
+    const firstLine = (await nameLines.nth(0).boundingBox())!,
+      secondLine = (await nameLines.nth(1).boundingBox())!;
+    expect(secondLine.y).toBeGreaterThan(firstLine.y);
     await page.screenshot({
       path: `test-results/collapsed-rings-${mobile ? "phone" : "desktop"}-${test.info().project.name}.png`,
     });

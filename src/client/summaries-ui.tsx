@@ -1,3 +1,4 @@
+import { historicalCacheReading } from "./cache-usage";
 import { UsageRing, PluginChipContents } from "./usage-bar";
 import { ActionIcons as I } from "./action-icons";
 import { FallbackButton } from "./fallback-ui";
@@ -497,11 +498,13 @@ export function SummaryTools({
   settings,
   providers,
   command,
+  backfillOnly = false,
 }: {
   chat: Chat;
   settings: Settings;
   providers: Provider[];
   command: SummaryCommand;
+  backfillOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false),
     [error, setError] = useState(""),
@@ -509,10 +512,12 @@ export function SummaryTools({
   return (
     <>
       <div className="summary-tools">
-        <button className="du-btn du-btn-sm" onClick={() => setOpen(true)}>
-          <SlidersHorizontal size={14} />
-          摘要设置
-        </button>
+        {!backfillOnly && (
+          <button className="du-btn du-btn-sm" onClick={() => setOpen(true)}>
+            <SlidersHorizontal size={14} />
+            摘要设置
+          </button>
+        )}
         <button
           className="du-btn du-btn-sm"
           disabled={filling}
@@ -558,7 +563,9 @@ export function SummaryContextChip({
     [snapshot, setSnapshot] = useState<PluginRequest | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
-  const message = route(chat).findLast(
+  const path = route(chat),
+    routeIds = new Set(path.map((m) => m.id));
+  const message = path.findLast(
     (m) => m.role === "assistant" && m.status !== "running" && m.content.trim(),
   );
   const run = message
@@ -625,6 +632,11 @@ export function SummaryContextChip({
           capacity={capacity}
           usage={run?.usage}
           cacheId={run?.id}
+          historicalCache={historicalCacheReading(
+            state.runs.filter((r) => routeIds.has(r.messageId)),
+            run?.id,
+            run?.model ?? prepared?.modelRef,
+          )}
           fallback={
             tokens
               ? { input: tokens, thinking: 0, output: 0, total: tokens }

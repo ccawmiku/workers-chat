@@ -236,13 +236,20 @@ export class Store {
     return statements;
   }
   async setDraft(id: string, value: string) {
+    const { results } = await this.db
+      .prepare(
+        "SELECT h.version,p.value FROM documents d LEFT JOIN chat_drafts h ON h.chat_id=d.id LEFT JOIN draft_parts p ON p.chat_id=h.chat_id AND p.version=h.version WHERE d.id=? AND d.kind='chat' ORDER BY p.part",
+      )
+      .bind(id)
+      .all<{ version: string | null; value: string | null }>();
+    if (!results.length) throw new HttpError(404, "聊天不存在");
+    // A separate empty draft also overrides any legacy draft in the chat snapshot.
+    // Compare the selected immutable version, then skip the entire write batch.
     if (
-      !(await this.db
-        .prepare("SELECT id FROM documents WHERE id=? AND kind='chat'")
-        .bind(id)
-        .first())
+      results[0]!.version !== null &&
+      results.map((p) => p.value ?? "").join("") === value
     )
-      throw new HttpError(404, "聊天不存在");
+      return;
     await this.commit(this.planDraft(id, value));
   }
   async remove(id: string) {

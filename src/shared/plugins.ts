@@ -140,6 +140,9 @@ export type PluginRun = {
   sectionResultId?: string;
 };
 export type PluginFlow = {
+  lengthEnabled?: boolean;
+  lengthWaiting?: boolean;
+  lengthRequirement?: string;
   id: string;
   userId: string;
   definitions: PluginDefinition[];

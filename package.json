@@ -1,34 +1,62 @@
 {
-  "name": "workers-chat",
+  "name": "dsh-plugin-workers-chat",
   "version": "1.0.0",
-  "description": "面向 Cloudflare Workers 免费套餐的单用户、纯文字 AI 聊天网页。视觉参考 Codex，消息树与聊天 JSON 交换行为参考最新版稳定 OpenWebUI。",
+  "description": "DeepSeek Harness 桌面插件版 Workers Chat：保留分支消息树、五大内置插件、多服务商管理及纯本地离线 SQLite 存储",
   "directories": {
     "doc": "docs"
   },
+  "type": "module",
+  "exports": {
+    ".": "./dist-server/index.js",
+    "./client": "./dist-client/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "dist-server",
+    "dist-client",
+    "migrations",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "package.json",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
   "scripts": {
-    "dev": "cf dev",
-    "build": "cf build",
-    "typecheck": "cf workers types && tsc --noEmit",
-    "test": "vitest run",
-    "check": "npm run typecheck && npm run check:svelte && npm test && npm run build",
-    "deploy": "cf deploy",
-    "deploy:dry": "cf deploy --dry-run",
-    "auth:prepare": "node scripts/prepare-auth.mjs",
-    "dev:init": "node scripts/dev-init.mjs",
-    "test:browser": "playwright test",
-    "check:svelte": "svelte-check --fail-on-warnings"
+    "build:web": "vite build",
+    "build:server": "esbuild src/server/cordis.ts --bundle --platform=node --format=esm --target=node20 --external:@deepseek-ai/* --banner:js=\"import { createRequire as __createRequire } from 'node:module'; import { fileURLToPath as __fileURLToPath } from 'node:url'; import { dirname as __pathDirname } from 'node:path'; const require = __createRequire(import.meta.url); const __filename = __fileURLToPath(import.meta.url); const __dirname = __pathDirname(__filename);\" --outfile=dist-server/index.js",
+    "build:client": "esbuild src/client/dsh-client-entry.ts --bundle --format=iife --target=es2020 --outfile=dist-client/client.js",
+    "build": "npm run build:web && npm run build:server && npm run build:client",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ccawmiku/workers-chat.git"
   },
-  "keywords": [],
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "workers-chat",
+    "ai-chat",
+    "svelte-flow"
+  ],
   "author": "",
-  "type": "module",
-  "bugs": {
-    "url": "https://github.com/ccawmiku/workers-chat/issues"
-  },
-  "homepage": "https://github.com/ccawmiku/workers-chat#readme",
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",
     "@lucide/svelte": "1.57.0",
@@ -39,7 +67,9 @@
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "svelte": "5.57.2"
+    "svelte": "5.57.2",
+    "ws": "8.21.0",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^2.0.0-beta.v.0",

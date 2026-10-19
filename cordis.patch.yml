@@ -1,0 +1,3 @@
+- insert:
+    - id: workers-chat
+      name: 'dsh-plugin-workers-chat'

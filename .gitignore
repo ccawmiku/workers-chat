@@ -12,7 +12,7 @@ secrets/
 
 # Dependencies, build output and runtime state
 node_modules/
-dist/
+# dist/ is tracked on DeepSeekHarness branch so the plugin works out of the box
 build/
 .wrangler/
 .cache/

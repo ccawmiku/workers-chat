@@ -1,5 +1,5 @@
 import { ActionIcons as I } from "./action-icons";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import {
   Plus,
@@ -10,12 +10,32 @@ import {
   List,
   X,
   CircleAlert,
+  Sparkles,
 } from "lucide-react";
 import type { Provider } from "../shared/chat";
 import { api } from "./api";
 import { IconButton, Loading, useDialogFocus } from "./controls";
 import { KeyReveal } from "./settings-tools";
 import { directModels, useDeviceConnection } from "./device-connection";
+
+interface DshModelItem {
+  id: string;
+  name: string;
+  capacity: number;
+  isDefault: boolean;
+}
+
+interface DshProvider {
+  providerKey: string;
+  name: string;
+  displayName: string;
+  baseUrl: string;
+  prefix: string;
+  apiKey: string;
+  hasKey: boolean;
+  models: DshModelItem[];
+  isDefaultProvider: boolean;
+}
 
 type ProviderView = Provider & { hasKey: boolean };
 type Form = {
@@ -46,12 +66,26 @@ export function ProvidersPanel({
   const connection = useDeviceConnection(),
     dialog = useRef<HTMLElement>(null);
   const [form, setForm] = useState<Form | null>(null),
+    [dshProviders, setDshProviders] = useState<DshProvider[]>([]),
+    [dshPresetModels, setDshPresetModels] = useState<{ id: string }[] | null>(
+      null,
+    ),
     [busy, setBusy] = useState<string | null>(null),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    api<{ providers: DshProvider[] }>("/dsh/providers")
+      .then((res) => {
+        if (res?.providers) setDshProviders(res.providers);
+      })
+      .catch(() => {});
+  }, []);
+
   const close = () => {
     if (busy === "editor") return;
     setForm(null);
+    setDshPresetModels(null);
     setError("");
   };
   useDialogFocus(dialog, close, !!form);
@@ -67,6 +101,21 @@ export function ProvidersPanel({
       setBusy(null);
     }
   };
+
+  const importFromDsh = async (providerKey?: string) => {
+    void operate("dsh-import", async () => {
+      const res = await api<{
+        success: boolean;
+        importedCount: number;
+        providers: any[];
+      }>("/dsh/import", "POST", { providerKey, forceDefault: true });
+      await refresh();
+      setNotice(
+        `已成功从 DeepSeek Harness 导入 ${res.importedCount} 个服务商及其模型配置！`,
+      );
+    });
+  };
+
   const save = async (value: Form, refreshModels: boolean) => {
     const existing = providers.find((p) => p.id === value.id);
     if (
@@ -76,7 +125,7 @@ export function ProvidersPanel({
     )
       throw Error("修改接口地址时请重新输入密钥，避免旧密钥被发送到其他地址。");
     let key = value.apiKey || undefined,
-      models: { id: string }[] | undefined;
+      models: { id: string }[] | undefined = dshPresetModels || undefined;
     if (connection.enabled && refreshModels) {
       key ??= existing
         ? await connection.key({
@@ -103,6 +152,7 @@ export function ProvidersPanel({
     void operate("editor", async () => {
       const saved = await save(form, refreshModels);
       setForm(null);
+      setDshPresetModels(null);
       setNotice(
         refreshModels
           ? `已保存 ${saved.name}，获取到 ${saved.models.length} 个模型。新发现的模型默认关闭。`
@@ -123,16 +173,31 @@ export function ProvidersPanel({
           <h3>服务商</h3>
           <p className="muted">管理 OpenAI 兼容接口及其模型。</p>
         </div>
-        <button
-          className="du-btn du-btn-primary du-btn-sm primary"
-          onClick={() => {
-            setError("");
-            setForm(emptyForm());
-          }}
-        >
-          <Plus size={16} />
-          添加服务商
-        </button>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          {dshProviders.length > 0 && (
+            <button
+              className="du-btn du-btn-secondary du-btn-sm"
+              disabled={busy !== null}
+              onClick={() => void importFromDsh()}
+              title="直接导入当前 DeepSeek Harness 中配置的服务商与模型"
+            >
+              <Sparkles size={16} />
+              从当前 DSH 导入 (
+              {dshProviders.reduce((acc, p) => acc + p.models.length, 0)} 模型)
+            </button>
+          )}
+          <button
+            className="du-btn du-btn-primary du-btn-sm primary"
+            onClick={() => {
+              setError("");
+              setDshPresetModels(null);
+              setForm(emptyForm());
+            }}
+          >
+            <Plus size={16} />
+            添加服务商
+          </button>
+        </div>
       </div>
       {!form && alert}
       {notice && (
@@ -141,89 +206,120 @@ export function ProvidersPanel({
         </p>
       )}
       <div className="provider-list">
-        {providers.map((p) => (
-          <article className="provider-item du-card" key={p.id}>
-            <div className="provider-identity">
-              <span className="provider-symbol">
-                <Server size={20} />
-              </span>
-              <div>
-                <strong>{p.name}</strong>
-                <small className="provider-url" title={p.baseUrl}>
-                  {p.baseUrl}
-                </small>
-                <div className="provider-meta">
-                  <span>{p.models.length} 个模型</span>
-                  <span>{p.hasKey ? "已保存密钥" : "无需密钥"}</span>
-                  {p.prefix && <span>前缀 {p.prefix}</span>}
+        {providers.map((p) => {
+          const matchingDsh = dshProviders.find(
+            (dp) => dp.baseUrl === p.baseUrl || dp.name === p.name,
+          );
+          return (
+            <article className="provider-item du-card" key={p.id}>
+              <div className="provider-identity">
+                <span className="provider-symbol">
+                  <Server size={20} />
+                </span>
+                <div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <strong>{p.name}</strong>
+                    {matchingDsh && (
+                      <span
+                        className="du-badge du-badge-xs du-badge-primary"
+                        title="与当前 DeepSeek Harness 服务商关联"
+                      >
+                        DSH
+                      </span>
+                    )}
+                  </div>
+                  <small className="provider-url" title={p.baseUrl}>
+                    {p.baseUrl}
+                  </small>
+                  <div className="provider-meta">
+                    <span>{p.models.length} 个模型</span>
+                    <span>{p.hasKey ? "已保存密钥" : "无需密钥"}</span>
+                    {p.prefix && <span>前缀 {p.prefix}</span>}
+                  </div>
                 </div>
               </div>
-            </div>
-            <div className="provider-actions">
-              <IconButton
-                label={"管理 " + p.name + " 模型"}
-                onClick={() => onModels(p.name)}
-              >
-                <List size={17} />
-              </IconButton>
-              {p.hasKey && <KeyReveal provider={p} run={run} />}
-              <IconButton
-                label={"编辑 " + p.name}
-                disabled={busy !== null}
-                onClick={() => {
-                  setError("");
-                  setForm({
-                    id: p.id,
-                    name: p.name,
-                    baseUrl: p.baseUrl,
-                    prefix: p.prefix,
-                    apiKey: "",
-                  });
-                }}
-              >
-                <Pencil size={17} />
-              </IconButton>
-              <IconButton
-                label={"刷新 " + p.name + " 模型"}
-                disabled={busy !== null}
-                onClick={() =>
-                  void operate(p.id, async () => {
-                    const saved = await save(
-                      {
-                        id: p.id,
-                        name: p.name,
-                        baseUrl: p.baseUrl,
-                        prefix: p.prefix,
-                        apiKey: "",
-                      },
-                      true,
-                    );
-                    setNotice(
-                      `已刷新 ${p.name}，共 ${saved.models.length} 个模型。已有开关和模型设置保持不变。`,
-                    );
-                  })
-                }
-              >
-                {busy === p.id ? <Loading small /> : <RotateCcw size={17} />}
-              </IconButton>
-              <IconButton
-                label={"删除 " + p.name}
-                className="danger-text"
-                disabled={busy !== null}
-                onClick={() => {
-                  if (confirm(`删除服务商“${p.name}”？已有聊天记录会保留。`))
-                    void operate(p.id, async () => {
-                      await api("/providers/" + p.id, "DELETE", {});
-                      await refresh();
-                      setNotice("服务商已删除，历史聊天保留。");
+              <div className="provider-actions">
+                <IconButton
+                  label={"管理 " + p.name + " 模型"}
+                  onClick={() => onModels(p.name)}
+                >
+                  <List size={17} />
+                </IconButton>
+                {matchingDsh && (
+                  <IconButton
+                    label={"从 DSH 重新同步 " + p.name + " 模型"}
+                    disabled={busy !== null}
+                    onClick={() => void importFromDsh(matchingDsh.providerKey)}
+                  >
+                    <Sparkles size={17} />
+                  </IconButton>
+                )}
+                {p.hasKey && <KeyReveal provider={p} run={run} />}
+                <IconButton
+                  label={"编辑 " + p.name}
+                  disabled={busy !== null}
+                  onClick={() => {
+                    setError("");
+                    setDshPresetModels(null);
+                    setForm({
+                      id: p.id,
+                      name: p.name,
+                      baseUrl: p.baseUrl,
+                      prefix: p.prefix,
+                      apiKey: "",
                     });
-                }}
-              >
-                <Trash2 size={17} />
-              </IconButton>
-            </div>
-          </article>
-        ))}
+                  }}
+                >
+                  <Pencil size={17} />
+                </IconButton>
+                <IconButton
+                  label={"刷新 " + p.name + " 模型"}
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void operate(p.id, async () => {
+                      const saved = await save(
+                        {
+                          id: p.id,
+                          name: p.name,
+                          baseUrl: p.baseUrl,
+                          prefix: p.prefix,
+                          apiKey: "",
+                        },
+                        true,
+                      );
+                      setNotice(
+                        `已刷新 ${p.name}，共 ${saved.models.length} 个模型。已有开关和模型设置保持不变。`,
+                      );
+                    })
+                  }
+                >
+                  {busy === p.id ? <Loading small /> : <RotateCcw size={17} />}
+                </IconButton>
+                <IconButton
+                  label={"删除 " + p.name}
+                  className="danger-text"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    if (confirm(`删除服务商“${p.name}”？已有聊天记录会保留。`))
+                      void operate(p.id, async () => {
+                        await api("/providers/" + p.id, "DELETE", {});
+                        await refresh();
+                        setNotice("服务商已删除，历史聊天保留。");
+                      });
+                  }}
+                >
+                  <Trash2 size={17} />
+                </IconButton>
+              </div>
+            </article>
+          );
+        })}
         {!providers.length && (
           <div className="provider-empty du-card">
             <Server size={28} />
@@ -231,6 +327,18 @@ export function ProvidersPanel({
             <p className="muted">
               添加接口地址后获取模型，再到模型页开启需要的模型。
             </p>
+            {dshProviders.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <button
+                  className="du-btn du-btn-primary du-btn-sm"
+                  disabled={busy !== null}
+                  onClick={() => void importFromDsh()}
+                >
+                  <Sparkles size={16} />
+                  一键导入当前 DeepSeek Harness 模型配置
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -271,6 +379,60 @@ export function ProvidersPanel({
                 }}
               >
                 <div className="provider-form-body">
+                  {dshProviders.length > 0 && !form.id && (
+                    <div
+                      className="du-alert du-alert-info"
+                      style={{
+                        padding: "8px 12px",
+                        fontSize: "13px",
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "8px",
+                      }}
+                    >
+                      <Sparkles
+                        size={16}
+                        style={{ flexShrink: 0, marginTop: "2px" }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, marginBottom: "4px" }}>
+                          从当前 DeepSeek Harness 导入：
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "6px",
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          {dshProviders.map((dp) => (
+                            <button
+                              type="button"
+                              key={dp.providerKey}
+                              className="du-btn du-btn-xs du-btn-outline"
+                              onClick={() => {
+                                setForm({
+                                  id: form.id || "",
+                                  name: dp.name,
+                                  baseUrl: dp.baseUrl,
+                                  prefix: dp.prefix,
+                                  apiKey: dp.apiKey || "",
+                                });
+                                setDshPresetModels(
+                                  dp.models.map((m) => ({ id: m.id })),
+                                );
+                                setNotice(
+                                  `已填入 DSH 服务商 ${dp.name} 及其 ${dp.models.length} 个模型`,
+                                );
+                              }}
+                            >
+                              载入 {dp.name} ({dp.models.length} 个模型)
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {alert}
                   <div className="provider-form-grid">
                     <label>

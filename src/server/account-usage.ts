@@ -64,8 +64,11 @@ export async function accountUsage(env: UsageEnv, force = false, cache?: UsageCa
   if (!env.CF_ANALYTICS_TOKEN || !/^[a-f\d]{32}$/i.test(env.CF_ANALYTICS_ACCOUNT_ID ?? ""))
     return { ...empty, fetchedAt: null, message: "账号统计未配置服务端 Analytics 凭证。" };
   let usageCache = cache;
-  try { usageCache ??= await caches.open("account-usage"); }
-  catch { /* Cache availability must not prevent login or chat navigation. */ }
+  try {
+    if (typeof caches !== "undefined") {
+      usageCache ??= await caches.open("account-usage");
+    }
+  } catch { /* Cache availability must not prevent login or chat navigation. */ }
   const key = new Request(`https://account-usage.internal/v1/${env.CF_ANALYTICS_ACCOUNT_ID}/${empty.day}`);
   let previous: AccountUsage | undefined;
   try {

@@ -26,6 +26,7 @@ import {
   MODEL_ID_MAX_LENGTH,
 } from "../shared/chat";
 import { exportSettings, importSettings } from "./backup";
+import { getDshConfig } from "./dsh-models";
 import { importChats, exportChat } from "../shared/exchange";
 import { HttpError, Store, summary } from "./store";
 import { PASSWORD_MIN_LENGTH } from "../shared/auth";
@@ -489,6 +490,84 @@ async function api(request: Request, env: Env) {
     });
     return Response.json(next);
   }
+  if (path === "/api/dsh/providers" && method === "GET") {
+    return Response.json(getDshConfig());
+  }
+  if (path === "/api/dsh/import" && method === "POST") {
+    const config = getDshConfig();
+    const targetKey =
+      typeof body.providerKey === "string" ? body.providerKey : undefined;
+    const targetProviders = targetKey
+      ? config.providers.filter((p) => p.providerKey === targetKey)
+      : config.providers;
+
+    if (!targetProviders.length) {
+      throw new HttpError(404, "未在当前 DeepSeek Harness 中找到可用服务商配置");
+    }
+
+    const currentProviders = await providerList(store);
+    const imported: any[] = [];
+    let defaultModelToSet: { providerId: string; modelId: string } | null = null;
+
+    for (const dp of targetProviders) {
+      const existing = currentProviders.find(
+        (p) => p.baseUrl === dp.baseUrl || p.name === dp.name,
+      );
+      const id = existing?.id ?? uuid();
+      const doc = await store.get<Provider>(id);
+
+      const existingModelMap = new Map(
+        (doc?.value.models ?? []).map((m) => [m.id, m]),
+      );
+      const models = dp.models.map((m) => {
+        const prev = existingModelMap.get(m.id);
+        return {
+          id: m.id,
+          enabled: prev
+            ? prev.enabled
+            : (m.isDefault || body.enableAll === true),
+          capacity: m.capacity || 65536,
+          parameters: prev?.parameters ?? {},
+        };
+      });
+
+      const p: Provider = {
+        id,
+        name: dp.name,
+        baseUrl: dp.baseUrl,
+        prefix: dp.prefix,
+        encryptedKey: dp.apiKey
+          ? await encrypt(dp.apiKey, env.ENCRYPTION_KEY)
+          : doc?.value.encryptedKey,
+        models,
+      };
+
+      await store.save(id, "provider", p, doc?.revision ?? 0, { id: p.id });
+      imported.push(publicProvider(p));
+
+      const defModel = dp.models.find((m) => m.isDefault);
+      if (defModel) {
+        defaultModelToSet = { providerId: id, modelId: defModel.id };
+      }
+    }
+
+    if (defaultModelToSet) {
+      const currentSettings = await settings(store);
+      if (!currentSettings.defaultModel || body.forceDefault === true) {
+        const next = { ...currentSettings, defaultModel: defaultModelToSet };
+        const sDoc = await store.get<Settings>("settings");
+        await store.save("settings", "settings", next, sDoc?.revision ?? 0, {
+          id: "settings",
+        });
+      }
+    }
+
+    return Response.json({
+      success: true,
+      importedCount: imported.length,
+      providers: imported,
+    });
+  }
   if (path === "/api/providers" && method === "GET")
     return Response.json((await providerList(store)).map(publicProvider));
   if (path === "/api/providers" && method === "POST") {
@@ -531,6 +610,12 @@ async function api(request: Request, env: Env) {
     if (transport === "device") {
       if (!Array.isArray(body.models))
         throw new HttpError(400, "缺少设备获取的模型列表");
+      list = {
+        data: body.models.map((item) => ({
+          id: str(obj(item).id, MODEL_ID_MAX_LENGTH),
+        })),
+      };
+    } else if (Array.isArray(body.models) && body.models.length > 0) {
       list = {
         data: body.models.map((item) => ({
           id: str(obj(item).id, MODEL_ID_MAX_LENGTH),
@@ -1181,10 +1266,10 @@ export default {
     headers.set("Referrer-Policy", "no-referrer");
     headers.set(
       "Content-Security-Policy",
-      "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+      "default-src 'self' data: blob: 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' http: https: ws: wss:; frame-ancestors *; base-uri 'self'",
     );
     if (new URL(request.url).protocol === "https:")
       headers.set("Strict-Transport-Security", "max-age=31536000");
     return new Response(response.body, { status: response.status, headers });
   },
-} satisfies ExportedHandler<Env>;
+};

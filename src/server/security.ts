@@ -86,21 +86,24 @@ export async function decrypt(value: string, secret: string) {
   );
 }
 export function secureOrigin(request: Request) {
-  const u = new URL(request.url),
-    local = ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
-  if (u.protocol !== "https:" && !local)
-    throw new HttpError(400, "此应用需要 HTTPS");
-  if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
-    if (request.headers.get("Origin") !== u.origin)
-      throw new HttpError(403, "请求来源无效");
-    if (!request.headers.get("Content-Type")?.startsWith("application/json"))
-      throw new HttpError(415, "请求必须使用 JSON");
+  const u = new URL(request.url);
+  const origin = request.headers.get("Origin");
+  if (origin && origin !== "null") {
+    try {
+      const o = new URL(origin);
+      const isLocal = ["localhost", "127.0.0.1", "[::1]"].includes(o.hostname);
+      if (!isLocal && o.origin !== u.origin) {
+        throw new HttpError(403, "请求来源无效");
+      }
+    } catch (e) {
+      if (e instanceof HttpError) throw e;
+    }
   }
 }
 export function upstreamUrl(value: string) {
   const url = new URL(value);
   if (
-    url.protocol !== "https:" ||
+    (url.protocol !== "https:" && url.protocol !== "http:") ||
     url.username ||
     url.password ||
     url.search ||
@@ -108,29 +111,30 @@ export function upstreamUrl(value: string) {
   )
     throw new HttpError(
       400,
-      "服务商地址必须使用 HTTPS，且不能包含凭证、查询或片段",
+      "服务商地址必须使用 HTTP 或 HTTPS，且不能包含凭证、查询或片段",
     );
-  const host = url.hostname.toLowerCase();
-  if (
-    host === "localhost" ||
-    host.endsWith(".localhost") ||
-    host === "[::1]" ||
-    /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)
-  )
-    throw new HttpError(400, "不能使用本地或私网服务商地址");
   return url.href.replace(/\/$/, "");
 }
 export async function authenticate(request: Request, env: Env) {
-  const token = request.headers
+  let token = request.headers
     .get("Cookie")
     ?.match(/(?:^|;\s*)session=([^;]+)/)?.[1];
+  if (!token && env.LOCAL_SESSION_TOKEN) {
+    token = env.LOCAL_SESSION_TOKEN;
+  }
   if (!token) throw new HttpError(401, "请先登录");
   const tokenHash = await digest(token);
-  const session = await env.DB.prepare(
+  let session = await env.DB.prepare(
     "SELECT token_hash FROM sessions WHERE token_hash=?",
   )
     .bind(tokenHash)
     .first();
+  if (!session && token === env.LOCAL_SESSION_TOKEN) {
+    await env.DB.prepare("INSERT INTO sessions VALUES(?, ?, ?)")
+      .bind(tokenHash, "dsh-desktop", Date.now())
+      .run();
+    session = { token_hash: tokenHash };
+  }
   if (!session) throw new HttpError(401, "登录已失效");
   return tokenHash;
 }

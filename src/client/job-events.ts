@@ -7,10 +7,11 @@ export function observeJob(
   onUnavailable: () => void,
 ) {
   const url = new URL(
-    `/api/jobs/${encodeURIComponent(id)}/events`,
+    `/api/workers-chat/jobs/events`,
     location.href,
   );
   url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("id", id);
   if (title) url.searchParams.set("kind", "title");
   let socket: WebSocket | undefined,
     retry: ReturnType<typeof setTimeout> | undefined;

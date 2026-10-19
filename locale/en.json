@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Workers Chat",
+    "description": "Full-featured Workers Chat port for DeepSeek Harness with branching message tree, 5 built-in plugins, multi-model providers, and offline SQLite storage."
+  }
+}

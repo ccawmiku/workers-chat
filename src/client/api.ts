@@ -8,13 +8,14 @@ export class ApiError extends Error {
     super(message);
   }
 }
+const API_PREFIX = "/api/workers-chat";
 export async function api<T = unknown>(
   path: string,
   method = "GET",
   body?: unknown,
   options: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch("/api" + path, {
+  const response = await fetch(API_PREFIX + path, {
     method,
     credentials: "same-origin",
     ...options,

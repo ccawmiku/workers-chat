@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Workers Chat",
+    "description": "基于 Cloudflare Workers Chat 完整移植的本地全功能对话系统，支持分支消息树可视化、5个内置插件、多模型服务商与离线 SQLite 存储。"
+  }
+}

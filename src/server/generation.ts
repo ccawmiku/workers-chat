@@ -1,3 +1,4 @@
+import { LENGTH_PLUGIN_ID, lengthInjection } from "../shared/length-guidance";
 import { generationDeadline } from "./deadline";
 import { compatibleMessages } from "../shared/upstream-compat";
 import { readCompletion, type CompletionOutput } from "../shared/completion";
@@ -88,6 +89,20 @@ export async function startGeneration(
   transport?: "device",
   injections?: PluginInjection[],
 ) {
+  if (
+    !seedId &&
+    chat.lengthGuidance?.enabled &&
+    chat.lengthGuidance.requirement.trim() &&
+    !injections?.some((i) => i.pluginId === LENGTH_PLUGIN_ID)
+  )
+    injections = [
+      ...(injections ?? []),
+      lengthInjection(
+        chat,
+        chat.lengthGuidance.requirement,
+        crypto.randomUUID(),
+      ),
+    ];
   const { model, provider, request } = previewRequest(
     chat,
     settings,
@@ -96,6 +111,10 @@ export async function startGeneration(
   const { messages: _messages, ...options } = request;
   const seed = seedId ? chat.messages[seedId] : null;
   const message = addMessage(chat, "assistant", seed?.content ?? "");
+  const length = injections?.find((i) => i.pluginId === LENGTH_PLUGIN_ID);
+  if (length) message.lengthRequirement = JSON.parse(length.content).本轮要求;
+  else if (seed?.lengthRequirement !== undefined)
+    message.lengthRequirement = seed.lengthRequirement;
   message.status = "running";
   message.model = model;
   message.request = {

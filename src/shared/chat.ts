@@ -1,3 +1,4 @@
+import { withoutLengthTools, type LengthGuidance } from "./length-guidance";
 import type { SummaryConfig } from "./summaries";
 export const MODEL_ID_MAX_LENGTH = 1000;
 import { DEFAULT_TITLE_PROMPT } from "./default-title-prompt";
@@ -13,6 +14,7 @@ export type Parameters = {
 };
 export type ModelRef = { providerId: string; modelId: string };
 export type Message = {
+  lengthRequirement?: string;
   id: string;
   parentId: string | null;
   role: Role;
@@ -37,6 +39,7 @@ export type Message = {
   toolContext?: { parentId: string; messages: APIMessage[] };
 };
 export type Chat = {
+  lengthGuidance?: LengthGuidance;
   summaryOverrides?: Partial<SummaryConfig>;
   plugins?: PluginBinding[];
   pluginPending?: "running" | "waiting" | "error" | "debug";
@@ -351,18 +354,8 @@ export function contextTurns(chat: Chat) {
 }
 
 export function contextMessages(chat: Chat, draft?: string, reasoning = false) {
-  // Legacy exclusion flags are retained for JSON exchange, but no longer affect requests.
-  let path = contextTurns(chat).flat();
-  if (chat.rounds && chat.rounds > 0) {
-    const historyRounds = chat.rounds - (draft ? 1 : 0);
-    let rounds = 0,
-      index = path.length;
-    while (historyRounds > 0 && index > 0) {
-      index--;
-      if (path[index]!.role === "user" && ++rounds === historyRounds) break;
-    }
-    path = path.slice(index);
-  }
+  // Legacy exclusion/round fields remain exchangeable but no longer truncate requests.
+  const path = contextTurns(chat).flat();
   const messages: APIMessage[] = [];
   const system = chat.system
     .map((t) => t.content)
@@ -379,9 +372,9 @@ export function contextMessages(chat: Chat, draft?: string, reasoning = false) {
       m.parentId === previous.id
     )
       messages.push(
-        ...cleanLegacyClarificationTools(m.toolContext.messages).map((v) =>
-          structuredClone(v),
-        ),
+        ...withoutLengthTools(
+          cleanLegacyClarificationTools(m.toolContext.messages),
+        ).map((v) => structuredClone(v)),
       );
     messages.push({
       role: m.role,

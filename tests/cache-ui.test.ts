@@ -1,6 +1,10 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { PluginChipContents } from "../src/client/usage-bar";
 import { describe, it, expect } from "vitest";
 import {
   cacheReading,
+  historicalCacheReading,
   recordCacheRequest,
   localCacheEstimate,
 } from "../src/client/cache-usage";
@@ -48,6 +52,65 @@ describe("local cache counters and single-attempt model overrides", () => {
         output_tokens: 10,
       }),
     ).toEqual({ input: 100, output: 10, thinking: 0, total: 110 });
+  });
+  it("retains historical zero and nonzero readings only for the exact model, never substitutes unknown data", () => {
+    const model = { providerId: "p", modelId: "m" };
+    const runs = [
+      {
+        id: "other",
+        model: { providerId: "another", modelId: "m" },
+        usage: { cache_hit_rate: "95%" },
+      },
+      { id: "old", model, usage: { cache_hit_rate: "0%" } },
+      { id: "new", model },
+    ];
+    expect(historicalCacheReading(runs, "new", model)).toMatchObject({
+      percent: "0%",
+      historical: true,
+    });
+    expect(historicalCacheReading(runs, "old", model)).toBeUndefined();
+    expect(
+      historicalCacheReading(runs, "new", {
+        providerId: "p",
+        modelId: "different",
+      }),
+    ).toBeUndefined();
+    expect(historicalCacheReading([], undefined, model)).toBeUndefined();
+  });
+  it("dims historical digits without applying their cached tokens to a new request's composition, and prefers a current zero", () => {
+    const historical = {
+      ratio: 0.8,
+      percent: "80%",
+      historical: true,
+      source: "上游返回 · 历史缓存率",
+    };
+    const props = {
+      name: "ABCD",
+      inputLabel: "100",
+      used: 100,
+      capacity: 1000,
+      historicalCache: historical,
+    };
+    const old = renderToStaticMarkup(
+      createElement(PluginChipContents, {
+        ...props,
+        usage: { prompt_tokens: 100, completion_tokens: 10 },
+      }),
+    );
+    expect(old).toContain("ring-cache-value historical");
+    expect(old).toContain('data-cache-age="historical"');
+    expect(old).toMatch(/>80<\/text>/);
+    expect(old).not.toContain("usage-segment usage-cached");
+    expect(old).toContain("<span>AB</span><span>CD</span>");
+    const current = renderToStaticMarkup(
+      createElement(PluginChipContents, {
+        ...props,
+        usage: { prompt_tokens: 100, cached_tokens: 0 },
+      }),
+    );
+    expect(current).toContain('data-cache-age="current"');
+    expect(current).not.toContain("ring-cache-value historical");
+    expect(current).toMatch(/>0<\/text>/);
   });
   it("does not let a local estimate overwrite real returned usage", () => {
     recordCacheRequest(

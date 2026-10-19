@@ -367,7 +367,7 @@ export function AccountMenu({
         anchor={anchor}
         open={open}
         onClose={() => setOpen(false)}
-        width={280}
+        width={252}
         label="账户菜单"
         className="account-popover"
         focus

@@ -132,8 +132,10 @@ export function PluginChipContents({
   cacheId,
   preview,
   fallback,
+  historicalCache,
 }: {
   name: string;
+  historicalCache?: CacheReading;
   inputLabel: string;
   used: number;
   capacity: number;
@@ -142,18 +144,30 @@ export function PluginChipContents({
   preview?: { request: PluginRequest; modelRef: ModelRef };
   fallback?: TokenBreakdown;
 }) {
-  const cache = useCacheReading(usage, cacheId, preview),
-    parts = usageParts(usage, fallback, cache);
+  const currentCache = useCacheReading(usage, cacheId, preview),
+    cache = currentCache ?? historicalCache,
+    parts = usageParts(usage, fallback, currentCache);
+  const characters = Array.from(name),
+    split = Math.ceil(characters.length / 2);
+  const cacheTitle = cache ? `${cache.source} ${cache.percent}` : "缓存率未知";
   const ratio = Math.max(0, Math.min(1, used / Math.max(1, capacity))),
     percent = ((used / Math.max(1, capacity)) * 100).toFixed(1);
   const contextTitle = `${name}上下文：${formatTokenCount(used)} / ${formatTokenCount(capacity)} Token · ${percent}%`;
   return (
     <>
       <span className="plugin-chip-info">
-        <span className="plugin-chip-name">{name}</span>
+        <span className="plugin-chip-name">
+          <span>{characters.slice(0, split).join("")}</span>
+          <span>{characters.slice(split).join("")}</span>
+        </span>
         <b>{inputLabel}</b>
         <small
-          className="plugin-chip-cache"
+          className={
+            "plugin-chip-cache" + (cache?.historical ? " historical" : "")
+          }
+          data-cache-age={
+            cache ? (cache.historical ? "historical" : "current") : "unknown"
+          }
           title={cache?.source}
           data-cache-source={cache?.source}
         >
@@ -166,9 +180,9 @@ export function PluginChipContents({
         className="plugin-combined-ring"
         viewBox="0 0 64 64"
         role="img"
-        aria-label={contextTitle + "；" + parts.title}
+        aria-label={contextTitle + "；" + parts.title + "；" + cacheTitle}
       >
-        <title>{contextTitle + "；" + parts.title}</title>
+        <title>{contextTitle + "；" + parts.title + "；" + cacheTitle}</title>
         <UsageArcs parts={parts} center={32} radius={28} />
         <g
           className={"context-arcs" + (used > capacity ? " over-budget" : "")}
@@ -201,7 +215,12 @@ export function PluginChipContents({
           )}
         </g>
         <text
-          className="ring-cache-value"
+          className={
+            "ring-cache-value" + (cache?.historical ? " historical" : "")
+          }
+          data-cache-age={
+            cache ? (cache.historical ? "historical" : "current") : "unknown"
+          }
           x="32"
           y="32"
           dy=".05em"

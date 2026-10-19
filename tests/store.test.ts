@@ -8,6 +8,7 @@ let mf: Miniflare;
 let db: D1Database;
 let reads: string[] = [];
 let store: Store;
+let written = 0;
 
 beforeAll(async () => {
   mf = new Miniflare({
@@ -41,6 +42,12 @@ beforeAll(async () => {
       await db.prepare(sql).run();
   const observed = new Proxy(db, {
     get(target, property) {
+      if (property === "batch")
+        return async (statements: D1PreparedStatement[]) => {
+          const results = await target.batch(statements);
+          written += results.reduce((n, r) => n + r.meta.rows_written, 0);
+          return results;
+        };
       if (property === "prepare")
         return (sql: string) => {
           reads.push(sql);
@@ -165,4 +172,47 @@ it("uses scoped indexes for title history, task cleanup and foreign-key checks",
     expect(plan, name).not.toMatch(/SCAN (?:jobs|title_jobs)/);
   }
   console.info("local D1 rows_read " + JSON.stringify({ before, after }));
+});
+
+it("skips identical draft writes including empty and multipart Unicode while retaining real edits", async () => {
+  const chat = newChat();
+  await store.save(chat.id, "chat", chat, 0, summary(chat));
+  const initial = written;
+  await store.setDraft(chat.id, "draft A");
+  const firstWrite = written - initial;
+  const oldPath = written;
+  await store.commit(store.planDraft(chat.id, "draft A"));
+  const previousRepeatedWrite = written - oldPath;
+  const version = await db
+    .prepare("SELECT * FROM chat_drafts WHERE chat_id=?")
+    .bind(chat.id)
+    .first();
+  const before = written;
+  await store.setDraft(chat.id, "draft A");
+  expect(written - before).toBe(0);
+  expect(
+    await db
+      .prepare("SELECT * FROM chat_drafts WHERE chat_id=?")
+      .bind(chat.id)
+      .first(),
+  ).toEqual(version);
+  await store.setDraft(chat.id, "");
+  const empty = written;
+  await store.setDraft(chat.id, "");
+  expect(written).toBe(empty);
+  const text = "🙂".repeat(300000);
+  await store.setDraft(chat.id, text);
+  const long = written;
+  await store.setDraft(chat.id, text);
+  expect(written).toBe(long);
+  expect((await store.get<typeof chat>(chat.id))?.value.draft).toBe(text);
+  await store.setDraft(chat.id, "draft B");
+  expect((await store.get<typeof chat>(chat.id))?.value.draft).toBe("draft B");
+  await expect(store.setDraft("absent", "x")).rejects.toMatchObject({
+    status: 404,
+  });
+  console.info(
+    "local D1 repeated draft rows_written " +
+      JSON.stringify({ firstWrite, previousRepeatedWrite, repeatedWrite: 0 }),
+  );
 });

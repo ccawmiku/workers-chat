@@ -32,6 +32,7 @@
   --line-color: #363636;
   --accent: #f077af;
   --accent-ink: #0d0d0d;
+  --composer-radius: 24px;
   --danger: #ee8989;
   font-synthesis: none;
 }
@@ -218,7 +219,7 @@ small {
 .nav-list {
   flex: 1;
   overflow: auto;
-  padding-top: 20px;
+  padding-top: 6px;
   scrollbar-width: thin;
 }
 .section-label {
@@ -232,7 +233,7 @@ small {
   margin-bottom: 8px;
 }
 .group {
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 .group-title {
   display: flex;
@@ -630,7 +631,7 @@ summary {
 .composer {
   background: var(--input);
   border: 1px solid #ffffff0a;
-  border-radius: 24px;
+  border-radius: var(--composer-radius);
   padding: 14px 12px 9px;
   box-shadow: 0 6px 28px #00000008;
 }
@@ -844,8 +845,8 @@ summary {
   flex-shrink: 0;
   width: 33px;
   height: 33px;
-  background: #98a185;
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-ink);
   border-radius: 50%;
   font-size: 11px;
   font-weight: 500;
@@ -996,7 +997,8 @@ summary {
 .panel-heading {
   display: flex;
   align-items: center;
-  padding: 17px 20px;
+  gap: 4px;
+  padding: 12px 12px;
   justify-content: space-between;
   font-size: 14px;
 }
@@ -1459,7 +1461,7 @@ summary {
     max-width: 100%;
   }
   .composer {
-    border-radius: 24px;
+    border-radius: var(--composer-radius);
     padding: 12px 10px 8px;
   }
   .composer textarea {
@@ -1961,7 +1963,7 @@ input.du-toggle {
   margin: 4px 0 0;
 }
 .archive-folder {
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 .archive-folder > button {
   width: 100%;
@@ -2026,12 +2028,16 @@ input.du-toggle {
   font-weight: 400;
 }
 .panel-tabs.du-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  min-width: 0;
   padding: 3px;
   gap: 2px;
   border-radius: 12px;
   background: var(--panel);
 }
 .panel-tabs .du-tab {
+  white-space: nowrap;
   min-width: 0;
   height: 34px;
   padding: 0 10px;
@@ -2048,8 +2054,8 @@ input.du-toggle {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: #99a483;
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-ink);
   font-size: 12px;
 }
 .du-collapse > .du-collapse-title {
@@ -4084,12 +4090,11 @@ main {
 }
 .plugin-bar {
   position: relative;
-  padding-left: 23px;
 }
 .chips-toggle.du-btn {
-  position: absolute;
-  left: 0;
-  top: 2px;
+  position: static;
+  flex: 0 0 24px;
+  align-self: center;
   width: 20px;
   min-width: 20px;
   padding: 0;
@@ -4244,10 +4249,11 @@ main {
 .plugin-bar.chips-collapsed .plugin-chips {
   width: fit-content;
   max-width: 100%;
-  gap: 16px;
-  padding: 3px 8px;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
   border: 1px solid var(--line-color);
-  border-radius: 999px;
+  border-radius: var(--composer-radius);
   background: var(--panel);
 }
 .plugin-bar.chips-collapsed .plugin-chip {
@@ -4281,4 +4287,50 @@ main {
   top: 7px;
   height: 24px;
   min-height: 24px;
+}
+
+/* Keep both panel tabs horizontal from the first render, independent of tab selection. */
+.panel-tabs.du-tabs > .du-tab {
+  grid-row: auto;
+}
+.panel-content {
+  gap: 6px;
+}
+.panel-content h3 {
+  margin: 16px 0 6px;
+}
+.panel-content h3:first-child {
+  margin-top: 0;
+}
+.panel-content label {
+  margin-bottom: 8px;
+  gap: 6px;
+}
+.panel-content .parameter {
+  margin-bottom: 6px;
+}
+.panel-content .system-prompts {
+  margin-bottom: 4px;
+}
+.plugin-bar.chips-collapsed .plugin-chip-name > span {
+  display: block;
+  line-height: 14px;
+}
+.ring-cache-value.historical {
+  fill: color-mix(in srgb, var(--text) 45%, var(--bg));
+}
+.plugin-chip-cache.historical {
+  color: color-mix(in srgb, var(--muted) 60%, var(--bg));
+}
+.composer.length-reply {
+  background: color-mix(in srgb, var(--accent) 10%, var(--input));
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line-color));
+}
+.length-settings small {
+  display: block;
+  line-height: 1.5;
+}
+
+.panel-content .summary-tools {
+  margin-block: 2px;
 }

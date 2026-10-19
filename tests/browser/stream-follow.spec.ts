@@ -57,6 +57,23 @@ test("upward gestures pause a live reply even within 100px of bottom, explicit r
   await scroll.hover(); await page.mouse.wheel(0,-65);
   await expect(page.getByRole("button",{name:"回到底部",exact:true})).toBeVisible();
   await expect.poll(async()=>(await position()).gap).toBeGreaterThan(40);
+  // WebKit's wheel animation can still move a few pixels after the first gap check.
+  // Measure the baseline only after four stable animation frames; keep the strict
+  // paused-position assertion so a real resumed follow still fails.
+  await scroll.evaluate(async (el) => {
+    let previous = el.scrollTop,
+      stable = 0;
+    for (let frame = 0; frame < 120; frame++) {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      const current = el.scrollTop;
+      stable = Math.abs(current - previous) < 0.1 ? stable + 1 : 0;
+      if (stable >= 4) return;
+      previous = current;
+    }
+    throw Error("wheel did not settle");
+  });
   const paused=(await position()).top;
   await page.evaluate(()=>(window as any).appendScrollFixture("\n\n新段落一\n\n新段落二"));
   await expect(page.locator(".message.assistant .markdown")).toContainText("新段落二");

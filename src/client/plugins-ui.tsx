@@ -1,3 +1,5 @@
+import type { LengthGuidance } from "../shared/length-guidance";
+import { historicalCacheReading } from "./cache-usage";
 import {
   AnalysisSections,
   QuestionSections,
@@ -937,6 +939,7 @@ export function PluginBar({
   debug,
   setDebug,
   configure,
+  configureLength,
   command,
   busy,
 }: {
@@ -951,6 +954,7 @@ export function PluginBar({
   debug: boolean;
   setDebug: (v: boolean) => void;
   configure: (b: PluginBinding[]) => Promise<void>;
+  configureLength: (value: LengthGuidance) => Promise<void>;
   command: Command;
   busy: boolean;
 }) {
@@ -959,6 +963,7 @@ export function PluginBar({
     [context, setContext] = useState<string | null>(null),
     [error, setError] = useState("");
   const [optimistic, setOptimistic] = useState<PluginBinding[] | null>(null);
+  const [lengthChoice, setLengthChoice] = useState<boolean | null>(null);
   const entryRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -1110,31 +1115,39 @@ export function PluginBar({
         data-chat-id={chat?.id ?? ""}
         aria-label="插件栏"
       >
-        <button
-          className="du-btn du-btn-ghost du-btn-square du-btn-xs chips-toggle"
-          aria-label={collapsed ? "展开插件上下文" : "折叠插件上下文"}
-          aria-expanded={!collapsed}
-          onClick={() => {
-            const next = !collapsed;
-            setCollapsed(next);
-            try {
-              localStorage.setItem("plugin-chips-collapsed", next ? "1" : "0");
-            } catch {}
-          }}
-        >
-          {collapsed ? <I.expand size={15} /> : <I.collapse size={15} />}
-        </button>
         <div className="plugin-chips">
+          <button
+            className="du-btn du-btn-ghost du-btn-square du-btn-xs chips-toggle"
+            aria-label={collapsed ? "展开插件上下文" : "折叠插件上下文"}
+            aria-expanded={!collapsed}
+            onClick={() => {
+              const next = !collapsed;
+              setCollapsed(next);
+              try {
+                localStorage.setItem(
+                  "plugin-chips-collapsed",
+                  next ? "1" : "0",
+                );
+              } catch {}
+            }}
+          >
+            {collapsed ? <I.expand size={15} /> : <I.collapse size={15} />}
+          </button>
           {selected.map((p) => {
-            const usageRun = state.runs.findLast(
+            const routeIds = new Set(route(chat!).map((m) => m.id));
+            const run = activeRun(p.id);
+            const model = run?.model ?? previews.get(p.id)?.modelRef;
+            const relevantRuns = state.runs.filter(
               (r) =>
                 r.plugin.id === p.id &&
                 !!r.anchorId &&
-                route(chat!).some((m) => m.id === r.anchorId) &&
-                r.usage,
+                routeIds.has(r.anchorId) &&
+                (!model ||
+                  (r.model?.providerId === model.providerId &&
+                    r.model.modelId === model.modelId)),
             );
-            const run = activeRun(p.id),
-              metrics = run?.metrics ?? previews.get(p.id)?.metrics;
+            const usageRun = relevantRuns.at(-1);
+            const metrics = run?.metrics ?? previews.get(p.id)?.metrics;
             return (
               <button
                 key={p.id}
@@ -1154,6 +1167,11 @@ export function PluginBar({
                   capacity={metrics?.capacity ?? 1}
                   usage={(run ?? usageRun)?.usage}
                   cacheId={run?.id ?? usageRun?.id}
+                  historicalCache={historicalCacheReading(
+                    relevantRuns,
+                    run?.id ?? usageRun?.id,
+                    run?.model ?? model,
+                  )}
                   fallback={
                     metrics
                       ? {
@@ -1253,6 +1271,28 @@ export function PluginBar({
                     </div>
                   );
                 })}
+                <label className="plugin-picker-row toggle">
+                  字数要求
+                  <input
+                    type="checkbox"
+                    className="du-toggle du-toggle-primary du-toggle-sm"
+                    aria-label="启用字数要求"
+                    checked={lengthChoice ?? !!chat?.lengthGuidance?.enabled}
+                    disabled={
+                      busy || !!chat?.pluginPending || lengthChoice !== null
+                    }
+                    onChange={(e) => {
+                      const enabled = e.currentTarget.checked;
+                      setLengthChoice(enabled);
+                      void configureLength({
+                        enabled,
+                        requirement: chat?.lengthGuidance?.requirement ?? "",
+                      })
+                        .catch((e) => setError(e.message))
+                        .finally(() => setLengthChoice(null));
+                    }}
+                  />
+                </label>
                 {chat && (
                   <SummaryTools
                     chat={chat}

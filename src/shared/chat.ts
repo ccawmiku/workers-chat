@@ -1,3 +1,4 @@
+import { bodyStyleMessages, styledMarkdown, type BodyStyles } from "./body-styles";
 import type { ComparisonConfig, ComparisonRun } from "./comparison";
 import { withoutLengthTools, type LengthGuidance } from "./length-guidance";
 import type { SummaryConfig } from "./summaries";
@@ -15,6 +16,7 @@ export type Parameters = {
 };
 export type ModelRef = { providerId: string; modelId: string };
 export type Message = {
+  styleTagged?: boolean;
   lengthRequirement?: string;
   id: string;
   parentId: string | null;
@@ -40,6 +42,7 @@ export type Message = {
   toolContext?: { parentId: string; messages: APIMessage[]; stable?: true };
 };
 export type Chat = {
+  bodyStyles?: BodyStyles;
   comparison?: ComparisonConfig;
   comparisonRuns?: ComparisonRun[];
   comparisonSource?: {
@@ -397,7 +400,7 @@ export function contextMessages(chat: Chat, draft?: string, reasoning = false) {
     });
   }
   if (draft) messages.push({ role: "user", content: draft });
-  return messages;
+  return bodyStyleMessages(messages, chat.bodyStyles, chat.comparisonSource?.mode === "plain");
 }
 export function requestPreview(
   chat: Chat,
@@ -452,7 +455,7 @@ export function markdownExport(chat: Chat) {
     route(chat)
       .map(
         (m) =>
-          `## ${m.role === "user" ? "用户" : m.role === "assistant" ? "AI" : "系统"}\n\n${m.content}`,
+          `## ${m.role === "user" ? "用户" : m.role === "assistant" ? "AI" : "系统"}\n\n${m.role === "assistant" ? styledMarkdown(m.content, chat.bodyStyles, !!m.styleTagged) : m.content}`,
       )
       .join("\n\n")
   );

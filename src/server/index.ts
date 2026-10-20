@@ -1,3 +1,4 @@
+import { parseBodyStyles } from "../shared/body-styles";
 import { lengthInjection } from "../shared/length-guidance";
 import {
   summaryEndpoint,
@@ -887,6 +888,11 @@ async function api(request: Request, env: Env) {
         if (typeof body[k] === "boolean") set(k, body[k]);
       if (body.groupId === null || typeof body.groupId === "string")
         set("groupId", body.groupId);
+      if (body.bodyStyles !== undefined) {
+        if (job || chat.pluginPending) throw new HttpError(409, "请等待本轮生成完成后再保存正文样式");
+        try { set("bodyStyles", parseBodyStyles(body.bodyStyles)); }
+        catch (error) { throw new HttpError(400, (error as Error).message); }
+      }
       if (body.lengthGuidance !== undefined) {
         if (chat.pluginPending)
           throw new HttpError(409, "请等待本轮插件流程结束");

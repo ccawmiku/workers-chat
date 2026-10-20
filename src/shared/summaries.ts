@@ -1,3 +1,4 @@
+import { stripStyleMarkers } from "./body-styles";
 import { replyFallback } from "./reply-context";
 import {
   route,
@@ -191,9 +192,9 @@ export function prepareSummary(
     model = provider?.models.find((m) => m.id === ref?.modelId);
   if (!ref || !provider || !model)
     throw Error("摘要模型不存在，请在插件设置中选择模型");
-  const path = route(chat, messageId).filter((m) => m.role !== "system"),
+  const path = route(chat, messageId).filter((m) => m.role !== "system").map(m => m.role === "assistant" ? {...m, content:stripStyleMarkers(m.content)} : m),
     index = path.findIndex((m) => m.id === messageId);
-  const savedSummaries = summaryIndex(chat, state, path);
+  const savedSummaries = summaryIndex(chat, state, route(chat, messageId).filter(m => m.role !== "system"));
   const history: {
     turn: number;
     user_excerpt: string;
@@ -250,7 +251,7 @@ export function prepareSummary(
       current: {
         turn: turn + 1,
         user: u?.content ?? "",
-        assistant: message.content,
+        assistant: stripStyleMarkers(message.content),
       },
     }),
   });

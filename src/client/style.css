@@ -4548,3 +4548,24 @@ html {
 .account-quota-sidebar.du-btn {
   border-color: var(--line-soft);
 }
+
+/* Per-chat style editor: compact rules, live preview, explicit sticky save. */
+.body-style-settings { margin-block: 16px; border-block: 1px solid var(--line-soft); }
+.body-style-settings > summary { display:flex; align-items:center; gap:8px; padding:12px 0; cursor:pointer; }
+.body-style-settings > summary small {margin-left:auto;}
+.style-settings-scroll { max-height:58dvh; overflow:auto; padding:4px 2px 10px; }
+.style-rule { padding:10px 0; border-bottom:1px solid var(--line-soft); }
+.style-rule header {display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0 0 8px;min-height:0;}
+.style-rule header strong {font-size:12px;}
+.style-rule header code {font-size:10px;color:var(--muted);margin-left:auto;}
+.style-rule header button {padding:3px;min-width:20px;}
+.style-example {font-size:14px;}
+.style-rule textarea {margin-bottom:5px;min-height:55px;font-size:12px;}
+.style-rule details > summary {font-size:11px;cursor:pointer;display:flex;gap:5px;align-items:center;padding:4px;}
+.style-rule-controls {display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;}
+.style-rule-controls label {display:flex;align-items:center;flex-direction:row;gap:5px;margin:0;font-size:11px;}
+.style-rule-controls input[type=color] {width:24px;height:24px;border:0;padding:0;border-radius:50%;}
+.style-rule-controls input[type=number] {width:64px;min-height:28px;}
+.style-settings-save {position:sticky;bottom:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0;background:var(--bg);border-top:1px solid var(--line-soft);}
+.style-settings-save small {line-height:1.4;}
+.style-rule button {background:color-mix(in srgb,var(--accent) 9%,var(--panel));}

@@ -1,3 +1,4 @@
+import { stripStyleMarkers } from "./body-styles";
 import { replyFallback, REPLY_FALLBACK_CHAR_LIMIT } from "./reply-context";
 import {
   CLARIFY_PROMPT,
@@ -387,7 +388,7 @@ export function preparePlugin(
   summaries: SummaryState = { runs: [] },
 ) {
   p = upgradeLegacyPlugin(p);
-  const path = route(chat, anchorId),
+  const path = route(chat, anchorId).map(m => m.role === "assistant" ? {...m, content:stripStyleMarkers(m.content)} : m),
     ids = new Set(path.map((m) => m.id));
   const ref = p.model ?? chat.model ?? settings.defaultModel;
   const provider = providers.find((v) => v.id === ref?.providerId),
@@ -471,7 +472,7 @@ export function preparePlugin(
       (m) => m.role === "user" || m.role === "assistant",
     );
     const positions = new Map(cleanPath.map((m, i) => [m.id, i + 1]));
-    const savedSummaries = summaryIndex(chat, summaries, cleanPath);
+    const savedSummaries = summaryIndex(chat, summaries, route(chat, anchorId).filter(m => m.role !== "system"));
     const history: APIMessage[] = cleanPath.map((m) => {
       if (m.role === "user") return { role: "user", content: m.content };
       const saved = savedSummaries.get(m.id);
@@ -581,7 +582,7 @@ export function preparePlugin(
     });
     section("本轮用户要求", messages.slice(-1));
   } else {
-    const savedSummaries = summaryIndex(chat, summaries, path);
+    const savedSummaries = summaryIndex(chat, summaries, route(chat, anchorId));
     for (const m of path) {
       if (m.role !== "assistant" || savedSummaries.has(m.id)) continue;
       metrics.missingSummaries++;

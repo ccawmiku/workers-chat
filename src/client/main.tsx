@@ -1,3 +1,6 @@
+import { StyledMarkdown } from "./styled-markdown";
+import { BodyStyleSettings } from "./body-style-settings";
+import { styledMarkdown, type BodyStyles } from "../shared/body-styles";
 import { APP_VERSION } from "../shared/version";
 import {
   ComparisonSettings,
@@ -2254,6 +2257,9 @@ function App() {
                             }
                           >
                             <MessageMarkdown
+                              enhanced={m.role === "assistant"}
+                              styles={chat?.bodyStyles}
+                              tagged={!!m.styleTagged}
                               content={
                                 m.content ||
                                 (m.status === "running" ? "" : "（空消息）")
@@ -2296,7 +2302,7 @@ function App() {
                               label="复制 Markdown"
                               onClick={() =>
                                 void run(() =>
-                                  navigator.clipboard.writeText(m.content),
+                                  navigator.clipboard.writeText(m.role === "assistant" ? styledMarkdown(m.content, chat?.bodyStyles, !!m.styleTagged) : m.content),
                                 )
                               }
                             >
@@ -2914,6 +2920,7 @@ function App() {
         </main>
         {chat?.comparison?.enabled && (
           <ComparisonPane
+            bodyStyles={chat.bodyStyles}
             key={chat.id}
             run={chat.comparisonRuns
               ?.filter((r) => path.some((m) => m.id === r.mainMessageId))
@@ -3000,6 +3007,9 @@ function App() {
                 providers={providers}
                 command={summaryCommand}
               />
+              <BodyStyleSettings key={"body-style:"+chat.id} value={chat.bodyStyles}
+                disabled={busy || !!job || !!pluginJob || !!pluginFlow}
+                save={async(bodyStyles)=>{ await patch({bodyStyles}); }} />
               <h3>写作长度</h3>
               <LengthSettings
                 key={"length:" + chat.id}
@@ -3329,15 +3339,8 @@ function App() {
     </FallbackContext.Provider>
   );
 }
-const MessageMarkdown = React.memo(function MessageMarkdown({
-  content,
-}: {
-  content: string;
-}) {
-  return (
-    <Markdown
-      remarkPlugins={[remarkGfm]}
-      components={{
+const MessageMarkdown = React.memo(function MessageMarkdown({content,styles,tagged=false,enhanced=false}:{content:string;styles?:BodyStyles;tagged?:boolean;enhanced?:boolean}) {
+  const components: import("react-markdown").Components = {
         img: ({ alt, src }) => (
           <a
             href={
@@ -3362,11 +3365,9 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
             {children}
           </table>
         ),
-      }}
-    >
-      {content}
-    </Markdown>
-  );
+      };
+  return enhanced ? <StyledMarkdown config={styles} tagged={tagged} components={components}>{content}</StyledMarkdown>
+    : <Markdown remarkPlugins={[remarkGfm]} components={components}>{content}</Markdown>;
 });
 function plainText(id: string) {
   const source = document.getElementById("text-" + id);

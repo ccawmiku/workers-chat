@@ -1,3 +1,4 @@
+import { stripStyleMarkers } from "../shared/body-styles";
 import { comparisonFork } from "../shared/comparison";
 import { LENGTH_PLUGIN_ID, lengthInjection } from "../shared/length-guidance";
 import { generationDeadline } from "./deadline";
@@ -136,6 +137,8 @@ export async function startGeneration(
       if (compareConfig.mode === "plain") {
         delete copy.toolContext;
         delete copy.lengthRequirement;
+        copy.content = stripStyleMarkers(copy.content);
+        copy.styleTagged = false;
       }
       fork.messages[forkSeedId] = copy;
     }
@@ -145,6 +148,7 @@ export async function startGeneration(
   if (length) message.lengthRequirement = JSON.parse(length.content).本轮要求;
   else if (seed?.lengthRequirement !== undefined)
     message.lengthRequirement = seed.lengthRequirement;
+  message.styleTagged = seed?.styleTagged ?? !!chat.bodyStyles?.enabled;
   message.status = "running";
   message.model = model;
   message.request = {

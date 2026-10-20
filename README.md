@@ -1,6 +1,6 @@
 # 在线AI · Workers Chat
 
-v1.2.1：手机缩放与导航修复、限定本轮范围的补充提问、自由组合选项、持续分析类型自动生成及淡主题色操作按钮。保留[缓存编排与双窗口对比](docs/CACHE_COMPARISON.md)。
+v1.3.0：单聊天正文样式，十种固定规则、短标记、字号和浅色背景；安全 HTML 扩展、实时预览及普通 Markdown 复制导出。保留[缓存编排与双窗口对比](docs/CACHE_COMPARISON.md)。
 
 运行于 Cloudflare 免费套餐的单用户、纯文字 AI 聊天网站，调用自己的 OpenAI 兼容 Chat Completions API。当前生产地址：[chat.yaemiko.lol](https://chat.yaemiko.lol/)。
 

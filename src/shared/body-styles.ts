@@ -10,7 +10,7 @@ export const STYLE_NAMES: Record<StyleId, string> = {
   b: "加粗", i: "斜体", lg: "稍大字号", sm: "稍小字号", rt: "红色文字", bt: "蓝色文字",
   yb: "浅黄背景", bb: "浅蓝背景", rb: "浅红背景", gb: "浅绿背景",
 };
-export const SHORT_STYLE = /\{(lg|sm|rt|bt|yb|bb|rb|gb)(\/?)\}/g;
+export const SHORT_STYLE = /\{(\/?)(lg|sm|rt|bt|yb|bb|rb|gb)(\/?)\}/g;
 export function defaultBodyStyles(): BodyStyles {
   return { enabled: false, rules: STYLE_IDS.map(id => ({
     id, enabled: true, instruction: "", color: id === "rt" ? "#d65656" : id === "bt" ? "#528ad1" : "",
@@ -58,8 +58,8 @@ const escapeAttr = (s:string) => s.replace(/&/g,"&amp;").replace(/"/g,"&quot;").
 export function styledMarkdown(text:string, config?:BodyStyles, tagged=false):string {
   if (!tagged || !config) return stripStyleMarkers(text);
   let open = "";
-  const output = outsideCode(text,s => s.replace(SHORT_STYLE,(_all,id:string,close:string) => {
-    if (close) {if(open===id){open="";return "</span>";}return "";}
+  const output = outsideCode(text,s => s.replace(SHORT_STYLE,(_all,pre:string,id:string,post:string) => {
+    if (pre || post) {if(open===id){open="";return "</span>";}return "";}
     const r=config.rules.find(r=>r.id===id); if(!r)return "";
     const prior = open ? "</span>" : ""; open=id;
     // Portable HTML uses literal colors; website rendering adapts the palette to its theme.
@@ -74,7 +74,7 @@ export function bodyStyleMessages(messages:APIMessage[],config?:BodyStyles,pure=
   if(!config)return messages;
   const rules=config.rules.filter(r=>r.enabled&&r.instruction.trim());
   const content = config.enabled
-    ? "正文样式仅作用于本轮新回复。按priority从小到大选择，冲突只用优先的一种短标记，不嵌套短标记。加粗用**文字**，斜体用*文字*；其余严格用{code}文字{code/}，不显示标签说明。不改写剧情，不编造事实；未命中规则不加短标记。\n"+JSON.stringify(rules.map((r,priority)=>({priority,code:r.id==="b"?"**":r.id==="i"?"*":r.id,rule:r.instruction.trim()})))
+    ? "正文样式仅作用于本轮新回复。按priority从小到大选择，冲突只用优先的一种短标记，不嵌套短标记。加粗用**文字**，斜体用*文字*；其余严格用{code}文字{/code}，不显示标签说明。不改写剧情，不编造事实；未命中规则不加短标记。\n"+JSON.stringify(rules.map((r,priority)=>({priority,code:r.id==="b"?"**":r.id==="i"?"*":r.id,rule:r.instruction.trim()})))
     : "本轮正文短标记样式暂时关闭。请勿沿用历史中的{rb}、{yb}等短标记，直接输出普通Markdown正文；原生加粗、斜体仍可正常使用。此状态只作用于本轮新回复，不改变故事内容。";
   const index=messages.findIndex(m=>m.role==="user"); if(index<0)return messages;
   const call="call_body_styles",name="plugin_body_styles";

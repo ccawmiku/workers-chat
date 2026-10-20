@@ -10,15 +10,16 @@ const config=defaultBodyStyles();config.enabled=true;config.rules.find(r=>r.id==
 const render=(text:string,tagged=true)=>renderToStaticMarkup(React.createElement(StyledMarkdown,{config,tagged,children:text}));
 describe("正文样式",()=>{
   it("renders short markers, native emphasis, safe HTML colors/size and table backgrounds",()=>{
-    const html=render('{rb}**你好**{rb/}，<font color="red" size="5">文字</font>\n\n<table><tr><td bgcolor="#ffff00">背景</td></tr></table>');
-    expect(html).not.toContain("{rb}");expect(html).toContain("background-color:color-mix");
-    expect(html).toContain("<strong>");expect(html).toContain("color:red");expect(html).toContain("font-size:1.4em");expect(html).toContain("background-color:#ffff00");
+    const html=render('{rb}**你好**{/rb}与{rb}*世界*{rb/}，<font color="red" size="5">文字</font>\n\n<table><tr><td bgcolor="#ffff00">背景</td></tr></table>');
+    expect(html).not.toMatch(/\{rb|\/rb\}/);expect(html).toContain("background-color:color-mix");
+    expect(html).toContain("<strong>");expect(html).toContain("<em>");expect(html).toContain("color:red");expect(html).toContain("font-size:1.4em");expect(html).toContain("background-color:#ffff00");
   });
   it("keeps code literal, preserves unfinished streaming text and disables only short styles for new replies",()=>{
-    expect(render('`{rb}code{rb/}`')).toContain("{rb}code{rb/}");
+    expect(render('`{rb}code{/rb}`')).toContain("{rb}code{/rb}");
     expect(render('{rb}尚未结束')).toContain("尚未结束");
+    expect(render('{rb}正文{/rb}',false)).toBe("<p>正文</p>");
     expect(render('{rb}正文{rb/}',false)).toBe("<p>正文</p>");
-    expect(stripStyleMarkers('a{rb}正文{rb/}\n```txt\n{rb}code{rb/}\n```')).toContain('```txt\n{rb}code{rb/}');
+    expect(stripStyleMarkers('a{rb}正文1{/rb}b{rb}正文2{rb/}\n```txt\n{rb}code{/rb}\n```')).toBe('a正文1b正文2\n```txt\n{rb}code{/rb}\n```');
     expect(render('<span style="color:blue">HTML</span>',false)).toContain("color:blue");
   });
   it("drops active HTML, event handlers, URL styles and layout CSS",()=>{
@@ -29,6 +30,7 @@ describe("正文样式",()=>{
     const c=newChat();c.bodyStyles=structuredClone(config);addMessage(c,"user","第一轮");const a=addMessage(c,"assistant","{rb}你好{rb/}");a.styleTagged=true;addMessage(c,"user","第二轮");
     const messages=contextMessages(c);expect(messages.filter(m=>m.name==="plugin_body_styles")).toHaveLength(1);
     expect(messages.find(m=>m.name==="plugin_body_styles")!.content).toContain("主角说的话");
+    expect(messages.find(m=>m.name==="plugin_body_styles")!.content).toContain("{code}文字{/code}");
     c.bodyStyles.enabled=false;expect(contextMessages(c).find(m=>m.role==="tool")!.content).toContain("暂时关闭");
     const fork=comparisonFork(c,{...defaultComparison(),mode:"plain"},[]);
     expect(JSON.stringify(contextMessages(fork))).not.toMatch(/plugin_body_styles|\{rb\}/);

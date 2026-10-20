@@ -25,7 +25,8 @@ const shortStyles:Plugin<[{enabled:boolean}],MdRoot> = ({enabled}) => tree => {
       };
       for(const match of source.matchAll(SHORT_STYLE)) {
         push(source.slice(at,match.index));
-        if(match[2]){if(current===match[1])current="";}else current=match[1]!;
+        const close=Boolean(match[1]||match[3]),id=match[2]!;
+        if(close){if(current===id)current="";}else current=id;
         at=match.index!+match[0].length;
       }
       push(source.slice(at));

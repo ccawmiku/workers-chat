@@ -17,6 +17,7 @@ import {
   type PluginFlow,
   type PluginDefinition,
   type PluginRequest,
+  type PluginInjection,
   emptyPluginState,
   enabledPlugins,
   definitions,
@@ -411,6 +412,85 @@ export async function clonePlugins(
     }
   }
   await cloneStore.commit(statements);
+}
+export async function forkPluginFlowForRegenerate(
+  env: Env,
+  chat: Chat,
+  oldAssistantMessageId: string,
+  newUserMessageId: string,
+  transport?: "device",
+) {
+  const doc = await pluginState(env, chat.id);
+  const state = doc.value;
+  const oldMessage = chat.messages[oldAssistantMessageId];
+  const oldUserId = oldMessage?.parentId;
+  const source = state.flows.findLast(
+    (f) =>
+      f.mainMessageId === oldAssistantMessageId ||
+      (oldUserId && f.userId === oldUserId),
+  );
+  if (!source) return null;
+
+  const nextFlow: PluginFlow = {
+    ...structuredClone(source),
+    id: crypto.randomUUID(),
+    userId: newUserMessageId,
+    status: "main",
+    debug: false,
+    mainMessageId: undefined,
+    transport: transport ?? source.transport,
+    index: source.definitions.length,
+    results: [],
+  };
+
+  for (const id of source.results) {
+    const old = state.runs.find((r) => r.id === id);
+    if (old) {
+      const clonedRun: PluginRun = {
+        ...structuredClone(old),
+        id: crypto.randomUUID(),
+        flowId: nextFlow.id,
+        anchorId: newUserMessageId,
+        contextAnchorId: chat.messages[newUserMessageId]?.parentId ?? null,
+        createdAt: Date.now(),
+      };
+      state.runs.push(clonedRun);
+      nextFlow.results.push(clonedRun.id);
+    }
+  }
+
+  state.flows.push(nextFlow);
+  delete state.activeFlowId;
+  delete chat.pluginPending;
+
+  const injections: PluginInjection[] = [
+    ...flowInjections(state, nextFlow),
+    ...(nextFlow.lengthEnabled
+      ? [
+          lengthInjection(
+            chat,
+            nextFlow.lengthRequirement ?? oldMessage?.lengthRequirement ?? "",
+            nextFlow.id,
+          ),
+        ]
+      : oldMessage?.lengthRequirement !== undefined
+        ? [
+            lengthInjection(
+              chat,
+              oldMessage.lengthRequirement ?? "",
+              crypto.randomUUID(),
+            ),
+          ]
+        : []),
+  ];
+
+  return {
+    injections,
+    onGenerated: async (mainMessageId: string) => {
+      nextFlow.mainMessageId = mainMessageId;
+      await saveState(env, chat.id, doc);
+    },
+  };
 }
 export async function planPruneMessagePlugins(
   env: Env,

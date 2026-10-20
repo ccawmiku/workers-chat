@@ -87,8 +87,9 @@ import {
   removePlugins,
   selectPluginFlow,
   planPruneMessagePlugins,
+  forkPluginFlowForRegenerate,
 } from "./plugins";
-import { flowInjections } from "../shared/plugins";
+import { flowInjections, type PluginInjection } from "../shared/plugins";
 const publicProvider = (p: Provider) => {
   const { encryptedKey, ...safe } = p;
   return { ...safe, hasKey: !!encryptedKey };
@@ -1045,28 +1046,25 @@ async function api(request: Request, env: Env) {
     ) {
       if (!message || message.role !== "assistant")
         throw new HttpError(400, "请选择 AI 回答");
+      let forkedPlugin: {
+        injections: PluginInjection[];
+        onGenerated: (mainMessageId: string) => Promise<void>;
+      } | null = null;
       if (action === "regenerate") {
         const question = route(chat, message.id).findLast(
           (m) => m.role === "user",
         );
         if (!question)
           throw new HttpError(400, "这条回答没有关联的用户问题，无法重新发送");
-        addMessage(chat, "user", question.content, question.parentId);
-      } else chat.currentId = message.parentId;
-      const currentSettings = await settings(store);
-      if (
-        action === "regenerate" &&
-        (await startPluginFlow(
+        const copy = addMessage(chat, "user", question.content, question.parentId);
+        forkedPlugin = await forkPluginFlowForRegenerate(
           env,
           chat,
-          doc.revision,
-          currentSettings,
-          transport,
-          false,
           message.id,
-        ))
-      )
-        return Response.json({ pluginFlow: true }, { status: 202 });
+          copy.id,
+          transport,
+        );
+      } else chat.currentId = message.parentId;
       const pluginData =
         chat.plugins?.length || chat.lengthGuidance?.enabled
           ? (await pluginState(env, id)).value
@@ -1074,6 +1072,25 @@ async function api(request: Request, env: Env) {
       const previousFlow = pluginData?.flows.findLast(
         (f) => f.mainMessageId === message.id || f.userId === message.parentId,
       );
+      const injections = forkedPlugin
+        ? forkedPlugin.injections
+        : [
+            ...(previousFlow && pluginData
+              ? flowInjections(pluginData, previousFlow)
+              : []),
+            ...(previousFlow?.lengthEnabled ||
+            message.lengthRequirement !== undefined
+              ? [
+                  lengthInjection(
+                    chat,
+                    previousFlow?.lengthRequirement ??
+                      message.lengthRequirement ??
+                      "",
+                    crypto.randomUUID(),
+                  ),
+                ]
+              : []),
+          ];
       const jobId = await startGeneration(
         env,
         chat,
@@ -1083,24 +1100,11 @@ async function api(request: Request, env: Env) {
         action === "continue" ? message.id : undefined,
         false,
         transport,
-        [
-          ...(previousFlow && pluginData
-            ? flowInjections(pluginData, previousFlow)
-            : []),
-          ...(previousFlow?.lengthEnabled ||
-          message.lengthRequirement !== undefined
-            ? [
-                lengthInjection(
-                  chat,
-                  previousFlow?.lengthRequirement ??
-                    message.lengthRequirement ??
-                    "",
-                  crypto.randomUUID(),
-                ),
-              ]
-            : []),
-        ],
+        injections,
       );
+      if (forkedPlugin) {
+        await forkedPlugin.onGenerated(chat.currentId!);
+      }
       return Response.json(await generationStart(env, jobId), { status: 202 });
     }
     if (action === "delete-message") {

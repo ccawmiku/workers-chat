@@ -3371,30 +3371,28 @@ describe("workerd HTTP + D1 + Workflows", () => {
     });
     s = await wait(
       (s) =>
-        !s.pluginJob &&
-        s.pluginState.runs.some(
-          (r) => r.plugin.kind === "analysis" && r.status === "waiting",
-        ),
-    );
-    await value("/chats/" + chat.id + "/plugins", "POST", {
-      action: "approve-analysis",
-      runId: s.pluginState.runs.findLast(
-        (r) => r.plugin.kind === "analysis" && r.status === "waiting",
-      )!.id,
-    });
-    s = await wait(
-      (s) =>
         !s.job && !s.pluginJob && Object.values(s.chat.messages).length === 4,
     );
-    expect(upstreamCalls.length - count).toBe(2);
+    expect(upstreamCalls.length - count).toBe(1);
     expect(s.chat.draft).toBe("保留在输入框的新草稿");
     expect(
       s.pluginState.runs.filter((r) => r.status === "answered"),
     ).toHaveLength(2);
     expect(
+      s.pluginState.runs.filter(
+        (r) => r.plugin.kind === "analysis" && r.status === "complete",
+      ),
+    ).toHaveLength(2);
+    expect(
       s.pluginState.runs
-        .filter((r) => r.status === "answered")
+        .filter((r) => ["answered", "complete"].includes(r.status))
         .every((r) => !!s.chat.messages[r.anchorId!]),
+    ).toBe(true);
+    expect(JSON.stringify(upstreamCalls.at(-1)?.messages)).toContain("旧偏好");
+    expect(
+      (upstreamCalls.at(-1)?.messages as { role: string }[]).some(
+        (m) => m.role === "tool",
+      ),
     ).toBe(true);
     await value("/chats/" + chat.id + "/plugins", "POST", {
       action: "regenerate-main",
